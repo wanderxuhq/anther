@@ -104,7 +104,7 @@ export function SearchView() {
       </div>
       <div class="search-status">
         <Show when={searching()}>
-          搜索中…（<button class="link-btn" onClick={() => cancelCurrent?.()}>取消</button>）
+          搜索中…（<button class="link-btn" onClick={() => { ++seq; cancelCurrent?.(); setSearching(false); }}>取消</button>）
         </Show>
         <Show when={status() && !searching()}>
           {status()!.fileCount} 个文件 / {status()!.matchCount} 处匹配
