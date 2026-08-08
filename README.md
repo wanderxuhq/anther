@@ -16,11 +16,12 @@ npx anther [目录] [--port <端口>] [--rw]
 
 ```bash
 npm install
-npm run dev:server -- --rw   # 后端 :3000
-npm run dev:web              # 前端 :5173（代理 /api → :3000）
+npm run dev -- --rw          # 一键：后端 :3000（--watch）+ 前端 :5173（vite，代理 /api）
 npm test                     # 全部测试（node:test，前后端统一）
 npm run build                # 编译后端 + 构建前端
 ```
+
+也可分开启动（调试时）：`npm run dev:server -- --rw`（后端）+ `npm run dev:web`（前端）。
 
 ## 真机测试清单
 
