@@ -2,12 +2,20 @@
 import { createSignal } from 'solid-js';
 import { parseUrl, serializeUrl, type UrlState } from './url-state.ts';
 import { api, loadTabsSnapshot, saveTabsSnapshot } from './api.ts';
+import type { EditorHandle } from './editor/index.ts';
 
 export const [currentFile, setCurrentFile] = createSignal<string | null>(null);
 export const [roMode, setRoMode] = createSignal(true);
 export const [tabs, setTabs] = createSignal<string[]>([]);
 export const [theme, setTheme] = createSignal<'auto' | 'light' | 'dark'>('auto');
 export const [fontScale, setFontScale] = createSignal(100);
+
+// 搜索跳转管道（Task 17）：SearchView 点击结果 → gotoLine0（记 pendingGoto + openTab）；
+// App 的 loadDoc 完成时 setDocLoadedPath(path)，消费 effect 在「pendingGoto.path ===
+// docLoadedPath」时执行 gotoLine——保证目标文档已加载（editor 持有的就是该文件）
+export const [pendingGoto, setPendingGoto] = createSignal<{ path: string; line0: number } | null>(null);
+export const [docLoadedPath, setDocLoadedPath] = createSignal<string | null>(null);
+export const [editorHandle, setEditorHandle] = createSignal<EditorHandle | null>(null);
 
 let started = false;
 
@@ -98,6 +106,20 @@ export async function openTab(path: string): Promise<void> {
   await api.tabs.front(path);
   saveTabsSnapshot(tabs());
   pushState();
+}
+
+/**
+ * 搜索跳转统一入口（Task 17）：目标已是当前加载文件 → 直接 gotoLine；
+ * 否则记 pendingGoto 并 openTab（App 消费 effect 在文档加载完成后跳转）。
+ */
+export function gotoLine0(path: string, line0: number): void {
+  const h = editorHandle();
+  if (currentFile() === path && docLoadedPath() === path && h) {
+    h.gotoLine(line0);
+    return;
+  }
+  setPendingGoto({ path, line0 });
+  void openTab(path);
 }
 
 export async function closeTab(path: string): Promise<void> {

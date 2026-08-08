@@ -21,6 +21,7 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   min-width: 40px; min-height: 40px;
 }
 .icon-btn.active { background: var(--accent); color: white; }
+.icon-btn:disabled { opacity: .4; }
 
 .editor-area { min-height: 0; overflow: hidden; grid-column: 1; grid-row: 2; }
 

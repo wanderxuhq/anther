@@ -1,7 +1,11 @@
 import { createSignal, createEffect, For, Show, onCleanup } from 'solid-js';
 import { views } from './views/registry.tsx';
 import { api } from './api.ts';
-import { currentFile, roMode, setRoMode, setCurrentFile, pushState, fontScale } from './stores.ts';
+import {
+  currentFile, roMode, setRoMode, setCurrentFile, pushState, fontScale,
+  pendingGoto, setPendingGoto, docLoadedPath, setDocLoadedPath,
+  editorHandle, setEditorHandle,
+} from './stores.ts';
 import { createEditor, type EditorHandle } from './editor/index.ts';
 
 const NARROW_QUERY = '(max-width: 599px)';
@@ -25,6 +29,16 @@ export function App() {
   // 编辑器容器用信号持有：ref 回调（首帧 insert 时触发）会令下方 createEffect 重跑，
   // 天然消解「首帧 currentFile 已有值但容器未挂载」的竞态，无需 onMount 兜底。
   const [editorEl, setEditorEl] = createSignal<HTMLDivElement>();
+
+  // 桌面端 Ctrl+Shift+F → 全局搜索（打开抽屉 + 切到搜索视图；SearchView 挂载时自动聚焦）
+  const onKeyDown = (e: KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
+      e.preventDefault();
+      setDrawerOpen(true);
+      setActiveView('search');
+    }
+  };
+  window.addEventListener('keydown', onKeyDown);
 
   // ---- 编辑器 + 自动保存 ----
   let editor: EditorHandle | undefined;
@@ -121,10 +135,12 @@ export function App() {
           readOnly: roMode(),
           onChange: handleEditorChange,
         });
+        setEditorHandle(editor);
       } else {
         editor.setDoc(content);
       }
       editor.setReadOnly(roMode());
+      setDocLoadedPath(path); // 搜索跳转消费 effect 的前提：文档确已加载
     } catch (e) {
       // 过期请求的失败不打扰当前文件（竞态 guard 同规则）
       if (path !== currentFile() || seq !== loadSeq) return;
@@ -132,6 +148,7 @@ export function App() {
       showToast(`打开失败：${(e as Error).message}`, 'error');
       setCurrentFile(null);
       pushState();
+      setDocLoadedPath(null);
     }
   }
 
@@ -155,12 +172,27 @@ export function App() {
     editor?.setReadOnly(ro);
   });
 
+  // 搜索跳转消费（Task 17）：目标文件加载完成后执行 gotoLine。
+  // 条件 docLoadedPath() === g.path 保证 editor 持有的就是目标文档——
+  // currentFile 在 openTab 里同步变化，而文档是异步加载的，只看 currentFile 会
+  // 在加载完成前对旧文档 gotoLine（行号错位/越界钳制到旧文档末尾行）
+  createEffect(() => {
+    const g = pendingGoto();
+    const loaded = docLoadedPath();
+    const h = editorHandle();
+    if (g && loaded === g.path && h) {
+      setPendingGoto(null);
+      h.gotoLine(g.line0);
+    }
+  });
+
   // 字号（?fs= 参数）：走 html 根字号 %；CodeMirror .cm-scroller 未设自身 font-size，沿继承链传导
   createEffect(() => {
     document.documentElement.style.fontSize = `${fontScale()}%`;
   });
 
   onCleanup(() => {
+    window.removeEventListener('keydown', onKeyDown);
     clearTimeout(saveTimer);
     editor?.destroy();
     toastEl?.remove();
@@ -171,6 +203,9 @@ export function App() {
       <header class="toolbar">
         <button class="icon-btn" onClick={() => setDrawerOpen(!drawerOpen())} title="菜单">
           ☰
+        </button>
+        <button class="icon-btn" onClick={() => editorHandle()?.openSearch()} title="查找" disabled={!currentFile()}>
+          🔍
         </button>
         <span class="toolbar-path">
           {currentFile() ?? <span class="toolbar-path-hint">未打开文件</span>}
