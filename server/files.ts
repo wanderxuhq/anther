@@ -144,12 +144,12 @@ export class FileStore {
   }
 
   async rename(relPath: string, toRel: string): Promise<void> {
-    // 拒绝根路径：resolveSafe('.') 返回 realpath(root)，rename('.', 'x') 会把根目录本身改名
+    // 拒绝根路径（字面形态快速失败）；'./'、'sub/..' 等词法变体由 resolveSafeNotRoot 拦截
     if (relPath === '' || relPath === '.' || toRel === '' || toRel === '.') {
       throw new HttpError(400, 'invalid path');
     }
-    const from = await this.resolveSafe(relPath);
-    const to = await this.resolveSafe(toRel); // 目标同样过边界校验
+    const from = await this.resolveSafeNotRoot(relPath);
+    const to = await this.resolveSafeNotRoot(toRel); // 目标同样过边界校验
     try {
       await fs.rename(from, to);
     } catch (e: unknown) {
@@ -158,14 +158,29 @@ export class FileStore {
   }
 
   async del(relPath: string): Promise<void> {
-    // 拒绝根路径：resolveSafe('.') 返回 realpath(root)，fs.rm 会递归删除整个根目录
+    // 拒绝根路径（字面形态快速失败）；'./'、'sub/..' 等词法变体由 resolveSafeNotRoot 拦截
     if (relPath === '' || relPath === '.') throw new HttpError(400, 'invalid path');
-    const abs = await this.resolveSafe(relPath);
+    const abs = await this.resolveSafeNotRoot(relPath);
     try {
       await fs.rm(abs, { recursive: true });
     } catch (e: unknown) {
       throw this.mapFsError(e);
     }
+  }
+
+  /**
+   * resolveSafe + 根自身拒绝。词法变体（'./'、'sub/..'、root='/' 时的 'etc/..' 等）
+   * 经 path.resolve 归一化后仍等于根，resolveSafe 对「结果等于根」显式放行
+   * （list('.') 依赖），fs.rm/rename 会作用于整个根目录。resolveSafe 返回的
+   * 已是 realpath 结果，与 fs.realpath(this.root) 相等即目标就是根（或指向根的
+   * 符号链接）——必须在此拒绝，且发生在任何 fs 操作之前。
+   */
+  private async resolveSafeNotRoot(relPath: string): Promise<string> {
+    const abs = await this.resolveSafe(relPath);
+    if (abs === await fs.realpath(this.root)) {
+      throw new HttpError(400, 'invalid path');
+    }
+    return abs;
   }
 
   private hasInvalidUtf8(buf: Buffer): boolean {

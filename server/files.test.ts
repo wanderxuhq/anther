@@ -107,3 +107,22 @@ test("root='/' 时 resolve 正常（修复 '//' 前缀全 400 缺陷）", () => 
   assert.equal(rootStore.resolve('/'), '/');
   assert.doesNotThrow(() => rootStore.resolve('..')); // path.resolve('/', '..') 归一化为根自身
 });
+
+test('del 拒绝词法变体根路径 sub/..：抛 400 且根目录仍在', async () => {
+  await assert.rejects(store.del('sub/..'), (e: HttpError) => e.status === 400);
+  assert.equal((await readdir(root)).sort().join(','), 'a.txt,sub'); // 未被递归删除
+});
+
+test('del 拒绝 "./"：抛 400 且根目录仍在', async () => {
+  await assert.rejects(store.del('./'), (e: HttpError) => e.status === 400);
+  assert.equal((await readdir(root)).sort().join(','), 'a.txt,sub');
+});
+
+test('rename 拒绝词法变体根路径 sub/..：抛 400 且根未改名', async () => {
+  await assert.rejects(store.rename('sub/..', 'x'), (e: HttpError) => e.status === 400);
+  assert.equal((await store.read('a.txt')).content, 'hello'); // 根目录未被改名，内容可读
+});
+
+test('rename 目标为词法变体根路径 sub/..：抛 400', async () => {
+  await assert.rejects(store.rename('a.txt', 'sub/..'), (e: HttpError) => e.status === 400);
+});
