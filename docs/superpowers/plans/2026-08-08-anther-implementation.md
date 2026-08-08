@@ -6,13 +6,15 @@
 
 **Architecture:** 单体 npm 包。后端为 Node 原生 http + TypeScript（零框架依赖），提供文件 API、内存标签 API、静态托管与 SPA fallback；前端为 SolidJS + CodeMirror 6（Vite 构建，产物打包进 npm 包）。服务端零落盘，状态只存在于进程内存（标签列表）与 URL（当前文件 + ro/theme/fs）。
 
-**Tech Stack:** TypeScript (ESM)、Node 原生 `node:http` + `node:test`、SolidJS、CodeMirror 6、Vite、vitest + solid-testing-library（前端测试）。
+**Tech Stack:** TypeScript (ESM)、Node 原生 `node:http` + `node:test`（前后端统一）、SolidJS、CodeMirror 6、Vite。共 6 个运行时/开发依赖（codemirror、@codemirror/state、solid-js、typescript、vite、vite-plugin-solid、@types/node）。
 
 ## Global Constraints
 
 - Node >= 24（`node --test` + TS 类型剥离原生可用；ESM import 必须带 `.ts` 扩展名）
 - **引入依赖一律用 `npm install <pkg>` 命令（绝不手改 package.json 的 dependencies 字段）**
 - **禁止任何直接或间接依赖 node-gyp 的包**（原生编译依赖）；安装后验证 `npm ls node-gyp --all` 为空
+- **依赖最小化**：尽量不引入依赖；确实需要引入时，先向用户确认清单再安装（全自动模式下唯一需暂停确认的事项）
+- 前端测试一律用 `node:test`（与后端相同，零测试框架依赖）；编辑器 DOM 行为靠手动验证
 - 后端零运行时依赖（只用 node 内置模块 + 前端构建产物）
 - 服务端零落盘：不创建任何配置文件/缓存/日志；不写 cookie
 - 客户端不写 localStorage（除两个明确用途：`anther:userId`、`anther:tabsSnapshot`）
@@ -106,9 +108,7 @@ Expected: FAIL（`Cannot find module './http-error.ts'`）
   "type": "module",
   "bin": { "anther": "./bin/anther.js" },
   "scripts": {
-    "test": "node --test server/",
-    "test:web": "vitest run --config web/vite.config.ts",
-    "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:web\"",
+    "test": "node --test server/ web/src/",
     "dev:server": "node --watch --experimental-transform-types server/cli.ts",
     "dev:web": "vite --config web/vite.config.ts",
     "build": "tsc -p tsconfig.json && vite build --config web/vite.config.ts",
@@ -117,16 +117,19 @@ Expected: FAIL（`Cannot find module './http-error.ts'`）
 }
 ```
 
-**依赖一律用 `npm install` 添加（Global Constraints），不要手写 dependencies 字段：**
+（dev 模式：两个终端分别跑 `npm run dev:server` 与 `npm run dev:web`。不引 concurrently。）
+
+**依赖安装（Global Constraints：安装前先与用户确认清单）：**
 
 ```bash
 # 运行时依赖（全部纯 JS，无 node-gyp）
-npm install @codemirror/state@^6 @codemirror/view@^6 codemirror@^6 solid-js@^1.9
+npm install codemirror@^6 @codemirror/state@^6 solid-js@^1.9
 
 # 开发依赖
-npm install -D @solidjs/testing-library@^0.8 @types/node@^24 concurrently@^9 \
-  jsdom@^26 typescript@^5 vite@^6 vite-plugin-solid@^2 vitest@^3
+npm install -D typescript@^5 vite@^6 vite-plugin-solid@^2 @types/node@^24
 ```
+
+（共 6 个包。`@codemirror/view` 是 codemirror 的传递依赖，不显式装。前端测试用 node:test，零测试框架。）
 
 **安装后验证无 node-gyp 毒瘤：**
 
@@ -1272,10 +1275,6 @@ export default defineConfig({
     outDir: path.resolve(import.meta.dirname, '../dist/web'),
     emptyOutDir: true,
   },
-  test: {
-    environment: 'jsdom',
-    globals: true,
-  },
 });
 ```
 
@@ -1494,57 +1493,53 @@ git commit -m "feat: 前端脚手架（Solid + Vite + 布局骨架 + 视图注�
 
 ```ts
 // web/src/url-state.test.ts
-import { describe, expect, test } from 'vitest';
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
 import { parseUrl, serializeUrl } from './url-state.ts';
 
-describe('parseUrl', () => {
-  test('根路径：无文件，默认值', () => {
-    const s = parseUrl('http://host/');
-    expect(s).toEqual({ path: null, ro: true, theme: 'auto', fs: 100 });
-  });
-
-  test('文件路径 + 全参数', () => {
-    const s = parseUrl('http://host/src/index.ts?ro=0&theme=dark&fs=110');
-    expect(s).toEqual({ path: 'src/index.ts', ro: false, theme: 'dark', fs: 110 });
-  });
-
-  test('路径特殊字符解码（%20 空格，/ 保留）', () => {
-    const s = parseUrl('http://host/my%20dir/a.ts');
-    expect(s.path).toBe('my dir/a.ts');
-  });
-
-  test('未知参数忽略、非法 fs 钳制', () => {
-    const s = parseUrl('http://host/a.ts?ro=1&fs=999&view=git&theme=x');
-    expect(s).toEqual({ path: 'a.ts', ro: true, theme: 'auto', fs: 130 });
-  });
+test('parseUrl 根路径：无文件，默认值', () => {
+  const s = parseUrl('http://host/');
+  assert.deepEqual(s, { path: null, ro: true, theme: 'auto', fs: 100 });
 });
 
-describe('serializeUrl', () => {
-  test('最简形态：默认值全部省略', () => {
-    expect(serializeUrl({ path: 'a.ts', ro: true, theme: 'auto', fs: 100 })).toBe('/a.ts');
-  });
+test('parseUrl 文件路径 + 全参数', () => {
+  const s = parseUrl('http://host/src/index.ts?ro=0&theme=dark&fs=110');
+  assert.deepEqual(s, { path: 'src/index.ts', ro: false, theme: 'dark', fs: 110 });
+});
 
-  test('非默认值写入参数', () => {
-    expect(serializeUrl({ path: 'a.ts', ro: false, theme: 'dark', fs: 110 })).toBe(
-      '/a.ts?ro=0&theme=dark&fs=110',
-    );
-  });
+test('parseUrl 路径特殊字符解码（%20 空格）', () => {
+  const s = parseUrl('http://host/my%20dir/a.ts');
+  assert.equal(s.path, 'my dir/a.ts');
+});
 
-  test('无文件 + 非默认参数', () => {
-    expect(serializeUrl({ path: null, ro: false, theme: 'light', fs: 100 })).toBe('/?ro=0&theme=light');
-  });
+test('parseUrl 未知参数忽略、非法 fs 钳制', () => {
+  const s = parseUrl('http://host/a.ts?ro=1&fs=999&view=git&theme=x');
+  assert.deepEqual(s, { path: 'a.ts', ro: true, theme: 'auto', fs: 130 });
+});
 
-  test('空格等特殊字符编码，斜杠保留', () => {
-    expect(serializeUrl({ path: 'my dir/a.ts', ro: true, theme: 'auto', fs: 100 })).toBe(
-      '/my%20dir/a.ts',
-    );
-  });
+test('serializeUrl 最简形态：默认值全部省略', () => {
+  assert.equal(serializeUrl({ path: 'a.ts', ro: true, theme: 'auto', fs: 100 }), '/a.ts');
+});
+
+test('serializeUrl 非默认值写入参数', () => {
+  assert.equal(
+    serializeUrl({ path: 'a.ts', ro: false, theme: 'dark', fs: 110 }),
+    '/a.ts?ro=0&theme=dark&fs=110',
+  );
+});
+
+test('serializeUrl 无文件 + 非默认参数', () => {
+  assert.equal(serializeUrl({ path: null, ro: false, theme: 'light', fs: 100 }), '/?ro=0&theme=light');
+});
+
+test('serializeUrl 空格编码，斜杠保留', () => {
+  assert.equal(serializeUrl({ path: 'my dir/a.ts', ro: true, theme: 'auto', fs: 100 }), '/my%20dir/a.ts');
 });
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `npx vitest run --config web/vite.config.ts web/src/url-state.test.ts`
+Run: `node --test web/src/url-state.test.ts`
 Expected: FAIL（模块不存在）
 
 - [ ] **Step 3: 实现 url-state.ts**
@@ -1600,8 +1595,8 @@ export const DEFAULT_STATE: UrlState = { ...DEFAULTS };
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `npx vitest run --config web/vite.config.ts web/src/url-state.test.ts`
-Expected: PASS（7 个测试）
+Run: `node --test web/src/url-state.test.ts`
+Expected: PASS（8 个测试）
 
 - [ ] **Step 5: 提交**
 
@@ -1632,48 +1627,68 @@ git commit -m "feat: URL 状态协议（parse/serialize 纯函数）"
 
 ```ts
 // web/src/api.test.ts
-import { describe, expect, test, vi, beforeEach } from 'vitest';
-import { ApiError, api, getUserId } from './api.ts';
+import { test, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { api, getUserId } from './api.ts';
+
+// Node 无 localStorage —— 用内存桩（测试前全局注入）
+const store = new Map<string, string>();
+(globalThis as Record<string, unknown>).localStorage = {
+  getItem: (k: string) => store.get(k) ?? null,
+  setItem: (k: string, v: string) => void store.set(k, v),
+  removeItem: (k: string) => void store.delete(k),
+  clear: () => store.clear(),
+  key: () => null,
+  length: 0,
+};
+
+let fetchCalls: { url: string; init: RequestInit }[] = [];
 
 function mockFetch(status: number, body: unknown) {
-  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body), { status })));
+  (globalThis as Record<string, unknown>).fetch = async (
+    url: string,
+    init: RequestInit = {},
+  ) => {
+    fetchCalls.push({ url, init });
+    return new Response(JSON.stringify(body), { status });
+  };
 }
-beforeEach(() => vi.unstubAllGlobals());
 
-describe('api', () => {
-  test('readFile 返回内容', async () => {
-    mockFetch(200, { content: 'hi' });
-    const r = await api.readFile('a.ts');
-    expect(r.content).toBe('hi');
-  });
+beforeEach(() => {
+  store.clear();
+  fetchCalls = [];
+});
 
-  test('非 2xx 抛 ApiError 携带状态码', async () => {
-    mockFetch(403, { error: 'read-only' });
-    await expect(api.writeFile('a.ts', 'x', true)).rejects.toMatchObject({ status: 403 });
-  });
+test('readFile 返回内容', async () => {
+  mockFetch(200, { content: 'hi' });
+  const r = await api.readFile('a.ts');
+  assert.equal(r.content, 'hi');
+});
 
-  test('writeFile 带 ro 参数与 x-user-id 头', async () => {
-    const fn = vi.fn(async () => new Response('{}', { status: 200 }));
-    vi.stubGlobal('fetch', fn);
-    await api.writeFile('a.ts', 'x', false);
-    const [url, init] = fn.mock.calls[0] as [string, RequestInit];
-    expect(url).toContain('ro=0');
-    expect((init.headers as Record<string, string>)['x-user-id']).toBeTruthy();
-  });
+test('非 2xx 抛 ApiError 携带状态码', async () => {
+  mockFetch(403, { error: 'read-only' });
+  await assert.rejects(api.writeFile('a.ts', 'x', true), (e: Error & { status?: number }) => e.status === 403);
+});
 
-  test('getUserId 生成并持久化', () => {
-    localStorage.clear();
-    const id1 = getUserId();
-    const id2 = getUserId();
-    expect(id1).toBe(id2); // 二次读取同一值
-    expect(id1.length).toBeGreaterThan(10);
-  });
+test('writeFile 带 ro 参数与 x-user-id 头', async () => {
+  mockFetch(200, {});
+  await api.writeFile('a.ts', 'x', false);
+  const [call] = fetchCalls;
+  assert.ok(call.url.includes('ro=0'));
+  assert.ok((call.init.headers as Record<string, string>)['x-user-id']);
+});
+
+test('getUserId 生成并持久化', () => {
+  const id1 = getUserId();
+  const id2 = getUserId();
+  assert.equal(id1, id2); // 二次读取同一值
+  assert.ok(id1.length > 10);
 });
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `npx vitest run --config web/vite.config.ts web/src/api.test.ts`
+Run: `node --test web/src/api.test.ts`
 Expected: FAIL（模块不存在）
 
 - [ ] **Step 3: 实现 api.ts**
@@ -1846,7 +1861,7 @@ export async function closeTab(path: string): Promise<void> {
 
 - [ ] **Step 5: 运行测试确认通过**
 
-Run: `npx vitest run --config web/vite.config.ts web/src/api.test.ts`
+Run: `node --test web/src/api.test.ts`
 Expected: PASS（4 个测试）
 
 - [ ] **Step 6: 提交**
@@ -2059,48 +2074,7 @@ git commit -m "feat: 标签列表视图（切换/关闭）"
     - `opts: { initialDoc: string; readOnly: boolean; onChange: (doc: string) => void }`
   - 自动保存：编辑变化 → 防抖 1s → `api.writeFile(path, doc, roMode())`；失败重试 3 次（间隔 1s）后 Toast
 
-- [ ] **Step 1: 写失败测试（适配层行为）**
-
-```ts
-// web/src/editor/index.test.ts
-import { describe, expect, test } from 'vitest';
-import { createEditor } from './index.ts';
-
-describe('createEditor', () => {
-  test('创建与销毁不抛错', () => {
-    const host = document.createElement('div');
-    document.body.appendChild(host);
-    const editor = createEditor(host, { initialDoc: 'hello', readOnly: true, onChange: () => {} });
-    expect(host.textContent).toContain('hello');
-    editor.destroy();
-    host.remove();
-  });
-
-  test('setReadOnly 切换可编辑态', () => {
-    const host = document.createElement('div');
-    const editor = createEditor(host, { initialDoc: '', readOnly: true, onChange: () => {} });
-    expect(() => editor.setReadOnly(false)).not.toThrow();
-    editor.destroy();
-    host.remove();
-  });
-
-  test('setDoc 替换内容', () => {
-    const host = document.createElement('div');
-    const editor = createEditor(host, { initialDoc: '', readOnly: true, onChange: () => {} });
-    editor.setDoc('新内容');
-    expect(host.textContent).toContain('新内容');
-    editor.destroy();
-    host.remove();
-  });
-});
-```
-
-- [ ] **Step 2: 运行测试确认失败**
-
-Run: `npx vitest run --config web/vite.config.ts web/src/editor/index.test.ts`
-Expected: FAIL（模块不存在）
-
-- [ ] **Step 3: 实现编辑器适配层**
+- [ ] **Step 1: 实现编辑器适配层**（不写自动化测试——需要 jsdom/DOM 环境，按依赖最小化原则砍掉，行为靠 Step 4 手动验证）
 
 ```ts
 // web/src/editor/index.ts
@@ -2154,7 +2128,7 @@ export function createEditor(container: HTMLElement, opts: EditorOptions): Edito
 }
 ```
 
-- [ ] **Step 4: 接线（App.tsx + stores.ts）**
+- [ ] **Step 2: 接线（App.tsx + stores.ts）**
 
 `web/src/App.tsx` 中编辑器区域改为：
 
@@ -2239,17 +2213,14 @@ window.addEventListener('popstate', () => {
 });
 ```
 
-- [ ] **Step 5: 运行测试 + 手动验证**
+- [ ] **Step 3: 手动验证（dev 环境，替代 DOM 自动化测试）**
 
-Run: `npx vitest run --config web/vite.config.ts web/src/editor/index.test.ts`
-Expected: PASS（3 个测试）
+打开文件 → 编辑 → 1s 后磁盘文件已更新；✎ 切换只读 → 编辑被禁（CodeMirror 只读）且 URL `ro` 变化；保存时切只读 → 下次编辑触发 403 提示 → 提示切换模式
 
-手动（dev）：打开文件 → 编辑 → 1s 后磁盘文件已更新；✎ 切换只读 → 编辑被禁（CodeMirror 只读）且 URL `ro` 变化；保存时切只读 → 下次编辑触发 403 Toast（alert 兜底）→ 提示切换模式
-
-- [ ] **Step 6: 提交**
+- [ ] **Step 4: 提交**
 
 ```bash
-git add web/src/editor/index.ts web/src/editor/index.test.ts web/src/App.tsx web/src/stores.ts
+git add web/src/editor/index.ts web/src/App.tsx web/src/stores.ts
 git commit -m "feat: CodeMirror 适配层 + 自动保存 + 只读切换"
 ```
 
@@ -2299,11 +2270,10 @@ npx anther [目录] [--port <端口>] [--rw]
 
 ```bash
 npm install
-npm run dev      # 前端 :5173（代理 /api → :3000），需另起后端：
-npm run dev:server -- --rw
-npm test         # 后端 node:test
-npx vitest run   # 前端测试
-npm run build    # 编译后端 + 构建前端
+npm run dev:server -- --rw   # 后端 :3000
+npm run dev:web              # 前端 :5173（代理 /api → :3000）
+npm test                     # 全部测试（node:test，前后端统一）
+npm run build                # 编译后端 + 构建前端
 ```
 
 ## 真机测试清单
@@ -2361,3 +2331,4 @@ git commit -m "feat: 移动端体验打磨"
 
 - **Spec 覆盖**：§5.1 API 表 → Task 5/6 ✓；§5.3 路径安全 → Task 2 ✓；§5.4 写入双条件 → Task 3/5 ✓；§5.5 标签/心跳/恢复 → Task 4/6/10 ✓；§6 URL 协议 → Task 9/13 ✓；§7.1-7.3 布局/视图注册表 → Task 8/11/12 ✓；§7.5 键盘 → Task 8（dvh）+ Task 15 ✓；§7.6 编辑器/自动保存 → Task 13 ✓；§8 错误处理 → Task 2（错误映射）+ Task 10（ApiError）+ Task 13（重试）✓；§9 测试 → 各任务 TDD ✓；§10 扩展位 → 视图注册表（Task 8）✓
 - **已知偏差**：`api.mkDir/rename/del` 与 `/api/state` 路由无前端 UI（MVP 文件管理仅浏览+编辑，写 API 由编辑器自动保存使用）；`/api/state` 暂无消费方——保留 API 不实现 UI。非 UTF-8 提示（spec §5.3）在 read 返回 `utf8` 标记，前端 Toast 提示可在 Task 14 手动验证时补一行（`if (!utf8) alert('非 UTF-8 文件，仅支持 UTF-8 保存')`）。
+- **依赖变更记录**：2026-08-08 按用户要求依赖最小化——砍掉 vitest/jsdom/@solidjs/testing-library/concurrently/@codemirror/view，前端测试统一 node:test（url-state、api 测试可跑；编辑器 DOM 行为改手动验证）。
