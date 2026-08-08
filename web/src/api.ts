@@ -90,7 +90,8 @@ export type SearchDone = { truncated: boolean; fileCount: number; matchCount: nu
 /**
  * 全局搜索 SSE 客户端（Task 17）：fetch + ReadableStream 逐行解析 `data:` 帧，
  * 按 type 分发 file/done/error。返回 { cancel() }：取消后服务端收到断开即停止遍历。
- * 主动取消（abort）静默——不触发 onError；非 2xx 与解析错误走 onError。
+ * 主动取消（abort）静默——不触发 onError；非 2xx 与解析错误走 onError；
+ * 流异常中断（EOF 但无 done 帧，如服务端被 kill/代理断连）→ onError('搜索连接中断')。
  */
 export function searchStream(
   params: { q: string; caseSensitive?: boolean; exclude?: string },
@@ -114,6 +115,8 @@ export function searchStream(
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
       let buf = '';
+      // 只有收到 SSE done 事件帧才算正常收尾；流 EOF（读循环的 done）不算
+      let sawDone = false;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -132,6 +135,7 @@ export function searchStream(
             if (evt.type === 'file' && evt.path) {
               handlers.onFile({ path: evt.path, matches: evt.matches ?? [] });
             } else if (evt.type === 'done') {
+              sawDone = true;
               handlers.onDone({ truncated: !!evt.truncated, fileCount: evt.fileCount ?? 0, matchCount: evt.matchCount ?? 0 });
             } else if (evt.type === 'error') {
               handlers.onError(evt.message ?? 'search failed');
@@ -139,6 +143,9 @@ export function searchStream(
           } catch { /* 跳过畸形帧 */ }
         }
       }
+      // 干净 EOF 但无 done 帧（服务端被 kill/代理断连）：onDone/onError 都不触发，
+      // UI 会永久「搜索中…」，这里补一个断连提示（主动取消已由 catch 静默处理）
+      if (!sawDone && !ctrl.signal.aborted) handlers.onError('搜索连接中断');
     } catch (e) {
       if (ctrl.signal.aborted) return; // 主动取消 → 静默
       handlers.onError((e as Error).message);

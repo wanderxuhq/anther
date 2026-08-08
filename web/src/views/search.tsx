@@ -1,7 +1,7 @@
 // web/src/views/search.tsx
 // 全局搜索视图（Task 17）：关键词 + 大小写 + 排除框 → SSE 流式结果，
 // 按文件分组（VS Code 式），点击匹配跳转到文件对应行。
-import { createSignal, For, Show } from 'solid-js';
+import { createSignal, For, onCleanup, Show } from 'solid-js';
 import { searchStream, type SearchFile } from '../api.ts';
 import { gotoLine0 } from '../stores.ts';
 import { splitByQuery } from './search-util.ts';
@@ -23,12 +23,20 @@ export function SearchView() {
   let cancelCurrent: (() => void) | undefined;
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
+  // 视图卸载（切换视图）时清理：清掉挂起的防抖 timer、abort 在途 SSE 流，
+  // 否则流会跑完整个服务端遍历（上限 500 文件）、timer 还会触发孤儿 runSearch
+  onCleanup(() => {
+    clearTimeout(debounceTimer);
+    cancelCurrent?.();
+  });
+
   function scheduleSearch() {
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(runSearch, 300);
   }
 
   function runSearch() {
+    clearTimeout(debounceTimer); // 防抖挂起期被直接触发（大小写切换/取消）时清掉挂起 timer，防双重触发
     const q = query().trim();
     const mySeq = ++seq;
     cancelCurrent?.(); // 取消旧流：服务端收到断开即停

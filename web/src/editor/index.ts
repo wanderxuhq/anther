@@ -85,9 +85,10 @@ export function createEditor(container: HTMLElement, opts: EditorOptions): Edito
           EditorView.editable.of(!r),
         ]),
       });
-      // 只读门控（Task 17）：搜索面板的替换区无公开关闭 API（内部 togglePanel
-      // effect 不导出），切只读时关掉整个面板——replaceNext/replaceAll 不检查
-      // readOnly facet，面板开着就能改写只读文档
+      // 只读门控（Task 17）：6.7.1 的 replaceNext/replaceAll 已检查 state.readOnly
+      // （只读时替换区整个不渲染），closeSearchPanel 作为纵深防御 + VS Code 式
+      // UX——只读文件不显示替换面板（内部 togglePanel effect 不导出，无公开关闭
+      // 替换区的 API，故关掉整个面板）
       if (r) closeSearchPanel(view);
     },
     openSearch() {
