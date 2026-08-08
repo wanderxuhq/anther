@@ -57,7 +57,7 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
       return;
     }
     if (state()?.loading) return; // 防连点并发加载
-    setNodes(props.path, 'loading', true);
+    setNodes(props.path, { loading: true }); // 对象式 set 自动创建缺失 key；嵌套路径 set 对未点击过的目录会抛 TypeError
     try {
       const { entries } = await api.list(props.path);
       setNodes(props.path, { expanded: true, loaded: entries, loading: false });
