@@ -82,3 +82,67 @@ export const api = {
 };
 
 export type DirEntry = { name: string; type: 'file' | 'dir' | 'link'; size: number; mtime: number };
+
+export type SearchMatch = { line: number; col: number; text: string };
+export type SearchFile = { path: string; matches: SearchMatch[] };
+export type SearchDone = { truncated: boolean; fileCount: number; matchCount: number };
+
+/**
+ * 全局搜索 SSE 客户端（Task 17）：fetch + ReadableStream 逐行解析 `data:` 帧，
+ * 按 type 分发 file/done/error。返回 { cancel() }：取消后服务端收到断开即停止遍历。
+ * 主动取消（abort）静默——不触发 onError；非 2xx 与解析错误走 onError。
+ */
+export function searchStream(
+  params: { q: string; caseSensitive?: boolean; exclude?: string },
+  handlers: { onFile: (f: SearchFile) => void; onDone: (d: SearchDone) => void; onError: (message: string) => void },
+): { cancel(): void } {
+  const ctrl = new AbortController();
+  const query = new URLSearchParams({ q: params.q, case: params.caseSensitive ? '1' : '0' });
+  if (params.exclude) query.set('exclude', params.exclude);
+  void (async () => {
+    try {
+      const res = await fetch(`/api/search?${query}`, {
+        headers: { 'x-user-id': getUserId() },
+        signal: ctrl.signal,
+      });
+      if (!res.ok) {
+        let msg = res.statusText;
+        try { msg = ((await res.json()) as { error?: string }).error ?? msg; } catch { /* ignore */ }
+        handlers.onError(msg);
+        return;
+      }
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl);
+          buf = buf.slice(nl + 1);
+          if (!line.startsWith('data:')) continue;
+          try {
+            const evt = JSON.parse(line.slice(5).trim()) as {
+              type: string; message?: string; truncated?: boolean;
+              fileCount?: number; matchCount?: number;
+              path?: string; matches?: SearchMatch[];
+            };
+            if (evt.type === 'file' && evt.path) {
+              handlers.onFile({ path: evt.path, matches: evt.matches ?? [] });
+            } else if (evt.type === 'done') {
+              handlers.onDone({ truncated: !!evt.truncated, fileCount: evt.fileCount ?? 0, matchCount: evt.matchCount ?? 0 });
+            } else if (evt.type === 'error') {
+              handlers.onError(evt.message ?? 'search failed');
+            }
+          } catch { /* 跳过畸形帧 */ }
+        }
+      }
+    } catch (e) {
+      if (ctrl.signal.aborted) return; // 主动取消 → 静默
+      handlers.onError((e as Error).message);
+    }
+  })();
+  return { cancel: () => ctrl.abort() };
+}

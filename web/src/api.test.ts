@@ -1,7 +1,7 @@
 // web/src/api.test.ts
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { api, getUserId, fallbackUuid } from './api.ts';
+import { api, getUserId, fallbackUuid, searchStream, type SearchFile } from './api.ts';
 
 // Node 无 localStorage —— 用内存桩（测试前全局注入）
 const store = new Map<string, string>();
@@ -61,4 +61,79 @@ test('fallbackUuid 生成 v4 格式（非安全上下文降级路径）', () => 
   const re = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
   for (let i = 0; i < 50; i++) assert.match(fallbackUuid(), re);
   assert.notEqual(fallbackUuid(), fallbackUuid());
+});
+
+// ---- searchStream SSE 客户端（Task 17） ----
+function mockSse(chunks: string[], status = 200) {
+  (globalThis as Record<string, unknown>).fetch = async (_url: string, init: RequestInit = {}) => {
+    if (init.signal) (init.signal as AbortSignal).throwIfAborted();
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        for (const ch of chunks) c.enqueue(new TextEncoder().encode(ch));
+        c.close();
+      },
+    });
+    return new Response(stream, { status, headers: { 'Content-Type': 'text/event-stream' } });
+  };
+}
+
+test('searchStream 解析 file/done 事件（含跨帧拼接）', async () => {
+  // 一条完整事件拆成两个 chunk：验证帧缓冲拼接
+  // （brief 原 chunk1 末尾带 \n，会把 data: 帧在第 20 字符处截断成畸形行；去掉该 \n，
+  //  让整行跨 chunk 边界由帧缓冲拼接——正是本测试要验证的行为）
+  const half = JSON.stringify({ type: 'file', path: 'a.txt', matches: [{ line: 1, col: 0, text: 'hello' }] });
+  mockSse([`data: ${half.slice(0, 20)}`, `${half.slice(20)}\n\n`, 'data: {"type":"done","truncated":false,"fileCount":1,"matchCount":1}\n\n']);
+  const files: SearchFile[] = [];
+  await new Promise<void>((resolve) => {
+    searchStream({ q: 'hello' }, {
+      onFile: (f) => files.push(f),
+      onDone: () => resolve(),
+      onError: () => resolve(),
+    });
+  });
+  assert.deepEqual(files, [{ path: 'a.txt', matches: [{ line: 1, col: 0, text: 'hello' }] }]);
+});
+
+test('searchStream 非 2xx → onError（解析 {error}）', async () => {
+  // 带 {error} 响应体：Node 手工构造的 Response statusText 为 ''，且本测试要验证的是 {error} 解析
+  mockSse(['{"error":"nf"}'], 404);
+  let err = '';
+  await new Promise<void>((resolve) => {
+    searchStream({ q: 'x' }, { onFile: () => {}, onDone: () => resolve(), onError: (m) => { err = m; resolve(); } });
+  });
+  assert.ok(err.length > 0);
+});
+
+test('searchStream 发送 case/exclude 参数', async () => {
+  let url = '';
+  (globalThis as Record<string, unknown>).fetch = async (u: string) => {
+    url = u;
+    // 模拟服务端：body 至少含一条 done 帧，否则 searchStream 不会触发 onDone，promise 永不 resolve
+    return new Response(new ReadableStream({
+      start(c) {
+        c.enqueue(new TextEncoder().encode('data: {"type":"done","truncated":false,"fileCount":0,"matchCount":0}\n\n'));
+        c.close();
+      },
+    }), { status: 200 });
+  };
+  await new Promise<void>((resolve) => {
+    searchStream({ q: 'hello', caseSensitive: true, exclude: '.git,x' }, { onFile: () => {}, onDone: () => resolve(), onError: () => resolve() });
+  });
+  assert.ok(url.includes('case=1'));
+  assert.ok(url.includes('exclude=.git%2Cx'));
+});
+
+test('searchStream cancel 触发 abort（静默，不触发 onError）', async () => {
+  let signal: AbortSignal | undefined;
+  (globalThis as Record<string, unknown>).fetch = async (_u: string, init: RequestInit = {}) => {
+    signal = init.signal as AbortSignal;
+    // 永不 resolve 的流：cancel 后 reader.read() 抛 AbortError，被 catch 静默吞掉
+    return new Response(new ReadableStream({ start() {} }), { status: 200 });
+  };
+  let err = '';
+  const { cancel } = searchStream({ q: 'x' }, { onFile: () => {}, onDone: () => {}, onError: (m) => { err = m; } });
+  cancel();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(signal?.aborted, true);
+  assert.equal(err, '');
 });
