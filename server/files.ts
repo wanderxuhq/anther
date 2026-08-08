@@ -143,6 +143,18 @@ export class FileStore {
     }
   }
 
+  /** 独占创建（O_EXCL）：已存在 → 409（不清空既有文件）。文件与目录同用：content 仅文件有意义 */
+  async create(relPath: string, content = ''): Promise<void> {
+    const abs = await this.resolveSafeNotRoot(relPath);
+    try {
+      const fh = await fs.open(abs, 'wx');
+      await fh.writeFile(content, 'utf8');
+      await fh.close();
+    } catch (e: unknown) {
+      throw this.mapFsError(e); // EEXIST → 409 already exists（mapFsError 已映射）
+    }
+  }
+
   async rename(relPath: string, toRel: string): Promise<void> {
     // 拒绝根路径（字面形态快速失败）；'./'、'sub/..' 等词法变体由 resolveSafeNotRoot 拦截
     if (relPath === '' || relPath === '.' || toRel === '' || toRel === '.') {

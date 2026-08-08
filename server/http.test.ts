@@ -69,3 +69,15 @@ test('PUT /api/file 带 body 但无 path → 400（已有逻辑回归确认）',
   const { status } = await call('PUT', '/api/file', { content: 'x' });
   assert.equal(status, 400);
 });
+
+test('POST /api/create 无 body → 400（而非 500）', async () => {
+  const { status, body } = await call('POST', '/api/create');
+  assert.equal(status, 400);
+  assert.ok(body.error);
+});
+
+test('POST /api/create 带 ro=1 → 403（只读服务端）', async () => {
+  const { status, body } = await call('POST', '/api/create?ro=1', { path: 'x.txt' });
+  assert.equal(status, 403);
+  assert.ok(body.error);
+});

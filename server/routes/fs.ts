@@ -32,15 +32,28 @@ export function registerFsRoutes(
     await files.write(p, content);
   });
 
-  // spec §5.4：--rw 启动下写操作需携带 ro=0（与 PUT /api/file 同一裁决模式）
+  // spec §5.4：--rw 启动下写操作需携带 ro=0（与 PUT /api/file 同一裁决模式）。
+  // body 守卫同 PUT /api/file（final-fixes 轮次修复的模式）：空 body 时 readBody 返回
+  // undefined，直接解构抛 TypeError → 500；先判对象形态再解构 → 400。
   http.post('/api/mkdir', async (_req, body, q) => {
+    if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
     const { path: p } = body as { path?: string };
     if (!p) throw new HttpError(400, 'missing path');
     gate.assertWritable(q.get('ro') ?? undefined);
     await files.mkdir(p);
   });
 
+  // 独占建文件（O_EXCL）：重名 → 409 already exists，不清空既有文件（与 mkdir 同裁决）
+  http.post('/api/create', async (_req, body, q) => {
+    if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
+    const { path: p } = body as { path?: string };
+    if (!p) throw new HttpError(400, 'missing path');
+    gate.assertWritable(q.get('ro') ?? undefined);
+    await files.create(p);
+  });
+
   http.post('/api/rename', async (_req, body, q) => {
+    if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
     const { path: p, to } = body as { path?: string; to?: string };
     if (!p || !to) throw new HttpError(400, 'missing path/to');
     gate.assertWritable(q.get('ro') ?? undefined);
@@ -48,6 +61,7 @@ export function registerFsRoutes(
   });
 
   http.post('/api/delete', async (_req, body, q) => {
+    if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
     const { path: p } = body as { path?: string };
     if (!p) throw new HttpError(400, 'missing path');
     gate.assertWritable(q.get('ro') ?? undefined);

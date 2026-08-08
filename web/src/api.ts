@@ -56,6 +56,7 @@ export const api = {
   writeFile: (path: string, content: string, ro: boolean) =>
     request('PUT', `/api/file?path=${encodeURIComponent(path)}&ro=${ro ? '1' : '0'}`, { content }),
   mkDir: (path: string, ro: boolean) => request('POST', `/api/mkdir?ro=${ro ? '1' : '0'}`, { path }),
+  create: (path: string, ro: boolean) => request('POST', `/api/create?ro=${ro ? '1' : '0'}`, { path }),
   rename: (path: string, to: string, ro: boolean) =>
     request('POST', `/api/rename?ro=${ro ? '1' : '0'}`, { path, to }),
   del: (path: string, ro: boolean) => request('POST', `/api/delete?ro=${ro ? '1' : '0'}`, { path }),

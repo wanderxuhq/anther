@@ -54,6 +54,17 @@ test('mkdir/rename/del 生效', async () => {
   await assert.rejects(store.read('renamed.txt'));
 });
 
+test('create 新建文件：存在且内容为空', async () => {
+  await store.create('new.txt');
+  assert.equal((await store.read('new.txt')).content, '');
+});
+
+test('create 同名 → 409 且原内容未被清空（独占创建）', async () => {
+  await store.write('dup.txt', 'original');
+  await assert.rejects(store.create('dup.txt'), (e: HttpError) => e.status === 409);
+  assert.equal((await store.read('dup.txt')).content, 'original'); // 未被清空
+});
+
 test('rename 目标越界拒绝', async () => {
   await assert.rejects(store.rename('a.txt', '../evil.txt'), (e: HttpError) => e.status === 400);
 });

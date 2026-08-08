@@ -82,13 +82,9 @@ async function doCreate(kind: 'file' | 'dir', base: string, name: string) {
   const p = childPath(base, name); // 根级不带头 './'（childPath 约定），保证与 URL/currentFile 匹配
   try {
     if (kind === 'file') {
-      // 服务端无「建文件」端点（POST /api/mkdir 是 fs.mkdir，只建目录）；
-      // 空文件用 PUT /api/file 创建。重名保护：父列表已有同名 → 与目录侧服务器 409 同文案
-      // （服务端 writeFile 无 409 语义，直接覆盖会清空既有文件，故先查列表拦截）。
-      if (nodes[base]?.loaded?.some((e) => e.name === name)) {
-        throw new Error('already exists');
-      }
-      await api.writeFile(p, '', roMode());
+      // 独占创建（POST /api/create，服务端 O_EXCL）：重名 → 409 already exists（服务器文案），
+      // 不清空既有文件；不设客户端守卫，服务器是重名裁决的唯一事实源
+      await api.create(p, roMode());
     } else {
       await api.mkDir(p, roMode()); // 服务端 fs.mkdir；重名 → 409 already exists
     }
