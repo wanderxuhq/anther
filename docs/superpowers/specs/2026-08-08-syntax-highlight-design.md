@@ -48,7 +48,7 @@ loadLanguage(desc: LanguageDescription): Promise<Extension | null>  // 调 desc.
 打开文件的加载流程（复用现有 `loadSeq` 竞态守卫）：
 
 1. `readFile` 成功 → 先 `createEditor`/`setDoc` 显示纯文本（**不等待语言**，VS Code 同款体验）
-2. 并行调 `describeLanguage(path)` + `loadLanguage(desc)`（异步动态 import）
+2. `describeLanguage(path)`（同步）命中则 `loadLanguage(desc)`（异步动态 import）；未命中 → 保持纯文本
 3. 语言加载完成 → 回调内**校验 `path === currentFile() && seq === loadSeq`**，通过才 `editor.setLanguage(ext)`；过期/已切换 → 丢弃
 
 竞态场景：打开 A 后快速切 B，A 的语言加载完成时 A 已不是 currentFile → 丢弃，B 的语言另行加载。序号复用 loadDoc 现有 `loadSeq`，不新增状态。
