@@ -37,6 +37,16 @@ export async function startSync(): Promise<void> {
   setFontScale(s.fs);
   applyTheme(s.theme);
 
+  // 浏览器前进/后退：popstate → 重解析 URL → 覆盖状态（不 pushState，历史由浏览器管理）
+  window.addEventListener('popstate', () => {
+    const st = parseUrl(window.location.href);
+    setCurrentFile(st.path);
+    setRoMode(st.ro);
+    setTheme(st.theme);
+    setFontScale(st.fs);
+    applyTheme(st.theme);
+  });
+
   // 标签：拉取服务器列表；服务器为空（重启过）→ 用本地快照 restore
   try {
     const { tabs: serverTabs } = await api.tabs.list();

@@ -21,6 +21,31 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 
 .editor-area { flex: 1 1 auto; min-height: 0; overflow: hidden; grid-column: 1; grid-row: 2; }
 
+/* 编辑器容器（Task 13）：高度链撑满 editor-area，代码等宽字体 */
+.editor-container { height: 100%; min-height: 0; }
+.editor-container .cm-editor { height: 100%; }
+.editor-container .cm-scroller {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+/* 最小 Toast（Task 13；完整系统留给 Task 14/15）：固定定位、3s 自动消失 */
+.toast {
+  position: fixed; left: 50%; bottom: 28px;
+  transform: translateX(-50%) translateY(8px);
+  max-width: min(85vw, 420px);
+  padding: 10px 16px; border-radius: 8px;
+  background: var(--toast-bg); color: var(--toast-fg);
+  font-size: 13px; line-height: 1.4;
+  opacity: 0; pointer-events: none;
+  transition: opacity .18s ease, transform .18s ease;
+  z-index: 100;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast-success { background: var(--toast-success); }
+.toast-error { background: var(--toast-error); }
+
+.toolbar-path-hint { color: var(--muted); }
+
 .drawer {
   position: fixed; top: 0; bottom: 0; left: 0; width: min(320px, 85vw);
   background: var(--bg); border-right: 1px solid var(--border);
@@ -81,11 +106,15 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 :root {
   --bg: #ffffff; --border: #e0e0e0; --muted: #888; --accent: #3b82f6;
   --row-hover: rgba(59, 130, 246, .10);
+  --toast-bg: #2c2c31; --toast-fg: #f4f4f6;
+  --toast-success: #15803d; --toast-error: #b91c1c;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #16161a; --border: #2a2a30; --muted: #8a8a93; --accent: #60a5fa;
     --row-hover: rgba(96, 165, 250, .14);
+    --toast-bg: #3a3a42; --toast-fg: #f4f4f6;
+    --toast-success: #16a34a; --toast-error: #dc2626;
   }
   .error-banner { background: #3a1d1d; color: #fca5a5; border-color: #5c2a2a; }
   body { background: var(--bg); color: #e8e8ea; }
