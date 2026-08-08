@@ -199,3 +199,38 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .dialog-actions .icon-btn:disabled { opacity: .5; }
+
+/* ---- 全局搜索（Task 17） ---- */
+.search-view { font-size: 13px; display: flex; flex-direction: column; gap: 8px; }
+.search-inputs { display: flex; flex-direction: column; gap: 6px; }
+.search-query, .search-exclude {
+  min-height: 44px; font-size: 16px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: inherit; width: 100%;
+}
+.search-options { display: flex; align-items: center; gap: 8px; }
+.search-options .search-exclude { flex: 1; min-height: 36px; font-size: 13px; }
+.search-toggle { display: flex; align-items: center; gap: 4px; color: var(--muted); white-space: nowrap; }
+.search-status { color: var(--muted); font-size: 12px; padding: 0 4px; }
+.search-truncated { color: #f59e0b; }
+.link-btn { background: none; border: none; color: var(--accent); cursor: pointer; font-size: inherit; padding: 0; text-decoration: underline; }
+.search-results { display: flex; flex-direction: column; gap: 4px; }
+.search-group { border: 1px solid var(--border); border-radius: 6px; }
+.search-group-head {
+  display: flex; align-items: center; gap: 4px; width: 100%;
+  padding: 6px 8px; background: none; border: none; cursor: pointer;
+  font-size: 13px; min-height: 40px; text-align: left; color: inherit;
+}
+.search-group-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.search-group-count { color: var(--muted); font-size: 12px; }
+.search-group-body { border-top: 1px solid var(--border); }
+.search-match {
+  display: flex; gap: 6px; width: 100%; padding: 4px 8px;
+  background: none; border: none; cursor: pointer; text-align: left;
+  min-height: 36px; font-size: 12px; color: inherit;
+}
+.search-match:hover { background: var(--row-hover); }
+.search-match-line { color: var(--muted); flex: 0 0 auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; width: 32px; text-align: right; }
+.search-match-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.search-match-text mark { background: #fde047; color: #000; border-radius: 2px; }
+:root[data-theme='dark'] .search-match-text mark { background: #a16207; color: #fff; }
