@@ -81,6 +81,7 @@ anther/
 | GET | `/api/list?path=` | 列目录（文件类型、大小、mtime，供文件树） |
 | GET | `/api/file?path=` | 读文件（文本；非 UTF-8 检测并提示） |
 | PUT | `/api/file?path=` | 写文件（只读模式 403） |
+| GET | `/api/search?q=&case=&exclude=&path=` | 全局搜索（SSE 流式；file/done/error 事件；排除按目录名原样使用，无服务端默认；断开即停；上限 maxFiles 500 / maxMatches 5000） |
 | POST | `/api/create` | 独占创建文件（O_EXCL，已存在 409 不清空；只读模式 403） |
 | POST | `/api/mkdir` | 建目录（只读模式 403） |
 | POST | `/api/rename` | 重命名（只读模式 403） |
