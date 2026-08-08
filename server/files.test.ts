@@ -90,3 +90,20 @@ test('list 中符号链接条目标为 link', async () => {
   const ok = entries.find(e => e.name === 'ok')!;
   assert.equal(ok.type, 'link');
 });
+
+test('del 拒绝根路径：抛 400 且目录仍在', async () => {
+  await assert.rejects(store.del('.'), (e: HttpError) => e.status === 400);
+  assert.equal((await readdir(root)).sort().join(','), 'a.txt,sub'); // 未被递归删除
+});
+
+test('rename 拒绝根路径：抛 400 且目录名未变', async () => {
+  await assert.rejects(store.rename('.', 'x'), (e: HttpError) => e.status === 400);
+  assert.equal((await store.read('a.txt')).content, 'hello'); // 根目录未被改名，内容可读
+});
+
+test("root='/' 时 resolve 正常（修复 '//' 前缀全 400 缺陷）", () => {
+  const rootStore = new FileStore('/');
+  assert.equal(rootStore.resolve('etc/hosts'), '/etc/hosts');
+  assert.equal(rootStore.resolve('/'), '/');
+  assert.doesNotThrow(() => rootStore.resolve('..')); // path.resolve('/', '..') 归一化为根自身
+});

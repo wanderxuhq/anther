@@ -24,7 +24,9 @@ export class FileStore {
     }
     const abs = path.resolve(this.root, relPath);
     const rootAbs = path.resolve(this.root);
-    if (abs !== rootAbs && !abs.startsWith(rootAbs + path.sep)) {
+    // 根为 "/" 时 rootAbs + path.sep 是 "//"，任何路径都不匹配 → 先归一化再判前缀（与 resolveSafe 同款写法）
+    const prefix = rootAbs.endsWith(path.sep) ? rootAbs : rootAbs + path.sep;
+    if (abs !== rootAbs && !abs.startsWith(prefix)) {
       throw new HttpError(400, 'path escapes root');
     }
     return abs;
@@ -142,6 +144,10 @@ export class FileStore {
   }
 
   async rename(relPath: string, toRel: string): Promise<void> {
+    // 拒绝根路径：resolveSafe('.') 返回 realpath(root)，rename('.', 'x') 会把根目录本身改名
+    if (relPath === '' || relPath === '.' || toRel === '' || toRel === '.') {
+      throw new HttpError(400, 'invalid path');
+    }
     const from = await this.resolveSafe(relPath);
     const to = await this.resolveSafe(toRel); // 目标同样过边界校验
     try {
@@ -152,6 +158,8 @@ export class FileStore {
   }
 
   async del(relPath: string): Promise<void> {
+    // 拒绝根路径：resolveSafe('.') 返回 realpath(root)，fs.rm 会递归删除整个根目录
+    if (relPath === '' || relPath === '.') throw new HttpError(400, 'invalid path');
     const abs = await this.resolveSafe(relPath);
     try {
       await fs.rm(abs, { recursive: true });
