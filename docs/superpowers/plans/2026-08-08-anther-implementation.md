@@ -11,6 +11,8 @@
 ## Global Constraints
 
 - Node >= 24（`node --test` + TS 类型剥离原生可用；ESM import 必须带 `.ts` 扩展名）
+- **引入依赖一律用 `npm install <pkg>` 命令（绝不手改 package.json 的 dependencies 字段）**
+- **禁止任何直接或间接依赖 node-gyp 的包**（原生编译依赖）；安装后验证 `npm ls node-gyp --all` 为空
 - 后端零运行时依赖（只用 node 内置模块 + 前端构建产物）
 - 服务端零落盘：不创建任何配置文件/缓存/日志；不写 cookie
 - 客户端不写 localStorage（除两个明确用途：`anther:userId`、`anther:tabsSnapshot`）
@@ -111,25 +113,25 @@ Expected: FAIL（`Cannot find module './http-error.ts'`）
     "dev:web": "vite --config web/vite.config.ts",
     "build": "tsc -p tsconfig.json && vite build --config web/vite.config.ts",
     "start": "node bin/anther.js"
-  },
-  "dependencies": {
-    "@codemirror/state": "^6",
-    "@codemirror/view": "^6",
-    "codemirror": "^6",
-    "solid-js": "^1.9"
-  },
-  "devDependencies": {
-    "@solidjs/testing-library": "^0.8",
-    "@types/node": "^24",
-    "concurrently": "^9",
-    "jsdom": "^26",
-    "typescript": "^5",
-    "vite": "^6",
-    "vite-plugin-solid": "^2",
-    "vitest": "^3"
   }
 }
 ```
+
+**依赖一律用 `npm install` 添加（Global Constraints），不要手写 dependencies 字段：**
+
+```bash
+# 运行时依赖（全部纯 JS，无 node-gyp）
+npm install @codemirror/state@^6 @codemirror/view@^6 codemirror@^6 solid-js@^1.9
+
+# 开发依赖
+npm install -D @solidjs/testing-library@^0.8 @types/node@^24 concurrently@^9 \
+  jsdom@^26 typescript@^5 vite@^6 vite-plugin-solid@^2 vitest@^3
+```
+
+**安装后验证无 node-gyp 毒瘤：**
+
+Run: `npm ls node-gyp --all`
+Expected: `npm ls` 报 empty（无任何直接或间接 node-gyp 依赖）。若出现 node-gyp，找到引入它的包并排除。
 
 ```json
 // tsconfig.json —— server 用 NodeNext 编译，web 由 vite 独立处理
