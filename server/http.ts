@@ -72,7 +72,13 @@ export class HttpServer {
 
   /** 静态资源 + SPA fallback：存在则返回文件，否则返回 index.html */
   private async serveStatic(urlPath: string, res: ServerResponse) {
-    const rel = urlPath === '/' ? 'index.html' : decodeURIComponent(urlPath.slice(1));
+    let rel: string;
+    try {
+      rel = urlPath === '/' ? 'index.html' : decodeURIComponent(urlPath.slice(1));
+    } catch {
+      // %zz 等畸形编码 decodeURIComponent 抛 URIError → 400 而非 500
+      throw new HttpError(400, 'bad path');
+    }
     const abs = path.resolve(this.staticDir, rel);
     if (!abs.startsWith(path.resolve(this.staticDir) + path.sep) && rel !== 'index.html') {
       throw new HttpError(400, 'bad path');

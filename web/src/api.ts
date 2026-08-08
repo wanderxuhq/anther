@@ -69,4 +69,4 @@ export const api = {
   },
 };
 
-export type DirEntry = { name: string; type: 'file' | 'dir'; size: number; mtime: number };
+export type DirEntry = { name: string; type: 'file' | 'dir' | 'link'; size: number; mtime: number };

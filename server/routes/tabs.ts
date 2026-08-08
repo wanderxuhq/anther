@@ -14,6 +14,7 @@ export function registerTabsRoutes(http: HttpServer, tabs: TabStore): void {
   const withPath =
     (fn: (userId: string, path: string) => void): Handler =>
     async (req, body) => {
+      if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
       const p = (body as { path?: string }).path;
       if (typeof p !== 'string') throw new HttpError(400, 'missing path');
       fn(userId(req), p);

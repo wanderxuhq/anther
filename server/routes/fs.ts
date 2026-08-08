@@ -13,6 +13,9 @@ export function registerFsRoutes(
     return { entries: await files.list(q.get('path') ?? '.') };
   });
 
+  // spec §5.1 API 表：服务器运行模式（只读/可写）等状态
+  http.get('/api/state', async () => ({ allowWrites: gate.allowWrites }));
+
   http.get('/api/file', async (_req, _body, q) => {
     const p = q.get('path');
     if (!p) throw new HttpError(400, 'missing path');
@@ -22,6 +25,7 @@ export function registerFsRoutes(
   http.put('/api/file', async (_req, body, q) => {
     const p = q.get('path');
     if (!p) throw new HttpError(400, 'missing path');
+    if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
     const { content } = body as { content?: string };
     if (typeof content !== 'string') throw new HttpError(400, 'missing content');
     gate.assertWritable(q.get('ro') ?? undefined);

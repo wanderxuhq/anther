@@ -6,7 +6,7 @@ import { HttpError } from './http-error.ts';
  * 前端按钮只改 URL ro 参数，服务端这里才是最终裁决者。
  */
 export class WriteGate {
-  constructor(private allowWrites: boolean) {}
+  constructor(readonly allowWrites: boolean) {}
 
   assertWritable(ro?: string): void {
     if (!this.allowWrites) {

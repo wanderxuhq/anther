@@ -23,6 +23,12 @@ test('parseUrl 未知参数忽略、非法 fs 钳制', () => {
   assert.deepEqual(s, { path: 'a.ts', ro: true, theme: 'auto', fs: 130 });
 });
 
+test('parseUrl 畸形编码不抛：path 取 null，其余字段正常解析', () => {
+  const s = parseUrl('http://x/a%zz?ro=0');
+  assert.equal(s.path, null);
+  assert.equal(s.ro, false);
+});
+
 test('serializeUrl 最简形态：默认值全部省略', () => {
   assert.equal(serializeUrl({ path: 'a.ts', ro: true, theme: 'auto', fs: 100 }), '/a.ts');
 });

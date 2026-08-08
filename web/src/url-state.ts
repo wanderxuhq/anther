@@ -18,8 +18,15 @@ function decodePath(s: string): string {
 
 export function parseUrl(href: string): UrlState {
   const url = new URL(href);
-  const rawPath = decodeURIComponent(url.pathname);
-  const path = rawPath === '/' || rawPath === '' ? null : rawPath.slice(1);
+  // %zz 等畸形编码 decodeURIComponent 抛 URIError：包 try/catch 防整站白屏，
+  // 失败时 path 取 null，其余字段正常解析
+  let path: string | null;
+  try {
+    const rawPath = decodeURIComponent(url.pathname);
+    path = rawPath === '/' || rawPath === '' ? null : rawPath.slice(1);
+  } catch {
+    path = null;
+  }
 
   const ro = url.searchParams.get('ro') !== '0'; // 默认只读
 
