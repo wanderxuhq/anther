@@ -137,3 +137,19 @@ test('rename 拒绝词法变体根路径 sub/..：抛 400 且根未改名', asyn
 test('rename 目标为词法变体根路径 sub/..：抛 400', async () => {
   await assert.rejects(store.rename('a.txt', 'sub/..'), (e: HttpError) => e.status === 400);
 });
+
+test('rename 目标已存在 → 409 且目标内容未被覆盖', async () => {
+  await store.write('a.txt', 'a');
+  await store.write('b.txt', 'b');
+  await assert.rejects(store.rename('a.txt', 'b.txt'), (e: HttpError) => e.status === 409);
+  assert.equal((await store.read('b.txt')).content, 'b'); // 目标未被覆盖
+});
+
+test('rename 同名（源=目标）放行', async () => {
+  await assert.doesNotReject(store.rename('a.txt', 'a.txt'));
+  assert.equal((await store.read('a.txt')).content, 'hello'); // 内容未被改动
+});
+
+test('rename 源不存在 → 404（回归）', async () => {
+  await assert.rejects(store.rename('nope.txt', 'x.txt'), (e: HttpError) => e.status === 404);
+});

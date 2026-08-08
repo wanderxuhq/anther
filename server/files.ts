@@ -162,6 +162,8 @@ export class FileStore {
     }
     const from = await this.resolveSafeNotRoot(relPath);
     const to = await this.resolveSafeNotRoot(toRel); // 目标同样过边界校验
+    // 目标存在守卫：拒绝覆盖（与 create 的 O_EXCL 同语义）；to === from（同名 no-op、符号链接别名）放行
+    if (to !== from && await this.exists(to)) throw new HttpError(409, 'already exists');
     try {
       await fs.rename(from, to);
     } catch (e: unknown) {
@@ -193,6 +195,16 @@ export class FileStore {
       throw new HttpError(400, 'invalid path');
     }
     return abs;
+  }
+
+  /** 路径存在性（lstat，随竞态允许误报 ENOENT 保守放行） */
+  private async exists(abs: string): Promise<boolean> {
+    try {
+      await fs.lstat(abs);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private hasInvalidUtf8(buf: Buffer): boolean {
