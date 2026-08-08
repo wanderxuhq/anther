@@ -38,13 +38,34 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 
 .view-placeholder { color: var(--muted); padding: 12px; font-size: 13px; }
 
+/* 文件树（Task 11） */
+.filetree { font-size: 13px; user-select: none; }
+.error-banner {
+  margin-bottom: 8px; padding: 8px 10px; border-radius: 6px;
+  background: #fdecec; color: #b91c1c; border: 1px solid #f5c6c6; font-size: 12px;
+}
+.tree-row {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 6px; border-radius: 5px; cursor: pointer;
+  white-space: nowrap; overflow: hidden;
+}
+.tree-row:hover { background: var(--row-hover); }
+.tree-row.active { background: var(--accent); color: white; }
+.tree-arrow { width: 14px; flex: 0 0 auto; text-align: center; color: var(--muted); }
+.tree-row.active .tree-arrow { color: inherit; }
+.tree-name { overflow: hidden; text-overflow: ellipsis; }
+.tree-children { margin-left: 10px; border-left: 1px solid var(--border); padding-left: 4px; }
+
 :root {
   --bg: #ffffff; --border: #e0e0e0; --muted: #888; --accent: #3b82f6;
+  --row-hover: rgba(59, 130, 246, .10);
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #16161a; --border: #2a2a30; --muted: #8a8a93; --accent: #60a5fa;
+    --row-hover: rgba(96, 165, 250, .14);
   }
+  .error-banner { background: #3a1d1d; color: #fca5a5; border-color: #5c2a2a; }
   body { background: var(--bg); color: #e8e8ea; }
 }
 @media (min-width: 600px) { /* 横屏/桌面：抽屉常驻左侧 */
