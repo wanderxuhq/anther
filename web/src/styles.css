@@ -121,16 +121,39 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   --toast-bg: #2c2c31; --toast-fg: #f4f4f6;
   --toast-success: #15803d; --toast-error: #b91c1c;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #16161a; --border: #2a2a30; --muted: #8a8a93; --accent: #60a5fa;
-    --row-hover: rgba(96, 165, 250, .14);
-    --toast-bg: #3a3a42; --toast-fg: #f4f4f6;
-    --toast-success: #16a34a; --toast-error: #dc2626;
-  }
-  .error-banner { background: #3a1d1d; color: #fca5a5; border-color: #5c2a2a; }
-  body { background: var(--bg); color: #e8e8ea; }
+/* 暗色主题开关为 html[data-theme]（stores.ts applyTheme 设置，跟随 ?theme= 参数）：
+   原 @media (prefers-color-scheme) 只跟随系统设置，导致 ?theme=dark 无效 */
+:root[data-theme='dark'] {
+  --bg: #16161a; --border: #2a2a30; --muted: #8a8a93; --accent: #60a5fa;
+  --row-hover: rgba(96, 165, 250, .14);
+  --toast-bg: #3a3a42; --toast-fg: #f4f4f6;
+  --toast-success: #16a34a; --toast-error: #dc2626;
 }
+:root[data-theme='dark'] .error-banner { background: #3a1d1d; color: #fca5a5; border-color: #5c2a2a; }
+:root[data-theme='dark'] body { background: var(--bg); color: #e8e8ea; }
+
+/* 编辑器内容区暗色覆盖（零新依赖，CSS 覆盖替代 @codemirror/theme-one-dark） */
+:root[data-theme='dark'] .cm-editor { background: #1b1b20; color: #d8d8de; }
+:root[data-theme='dark'] .cm-editor .cm-gutters { background: #1b1b20; color: #6a6a73; border-right-color: #2a2a30; }
+:root[data-theme='dark'] .cm-editor .cm-activeLine,
+:root[data-theme='dark'] .cm-editor .cm-activeLineGutter { background: rgba(255, 255, 255, .05); }
+:root[data-theme='dark'] .cm-editor .cm-selectionBackground { background: rgba(96, 165, 250, .30); }
+:root[data-theme='dark'] .cm-editor .cm-cursor { border-left-color: #e8e8ea; }
+
+/* 语法高亮 token：basicSetup → defaultHighlightStyle 产出 tok-* 类
+   （已 grep @lezer/highlight dist 确认类名；CM6 中函数名归 propertyName，无 tok-function） */
+:root[data-theme='dark'] .cm-content .tok-keyword { color: #c678dd; }
+:root[data-theme='dark'] .cm-content .tok-string { color: #98c379; }
+:root[data-theme='dark'] .cm-content .tok-comment { color: #7f848e; }
+:root[data-theme='dark'] .cm-content .tok-number,
+:root[data-theme='dark'] .cm-content .tok-atom,
+:root[data-theme='dark'] .cm-content .tok-bool { color: #d19a66; }
+:root[data-theme='dark'] .cm-content .tok-typeName,
+:root[data-theme='dark'] .cm-content .tok-className { color: #e5c07b; }
+:root[data-theme='dark'] .cm-content .tok-propertyName,
+:root[data-theme='dark'] .cm-content .tok-variableName,
+:root[data-theme='dark'] .cm-content .tok-labelName { color: #61afef; }
+:root[data-theme='dark'] .cm-content .tok-invalid { color: #ff6b6b; }
 @media (min-width: 600px) { /* 横屏/桌面：抽屉常驻左侧 */
   .app { grid-template-columns: 260px 1fr; }
   .drawer { position: static; width: 260px; animation: none; grid-column: 1; grid-row: 2; }

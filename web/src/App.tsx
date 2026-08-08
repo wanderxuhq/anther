@@ -1,7 +1,7 @@
 import { createSignal, createEffect, For, Show, onCleanup } from 'solid-js';
 import { views } from './views/registry.tsx';
 import { api } from './api.ts';
-import { currentFile, roMode, setRoMode, setCurrentFile, pushState } from './stores.ts';
+import { currentFile, roMode, setRoMode, setCurrentFile, pushState, fontScale } from './stores.ts';
 import { createEditor, type EditorHandle } from './editor/index.ts';
 
 const NARROW_QUERY = '(max-width: 599px)';
@@ -129,6 +129,11 @@ export function App() {
   // 只读切换 → Compartment reconfigure（effect 只读 roMode，无需重读文件）
   createEffect(() => {
     editor?.setReadOnly(roMode());
+  });
+
+  // 字号（?fs= 参数）：走 html 根字号 %；CodeMirror .cm-scroller 未设自身 font-size，沿继承链传导
+  createEffect(() => {
+    document.documentElement.style.fontSize = `${fontScale()}%`;
   });
 
   onCleanup(() => {
