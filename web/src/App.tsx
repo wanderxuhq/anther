@@ -157,6 +157,10 @@ export function App() {
     const path = currentFile();
     if (!path) {
       editor?.setDoc('');
+      // 同步清 docLoadedPath：closeTab/popstate 置 null 时若滞留旧 path，
+      // 消费 effect 的信任前提「docLoadedPath() === g.path ⟹ editor 持有目标文档」被打破，
+      // 会在空文档上误 gotoLine 并消费掉 pendingGoto（真跳转随后丢失）
+      setDocLoadedPath(null);
       return;
     }
     if (!editorEl()) return;
