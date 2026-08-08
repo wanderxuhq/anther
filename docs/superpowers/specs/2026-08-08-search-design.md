@@ -26,7 +26,7 @@
 
 - 编辑器扩展数组加 `search()`：查找面板（Mod-f）、替换面板（Mod-h）、高亮全部匹配、Enter/Shift+Enter 上/下跳转、大小写开关；键位绑定 basicSetup 已含（searchKeymap），只补扩展
 - **工具栏 🔍 按钮** → 打开查找面板（App.tsx 持 EditorHandle，加 `openSearch()` 方法 dispatch `openSearchPanel`；移动端主入口；全局搜索入口不占工具栏，见 §5.1）
-- **只读门控**：`setReadOnly(true)` 时同时 dispatch `setReplacePanelOpen.of(false)` 关闭替换面板。原因：@codemirror/search 的 replaceNext/replaceAll 不检查 readOnly facet，直接 dispatch changes 会改写只读文档；替换是写操作，必须显式关面板
+- **只读门控**：`setReadOnly(true)` 时 `closeSearchPanel(view)` 关闭整个搜索面板。原因：@codemirror/search 未导出关闭替换区的公开 API（内部 togglePanel StateEffect 不公开），且 replaceNext/replaceAll 不检查 readOnly facet；切只读时关掉整个面板是最简单安全的行为（VS Code 只读文件同样无替换）
 - **自动保存联动**：@codemirror/search 的替换 dispatch 带 `userEvent: "input.replace"`，命中现有 `isUserEdit` 的 input 前缀匹配 → 走 1s 防抖自动保存。实现时用测试验证；若不命中则补 `input.replace` 到 isUserEdit
 - 替换命令在只读文档上不响应（readOnly facet 拒绝 changes），与面板关闭双保险
 
@@ -55,7 +55,7 @@ search(relPath: string, query: string, opts: {
 }): Promise<{ truncated: boolean; fileCount: number; matchCount: number }>
 ```
 
-- **遍历**：从 `resolveSafe(relPath)` 递归 walk；目录名命中排除集（默认 `.git`、`node_modules`、`dist` 与用户 exclude 并集）则整棵跳过；复用 list 的单条目 stat 失败容错
+- **遍历**：从 `resolveSafe(relPath)` 递归 walk；目录名命中排除集（exclude 列表原样使用，无服务端默认；默认值 `.git`、`node_modules`、`dist` 由前端排除框提供，用户可清空）则整棵跳过；复用 list 的单条目 stat 失败容错
 - **匹配**：非 UTF-8 文件跳过（复用 `hasInvalidUtf8`）；`case` 决定 `includes`/`toLowerCase().includes`；逐行收集 `{ line: 1基行号, col: 0基列号, text: 该行文本 }`
 - **上限**：`maxFiles` = 已搜文件数上限，`maxMatches` = 匹配总数全局上限；任一达上限 → 停止遍历，返回 `truncated: true`
 - **取消**：调用方持有 abort 信号（前端断开连接），遍历循环检查，中止即停止
@@ -122,7 +122,7 @@ search(relPath: string, query: string, opts: {
 
 **服务端：**
 
-- FileStore.search 单测：排除规则（默认 + 自定义并集）、大小写、上限截断（truncated + 停止遍历）、非 UTF-8 跳过、越界 400、onFile 调用次数与载荷、abort 停止
+- FileStore.search 单测：排除规则（原样使用）、大小写、上限截断（truncated + 停止遍历）、非 UTF-8 跳过、越界 400、onFile 调用次数与载荷、abort 停止
 - HTTP 路由测试：SSE 端点返回 200 + event-stream 头；curl 式消费流断言 file/done 事件序列；q 空 → error 事件
 
 **前端：**
