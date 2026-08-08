@@ -90,3 +90,12 @@ test('静态 SPA fallback：未知扩展名的不存在路径返回 index.html �
   assert.equal(res.headers.get('content-type'), 'text/html; charset=utf-8'); // 修前为 application/octet-stream → 浏览器下载
   assert.equal(await res.text(), '<!doctype html><p>app</p>');
 });
+
+test('HEAD 请求：静态服务与 GET 同头但不含 body（curl -I、链接预览工具可用）', async () => {
+  await writeFile(path.join(root, 'index.html'), '<!doctype html><p>app</p>');
+  const res = await fetch(base + '/web/src/x.test.ts', { method: 'HEAD' });
+  assert.equal(res.status, 200); // 修前 404
+  assert.equal(res.headers.get('content-type'), 'text/html; charset=utf-8');
+  assert.equal(res.headers.get('content-length'), String(Buffer.byteLength('<!doctype html><p>app</p>')));
+  assert.equal(await res.text(), '');
+});

@@ -61,8 +61,9 @@ export class HttpServer {
   private async handle(req: IncomingMessage, res: ServerResponse) {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
-      if (req.method === 'GET' && !url.pathname.startsWith('/api/')) {
-        await this.serveStatic(url.pathname, res);
+      // HEAD 与 GET 同走静态服务（curl -I、链接预览工具会发 HEAD；无 body 响应）
+      if ((req.method === 'GET' || req.method === 'HEAD') && !url.pathname.startsWith('/api/')) {
+        await this.serveStatic(url.pathname, res, req.method === 'HEAD');
         return;
       }
       // SSE 路由：handler 直接拿 res 写流（text/event-stream），不走 JSON 封装；
@@ -101,8 +102,8 @@ export class HttpServer {
     }
   }
 
-  /** 静态资源 + SPA fallback：存在则返回文件，否则返回 index.html */
-  private async serveStatic(urlPath: string, res: ServerResponse) {
+  /** 静态资源 + SPA fallback：存在则返回文件，否则返回 index.html；headOnly 时只发头不发 body */
+  private async serveStatic(urlPath: string, res: ServerResponse, headOnly = false) {
     let rel: string;
     try {
       rel = urlPath === '/' ? 'index.html' : decodeURIComponent(urlPath.slice(1));
@@ -131,7 +132,7 @@ export class HttpServer {
       'Content-Type': MIME[ext] ?? 'application/octet-stream',
       'Content-Length': content.length,
     });
-    res.end(content);
+    res.end(headOnly ? undefined : content);
   }
 }
 
