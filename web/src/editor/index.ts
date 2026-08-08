@@ -53,7 +53,13 @@ export function createEditor(container: HTMLElement, opts: EditorOptions): Edito
       doc,
       extensions: [
         basicSetup,
-        editableCompartment.of(EditorView.editable.of(!readOnly)),
+        editableCompartment.of([
+          // 两个 facet 一起设：EditorState.readOnly 供 undo/redo 等命令判定
+          // （只检查 state.readOnly，不检查 editable）；EditorView.editable 管
+          // 视觉/输入。只设 editable 时 Mod-z/Mod-y 在只读模式仍会改文档（F1）。
+          EditorState.readOnly.of(readOnly),
+          EditorView.editable.of(!readOnly),
+        ]),
         EditorView.updateListener.of((u) => {
           if (u.docChanged && u.transactions.some(isUserEdit)) {
             opts.onChange(u.state.doc.toString());
@@ -70,7 +76,10 @@ export function createEditor(container: HTMLElement, opts: EditorOptions): Edito
   return {
     setReadOnly(r: boolean) {
       view.dispatch({
-        effects: editableCompartment.reconfigure(EditorView.editable.of(!r)),
+        effects: editableCompartment.reconfigure([
+          EditorState.readOnly.of(r),
+          EditorView.editable.of(!r),
+        ]),
       });
     },
     setDoc(doc: string) {
