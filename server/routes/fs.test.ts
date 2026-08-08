@@ -1,7 +1,7 @@
 // server/routes/fs.test.ts
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { HttpServer } from '../http.ts';
@@ -59,4 +59,32 @@ test('未知 API 返回 404 JSON', async () => {
   const res = await fetch(`${base}/api/nope`);
   assert.equal(res.status, 404);
   assert.ok((await res.json()).error);
+});
+
+// spec §5.4：--rw 启动下写操作需携带 ro=0（mkdir/rename/delete 与 PUT /api/file 同裁决）
+test('--rw 模式下 mkdir 无 ro 返回 403，ro=0 创建成功', async () => {
+  const rw = new HttpServer({ staticDir: '' });
+  registerFsRoutes(rw, new FileStore(root), new WriteGate(true)); // --rw
+  await rw.listen(0, '127.0.0.1');
+  const addr = rw.address() as { port: number };
+  const rwBase = `http://127.0.0.1:${addr.port}`;
+  try {
+    const noRo = await fetch(`${rwBase}/api/mkdir`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'sub' }),
+    });
+    assert.equal(noRo.status, 403);
+    assert.ok((await noRo.json()).error);
+
+    const ok = await fetch(`${rwBase}/api/mkdir?ro=0`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'sub' }),
+    });
+    assert.equal(ok.status, 200);
+    assert.ok((await stat(path.join(root, 'sub'))).isDirectory());
+  } finally {
+    await rw.close();
+  }
 });

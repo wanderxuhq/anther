@@ -55,9 +55,10 @@ export const api = {
   readFile: (path: string) => request<{ content: string; utf8: boolean }>('GET', `/api/file?path=${encodeURIComponent(path)}`),
   writeFile: (path: string, content: string, ro: boolean) =>
     request('PUT', `/api/file?path=${encodeURIComponent(path)}&ro=${ro ? '1' : '0'}`, { content }),
-  mkDir: (path: string) => request('POST', '/api/mkdir', { path }),
-  rename: (path: string, to: string) => request('POST', '/api/rename', { path, to }),
-  del: (path: string) => request('POST', '/api/delete', { path }),
+  mkDir: (path: string, ro: boolean) => request('POST', `/api/mkdir?ro=${ro ? '1' : '0'}`, { path }),
+  rename: (path: string, to: string, ro: boolean) =>
+    request('POST', `/api/rename?ro=${ro ? '1' : '0'}`, { path, to }),
+  del: (path: string, ro: boolean) => request('POST', `/api/delete?ro=${ro ? '1' : '0'}`, { path }),
   tabs: {
     list: () => request<{ tabs: string[] }>('GET', '/api/tabs'),
     open: (path: string) => request('PUT', '/api/tabs/open', { path }),

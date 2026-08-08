@@ -28,24 +28,25 @@ export function registerFsRoutes(
     await files.write(p, content);
   });
 
-  http.post('/api/mkdir', async (_req, body) => {
+  // spec §5.4：--rw 启动下写操作需携带 ro=0（与 PUT /api/file 同一裁决模式）
+  http.post('/api/mkdir', async (_req, body, q) => {
     const { path: p } = body as { path?: string };
     if (!p) throw new HttpError(400, 'missing path');
-    gate.assertWritable();
+    gate.assertWritable(q.get('ro') ?? undefined);
     await files.mkdir(p);
   });
 
-  http.post('/api/rename', async (_req, body) => {
+  http.post('/api/rename', async (_req, body, q) => {
     const { path: p, to } = body as { path?: string; to?: string };
     if (!p || !to) throw new HttpError(400, 'missing path/to');
-    gate.assertWritable();
+    gate.assertWritable(q.get('ro') ?? undefined);
     await files.rename(p, to);
   });
 
-  http.post('/api/delete', async (_req, body) => {
+  http.post('/api/delete', async (_req, body, q) => {
     const { path: p } = body as { path?: string };
     if (!p) throw new HttpError(400, 'missing path');
-    gate.assertWritable();
+    gate.assertWritable(q.get('ro') ?? undefined);
     await files.del(p);
   });
 }
