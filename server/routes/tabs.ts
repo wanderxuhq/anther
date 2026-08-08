@@ -4,8 +4,10 @@ import { HttpError } from '../http-error.ts';
 import type { TabStore } from '../tab-store.ts';
 
 export function registerTabsRoutes(http: HttpServer, tabs: TabStore): void {
-  const userId = (req: import('node:http').IncomingMessage): string =>
-    req.headers['x-user-id'] ?? 'anon';
+  const userId = (req: import('node:http').IncomingMessage): string => {
+    const h = req.headers['x-user-id'];
+    return typeof h === 'string' ? h : 'anon';
+  };
 
   http.get('/api/tabs', async (req) => ({ tabs: tabs.list(), user: userId(req) }));
 
