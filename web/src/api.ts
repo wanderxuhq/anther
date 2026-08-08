@@ -13,16 +13,16 @@ export class ApiError extends Error {
 export function getUserId(): string {
   let id = localStorage.getItem(USER_KEY);
   if (!id) {
-    // 非安全上下文（http://<IP> 非 localhost 访问）下 crypto.randomUUID 不可用
-    // （secure context 专属，getRandomValues 同样受限）→ 降级生成 v4 格式 ID。
-    // 用户 ID 仅本地标识用途，无需密码学强度，Math.random 冲突概率可忽略。
-    id = crypto.randomUUID?.() ?? fallbackUuid();
+    // 不用 crypto.randomUUID：非安全上下文（http://<IP> 非 localhost）下不可用
+    // （secure context 专属），直接 Math.random 生成 v4 格式 ID。
+    // 用户 ID 仅本地标识用途，无需密码学强度，冲突概率可忽略。
+    id = fallbackUuid();
     localStorage.setItem(USER_KEY, id);
   }
   return id;
 }
 
-/** v4 格式 UUID 降级实现（RFC 4122 位布局，供非安全上下文） */
+/** v4 格式 UUID（RFC 4122 位布局；Math.random 实现，避免 secure context 依赖） */
 export function fallbackUuid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
     const r = Math.floor(Math.random() * 16);
