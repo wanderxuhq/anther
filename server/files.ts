@@ -10,6 +10,19 @@ export type DirEntry = {
   mtime: number;
 };
 
+export type SearchMatch = { line: number; col: number; text: string };
+export type SearchOptions = {
+  caseSensitive?: boolean;
+  /** 排除目录名列表（原样使用，无服务端默认；默认值由前端排除框提供） */
+  exclude?: string[];
+  maxFiles?: number;
+  maxMatches?: number;
+  signal?: AbortSignal;
+  /** 每搜完一个文件（有匹配）调用一次，流式交给 SSE 推送 */
+  onFile: (path: string, matches: SearchMatch[]) => void;
+};
+export type SearchResult = { truncated: boolean; fileCount: number; matchCount: number };
+
 export class FileStore {
   private root: string;
 
@@ -123,6 +136,79 @@ export class FileStore {
     }
     const utf8 = !this.hasInvalidUtf8(buf);
     return { content: utf8 ? buf.toString('utf8') : buf.toString('latin1'), utf8 };
+  }
+
+  /**
+   * 递归遍历搜索（纯读，无状态）。每搜完一个有匹配的文件调一次 opts.onFile（流式）；
+   * maxFiles 达上限或 maxMatches 匹配总数达上限 → 停止遍历，truncated: true。
+   * 符号链接不跟随（与 read 的 resolveSafe 语义一致）；非 UTF-8 文件跳过。
+   * 返回路径为相对根的形式（'.' 根 → 'a.txt'/'sub/b.txt'，子目录 → 'src/a.ts'）。
+   */
+  async search(relPath: string, query: string, opts: SearchOptions): Promise<SearchResult> {
+    const root = await this.resolveSafe(relPath);
+    if (query === '') return { truncated: false, fileCount: 0, matchCount: 0 };
+    const maxFiles = opts.maxFiles ?? 500;
+    const maxMatches = opts.maxMatches ?? 5000;
+    const exclude = new Set(opts.exclude ?? []);
+    const needle = opts.caseSensitive ? query : query.toLowerCase();
+    const result: SearchResult = { truncated: false, fileCount: 0, matchCount: 0 };
+
+    const walk = async (dirAbs: string, relDir: string): Promise<void> => {
+      if (result.truncated || opts.signal?.aborted) return;
+      let names: string[];
+      try {
+        names = await fs.readdir(dirAbs);
+      } catch {
+        return; // 权限等 → 跳过该目录（与 list 单条目容错同风格）
+      }
+      for (const name of names) {
+        if (result.truncated || opts.signal?.aborted) return;
+        const childAbs = path.join(dirAbs, name);
+        let st;
+        try {
+          st = await fs.lstat(childAbs);
+        } catch {
+          continue;
+        }
+        if (st.isDirectory()) {
+          if (exclude.has(name)) continue;
+          await walk(childAbs, relDir === '' ? name : `${relDir}/${name}`);
+        } else if (st.isFile()) {
+          result.fileCount++;
+          if (result.fileCount > maxFiles) {
+            result.truncated = true;
+            return;
+          }
+          let buf: Buffer;
+          try {
+            buf = await fs.readFile(childAbs);
+          } catch {
+            continue;
+          }
+          if (this.hasInvalidUtf8(buf)) continue;
+          const text = buf.toString('utf8');
+          const matches: SearchMatch[] = [];
+          const lines = text.split('\n');
+          for (let i = 0; i < lines.length && result.matchCount < maxMatches; i++) {
+            const lineText = lines[i];
+            const hay = opts.caseSensitive ? lineText : lineText.toLowerCase();
+            const col = hay.indexOf(needle);
+            if (col >= 0) {
+              matches.push({ line: i + 1, col, text: lineText });
+              result.matchCount++;
+            }
+          }
+          if (result.matchCount >= maxMatches) result.truncated = true;
+          if (matches.length > 0) {
+            opts.onFile(relDir === '' ? name : `${relDir}/${name}`, matches);
+          }
+        }
+        // 链接（isSymbolicLink）不读不递归
+      }
+    };
+
+    await walk(root, relPath === '.' ? '' : relPath);
+    return result;
   }
 
   async write(relPath: string, content: string): Promise<void> {

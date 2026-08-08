@@ -153,3 +153,87 @@ test('rename 同名（源=目标）放行', async () => {
 test('rename 源不存在 → 404（回归）', async () => {
   await assert.rejects(store.rename('nope.txt', 'x.txt'), (e: HttpError) => e.status === 404);
 });
+
+// ---- 搜索（Task 17） ----
+test('search 基础匹配：路径、行号、列号、行文本', async () => {
+  const got: { path: string; matches: { line: number; col: number; text: string }[] }[] = [];
+  const r = await store.search('.', 'hello', { onFile: (path, matches) => got.push({ path, matches }) });
+  assert.deepEqual(got, [{ path: 'a.txt', matches: [{ line: 1, col: 0, text: 'hello' }] }]);
+  assert.equal(r.matchCount, 1);
+  assert.equal(r.fileCount, 2); // a.txt 和 sub/b.txt 都被读取（b 无匹配）
+  assert.equal(r.truncated, false);
+});
+
+test('search 大小写：默认不敏感，caseSensitive 敏感', async () => {
+  await store.write('a.txt', 'x'); // 覆盖 beforeEach 的 'hello'，隔离本测试
+  await store.write('case.txt', 'Hello World');
+  const got: string[] = [];
+  await store.search('.', 'hello', { onFile: (p) => got.push(p) });
+  assert.deepEqual(got, ['case.txt']);
+  got.length = 0;
+  await store.search('.', 'hello', { caseSensitive: true, onFile: (p) => got.push(p) });
+  assert.deepEqual(got, []);
+});
+
+test('search 排除目录（原样使用，无服务端默认）', async () => {
+  await mkdir(path.join(root, 'node_modules'));
+  await writeFile(path.join(root, 'node_modules', 'x.js'), 'hello');
+  const got: string[] = [];
+  await store.search('.', 'hello', { exclude: ['node_modules'], onFile: (p) => got.push(p) });
+  assert.deepEqual(got, ['a.txt']);
+  await rm(path.join(root, 'node_modules'), { recursive: true, force: true }); // 清掉上一步的干扰文件
+  got.length = 0;
+  await store.search('.', 'hello', { exclude: ['sub'], onFile: (p) => got.push(p) });
+  assert.deepEqual(got, ['a.txt']);
+});
+
+test('search 非 UTF-8 文件跳过', async () => {
+  await store.write('a.txt', 'x'); // 覆盖 beforeEach 的 'hello'，避免干扰
+  await writeFile(path.join(root, 'bin.dat'), Buffer.from([0xff, 0xfe, 0x00, 0x00]));
+  let called = false;
+  await store.search('.', 'hello', { onFile: () => { called = true; } });
+  assert.equal(called, false); // bin.dat 非 UTF-8 被跳过，无 onFile 触发
+});
+
+test('search 上限截断：maxFiles / maxMatches', async () => {
+  await writeFile(path.join(root, 'x1.txt'), 'needle');
+  const r1 = await store.search('.', 'needle', { maxFiles: 1, onFile: () => {} });
+  assert.equal(r1.truncated, true);
+  // 截断发生在第 2 个文件被计数时（fileCount > maxFiles），故 fileCount 恒为 2（含无匹配的 fixture 文件）
+  assert.equal(r1.fileCount, 2);
+
+  await writeFile(path.join(root, 'multi.txt'), 'needle\nneedle\nneedle');
+  const r2 = await store.search('.', 'needle', { maxMatches: 2, onFile: () => {} });
+  assert.equal(r2.truncated, true);
+  assert.equal(r2.matchCount, 2);
+});
+
+test('search 目录越界 → 400', async () => {
+  await assert.rejects(store.search('../outside', 'x', { onFile: () => {} }), (e: HttpError) => e.status === 400);
+});
+
+test('search 空查询 → 空结果（不遍历）', async () => {
+  let called = false;
+  const r = await store.search('.', '', { onFile: () => { called = true; } });
+  assert.equal(called, false);
+  assert.equal(r.fileCount, 0);
+});
+
+test('search 已中止 signal → 不遍历', async () => {
+  const ctrl = new AbortController();
+  ctrl.abort();
+  let called = false;
+  const r = await store.search('.', 'hello', { signal: ctrl.signal, onFile: () => { called = true; } });
+  assert.equal(called, false);
+  assert.equal(r.fileCount, 0);
+  assert.equal(r.truncated, false);
+});
+
+test('search 每行只报首个匹配，列号正确', async () => {
+  await store.write('a.txt', 'x'); // 覆盖 beforeEach 的 'hello'，避免干扰
+  await store.write('col.txt', 'aaa hello bbb hello');
+  const got: { line: number; col: number }[] = [];
+  await store.search('.', 'hello', { onFile: (_p, m) => got.push(...m) });
+  // SearchMatch 恒带 text（brief 类型契约），期望值需包含
+  assert.deepEqual(got, [{ line: 1, col: 4, text: 'aaa hello bbb hello' }]);
+});
