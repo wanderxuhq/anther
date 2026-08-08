@@ -3,7 +3,7 @@
 html, body { margin: 0; height: 100%; }
 body { font-family: system-ui, -apple-system, sans-serif; }
 
-.app { display: grid; grid-template-rows: auto 1fr; grid-template-columns: 1fr; height: 100dvh; }
+.app { display: grid; grid-template-rows: auto 1fr; grid-template-columns: 1fr; height: var(--vvh, 100dvh); }
 .toolbar { grid-column: 1 / -1; }
 
 .toolbar {
