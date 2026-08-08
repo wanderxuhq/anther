@@ -22,6 +22,7 @@
     "start": "node bin/anther.js"
   },
   "dependencies": {
+    "@codemirror/search": "^6.7.1",
     "@codemirror/state": "^6.7.1",
     "codemirror": "^6.0.2",
     "solid-js": "^1.9.14"

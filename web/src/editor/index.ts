@@ -11,11 +11,14 @@
 //    为空，防止切换文件后 Ctrl+Z 把上一文件的旧内容写回新文件（配合本层的
 //    undo/redo 也算用户编辑、会触发 onChange 的设计，可避免旧内容被保存）。
 import { EditorState, Compartment, type Transaction } from '@codemirror/state';
+import { search, openSearchPanel, closeSearchPanel } from '@codemirror/search';
 import { EditorView, basicSetup } from 'codemirror';
 
 export type EditorHandle = {
   setReadOnly(r: boolean): void;
   setDoc(doc: string): void;
+  openSearch(): void;
+  gotoLine(line0: number): void;
   destroy(): void;
 };
 
@@ -53,6 +56,7 @@ export function createEditor(container: HTMLElement, opts: EditorOptions): Edito
       doc,
       extensions: [
         basicSetup,
+        search(),
         editableCompartment.of([
           // 两个 facet 一起设：EditorState.readOnly 供 undo/redo 等命令判定
           // （只检查 state.readOnly，不检查 editable）；EditorView.editable 管
@@ -81,6 +85,23 @@ export function createEditor(container: HTMLElement, opts: EditorOptions): Edito
           EditorView.editable.of(!r),
         ]),
       });
+      // 只读门控（Task 17）：搜索面板的替换区无公开关闭 API（内部 togglePanel
+      // effect 不导出），切只读时关掉整个面板——replaceNext/replaceAll 不检查
+      // readOnly facet，面板开着就能改写只读文档
+      if (r) closeSearchPanel(view);
+    },
+    openSearch() {
+      openSearchPanel(view);
+    },
+    gotoLine(line0: number) {
+      // line0 为 0 基行号；行号越界钳制到文档首/末行
+      const lineNo = Math.min(Math.max(1, line0 + 1), view.state.doc.lines);
+      const line = view.state.doc.line(lineNo);
+      view.dispatch({
+        selection: { anchor: line.from },
+        effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
+      });
+      view.focus();
     },
     setDoc(doc: string) {
       // makeState 的第二个参数是 readOnly；读 EditorView.editable 会把布尔值反相
