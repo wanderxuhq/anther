@@ -39,7 +39,7 @@ export function App() {
 
       <main class="editor-area">{/* Task 13: CodeMirror */}</main>
 
-      <Show when={drawerOpen()}>
+      <Show when={drawerOpen() || !isNarrow()}>
         <div class="drawer-backdrop" onClick={() => setDrawerOpen(false)} />
         <aside class="drawer">
           <nav class="drawer-views">

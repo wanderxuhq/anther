@@ -3,7 +3,8 @@
 html, body { margin: 0; height: 100%; }
 body { font-family: system-ui, -apple-system, sans-serif; }
 
-.app { display: flex; flex-direction: column; height: 100dvh; }
+.app { display: grid; grid-template-rows: auto 1fr; grid-template-columns: 1fr; height: 100dvh; }
+.toolbar { grid-column: 1 / -1; }
 
 .toolbar {
   display: flex; align-items: center; gap: 8px;
@@ -18,7 +19,7 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 }
 .icon-btn.active { background: var(--accent); color: white; }
 
-.editor-area { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.editor-area { flex: 1 1 auto; min-height: 0; overflow: hidden; grid-column: 1; grid-row: 2; }
 
 .drawer {
   position: fixed; top: 0; bottom: 0; left: 0; width: min(320px, 85vw);
@@ -46,7 +47,9 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   }
   body { background: var(--bg); color: #e8e8ea; }
 }
-@media (min-width: 600px) { /* 横屏/桌面：抽屉常驻 */
-  .drawer { position: static; width: 260px; animation: none; }
+@media (min-width: 600px) { /* 横屏/桌面：抽屉常驻左侧 */
+  .app { grid-template-columns: 260px 1fr; }
+  .drawer { position: static; width: 260px; animation: none; grid-column: 1; grid-row: 2; }
   .drawer-backdrop { display: none; }
+  .editor-area { grid-column: 2; grid-row: 2; }
 }
