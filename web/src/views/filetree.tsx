@@ -9,16 +9,25 @@
 //   nodes[path] → { expanded, loaded?, loading? }   （'.' 为根目录键）
 // 渲染时在组件作用域内直接读 nodes[path]（响应式），更新时 setNodes 精确命中该 path，
 // 每次展开/收起只触发对应子树重渲染。
-import { createSignal, For, Show } from 'solid-js';
+import { createSignal, For, Show, onCleanup } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { api, type DirEntry } from '../api.ts';
-import { currentFile, openTab } from '../stores.ts';
+import { currentFile, openTab, closeTab, setCurrentFile, pushState, roMode, tabs } from '../stores.ts';
+import { parentOf } from '../paths.ts';
+import { NameDialog, type DialogState } from '../components/name-dialog.tsx';
 
 type DirState = { expanded: boolean; loaded?: DirEntry[]; loading?: boolean };
 
 // path → 目录状态。渲染时 nodes[path] 是响应式读取，setNodes 精确更新。
 const [nodes, setNodes] = createStore<{ [path: string]: DirState }>({});
 const [error, setError] = createSignal<string | null>(null);
+
+// ---- 文件管理（Task 16）：菜单 + 命名对话框 + 两击确认删除 ----
+type MenuTarget = { path: string; kind: 'dir' | 'file' | 'root' };
+const [menu, setMenu] = createSignal<MenuTarget | null>(null);
+const [dialog, setDialog] = createSignal<DialogState | null>(null);
+const [confirmDel, setConfirmDel] = createSignal<string | null>(null); // 两击确认删除
+let confirmTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** 根目录子项不带 './' 前缀：与 URL/currentFile 中的相对路径形式一致，保证高亮可匹配 */
 function childPath(parent: string, name: string): string {
@@ -37,6 +46,109 @@ async function ensureRoot(): Promise<void> {
     setError((e as Error).message);
   }
 }
+
+// 只读守卫：写操作一律先查 roMode（服务端仍是最终裁决，403 时 Toast 服务器文案）
+function ensureWritable(): boolean {
+  if (roMode()) { setError('只读模式：切换编辑模式后再修改文件'); return false; }
+  return true;
+}
+
+/** 操作完成后刷新父目录列表（保持 loaded 数组与磁盘一致） */
+async function refreshParent(parent: string) {
+  const { entries } = await api.list(parent);
+  setNodes(parent, { loaded: entries });
+}
+
+function showMenu(target: MenuTarget) {
+  if (!ensureWritable()) return;
+  clearTimeout(confirmTimer);
+  setConfirmDel(null);
+  setMenu(target);
+}
+
+// 新建：目录行 → 建在其内；文件行 → 建在其父目录；根 → 根下
+function beginCreate(kind: 'file' | 'dir', target: MenuTarget) {
+  const base = target.kind === 'dir' ? target.path : parentOf(target.path);
+  setDialog({
+    title: kind === 'file' ? '新建文件' : '新建目录',
+    initial: '',
+    submitLabel: '创建',
+    onSubmit: (name) => void doCreate(kind, base, name),
+  });
+}
+
+async function doCreate(kind: 'file' | 'dir', base: string, name: string) {
+  setDialog(null); setMenu(null);
+  const p = childPath(base, name); // 根级不带头 './'（childPath 约定），保证与 URL/currentFile 匹配
+  try {
+    if (kind === 'file') {
+      // 服务端无「建文件」端点（POST /api/mkdir 是 fs.mkdir，只建目录）；
+      // 空文件用 PUT /api/file 创建。重名保护：父列表已有同名 → 与目录侧服务器 409 同文案
+      // （服务端 writeFile 无 409 语义，直接覆盖会清空既有文件，故先查列表拦截）。
+      if (nodes[base]?.loaded?.some((e) => e.name === name)) {
+        throw new Error('already exists');
+      }
+      await api.writeFile(p, '', roMode());
+    } else {
+      await api.mkDir(p, roMode()); // 服务端 fs.mkdir；重名 → 409 already exists
+    }
+    await refreshParent(base);
+    if (kind === 'file') {
+      await openTab(p); // 新建文件直接打开编辑（现有 openTab 含 front + 快照 + pushState）
+    }
+    setError(null);
+  } catch (e) { setError((e as Error).message); }
+}
+
+function beginRename(target: MenuTarget) {
+  setDialog({
+    title: '重命名',
+    initial: target.path.split('/').pop() ?? '',
+    submitLabel: '重命名',
+    onSubmit: (name) => void doRename(target, name),
+  });
+}
+
+async function doRename(target: MenuTarget, name: string) {
+  setDialog(null); setMenu(null);
+  // 子路径统一 childPath(parentOf(target.path), name)：根级 'a.ts' → childPath('.', 'b.ts') = 'b.ts'
+  const to = childPath(parentOf(target.path), name);
+  if (to === target.path) return; // 同名重命名 = 取消，静默关闭
+  try {
+    await api.rename(target.path, to, roMode());
+    await refreshParent(parentOf(target.path));
+    if (tabs().includes(target.path)) {
+      // 级联走 stores 的 closeTab/openTab：封装了服务器调用 + 本地信号 + 快照 + pushState，
+      // 直接调 api.tabs.close 会漏本地信号更新，旧路径残留标签列表
+      await closeTab(target.path);
+      await openTab(to);
+    } else if (currentFile() === target.path) {
+      setCurrentFile(to); pushState();
+    }
+    setError(null);
+  } catch (e) { setError((e as Error).message); }
+}
+
+function onDeleteTap(target: MenuTarget) {
+  if (confirmDel() !== target.path) {
+    setConfirmDel(target.path); // 第一击：按钮变「确认删除？」（红），3s 内第二击生效
+    clearTimeout(confirmTimer);
+    confirmTimer = setTimeout(() => setConfirmDel(null), 3000);
+    return;
+  }
+  setConfirmDel(null); setMenu(null);
+  void (async () => {
+    try {
+      await api.del(target.path, roMode());
+      await refreshParent(parentOf(target.path));
+      if (currentFile() === target.path) { setCurrentFile(null); pushState(); }
+      if (tabs().includes(target.path)) await closeTab(target.path); // closeTab 含本地移除 + 快照 + pushState
+      setError(null);
+    } catch (e) { setError((e as Error).message); }
+  })();
+}
+
+onCleanup(() => clearTimeout(confirmTimer));
 
 function TreeNode(props: { path: string; entry: DirEntry }) {
   // props 对当前实例固定不变；所有可变状态都从 store 响应式读取
@@ -69,6 +181,7 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
   };
 
   const onRowClick = () => {
+    setMenu(null); // 点击行任意位置关闭操作菜单（点 ⋯ 按钮会 stopPropagation，不走到这里）
     if (isDir) void onToggle();
     // 文件与 link 条目同待遇：点击走 openTab（服务器对损坏链接会 400，MVP 可接受）
     else void openTab(props.path).catch((e) => setError((e as Error).message));
@@ -83,6 +196,25 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
       >
         <span class="tree-arrow">{isDir ? (expanded() ? '▾' : '▸') : ''}</span>
         <span class="tree-name">{props.entry.name}</span>
+        <div class="tree-row-actions">
+          <button
+            class="icon-btn row-menu-btn"
+            title="操作"
+            onClick={(e) => { e.stopPropagation(); showMenu({ path: props.path, kind: isDir ? 'dir' : 'file' }); }}
+          >⋯</button>
+          <Show when={menu()?.path === props.path}>
+            <div class="row-menu" onClick={(e) => e.stopPropagation()}>
+              <button class="menu-item" onClick={() => beginCreate('file', menu()!)}>新建文件</button>
+              <button class="menu-item" onClick={() => beginCreate('dir', menu()!)}>新建目录</button>
+              <Show when={menu()?.kind !== 'root'}>
+                <button class="menu-item" onClick={() => beginRename(menu()!)}>重命名</button>
+                <button class={`menu-item ${confirmDel() === props.path ? 'danger' : ''}`} onClick={() => onDeleteTap(menu()!)}>
+                  {confirmDel() === props.path ? '确认删除？' : '删除'}
+                </button>
+              </Show>
+            </div>
+          </Show>
+        </div>
       </div>
       <Show when={isDir && expanded() && loaded()}>
         <div class="tree-children">
@@ -105,6 +237,15 @@ export function FileTreeView() {
       <Show when={error()}>
         <div class="error-banner">{error()}</div>
       </Show>
+      <div class="filetree-toolbar">
+        <button class="icon-btn" onClick={() => showMenu({ path: '.', kind: 'root' })}>＋ 新建</button>
+        <Show when={menu()?.kind === 'root'}>
+          <div class="row-menu" onClick={(e) => e.stopPropagation()}>
+            <button class="menu-item" onClick={() => beginCreate('file', menu()!)}>新建文件</button>
+            <button class="menu-item" onClick={() => beginCreate('dir', menu()!)}>新建目录</button>
+          </div>
+        </Show>
+      </div>
       <Show
         when={nodes['.']?.loaded}
         fallback={<div class="view-placeholder">{error() ?? '加载中…'}</div>}
@@ -112,6 +253,9 @@ export function FileTreeView() {
         <For each={nodes['.']?.loaded ?? []}>
           {(child) => <TreeNode path={child.name} entry={child} />}
         </For>
+      </Show>
+      <Show when={dialog()}>
+        {(d) => <NameDialog state={d()} onClose={() => { setDialog(null); setMenu(null); }} />}
       </Show>
     </div>
   );

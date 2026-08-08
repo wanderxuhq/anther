@@ -160,3 +160,41 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   .drawer-backdrop { display: none; }
   .editor-area { grid-column: 2; grid-row: 2; }
 }
+
+/* ---- 文件管理菜单/对话框（Task 16） ---- */
+.filetree-toolbar { padding: 4px 8px; border-bottom: 1px solid var(--border); position: relative; }
+/* overflow: visible 覆盖上方既有 hidden：行内绝对定位的操作菜单（row-menu）会伸出行外，
+   不覆盖则被行裁掉（CSS overflow 会裁掉包含块链经过该元素的后代）。行内文本截断由
+   .tree-name 自身的 overflow:hidden + text-overflow:ellipsis 承担，行级 hidden 是冗余的 */
+.tree-row { position: relative; overflow: visible; }
+.tree-row-actions { position: absolute; top: 0; right: 0; }
+.row-menu-btn { min-width: 40px; min-height: 40px; }
+.row-menu {
+  position: absolute; right: 4px; top: 40px; z-index: 20;
+  background: var(--toast-bg); color: var(--toast-fg);
+  border: 1px solid var(--border); border-radius: 6px; min-width: 120px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .25);
+}
+.menu-item {
+  display: block; width: 100%; padding: 10px 12px; background: none; border: none;
+  color: inherit; text-align: left; cursor: pointer; font-size: 14px;
+}
+.menu-item:hover { background: rgba(255, 255, 255, .08); }
+.menu-item.danger { color: #f87171; }
+.dialog-backdrop {
+  position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, .4);
+  display: flex; align-items: center; justify-content: center;
+}
+.dialog-card {
+  background: var(--bg); color: inherit; border: 1px solid var(--border);
+  border-radius: 8px; padding: 16px; width: min(320px, 80vw);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.dialog-title { margin: 0; font-size: 15px; }
+.dialog-input {
+  min-height: 44px; font-size: 16px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: inherit;
+}
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.dialog-actions .icon-btn:disabled { opacity: .5; }
