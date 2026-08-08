@@ -29,6 +29,8 @@ export function App() {
   // ---- 编辑器 + 自动保存 ----
   let editor: EditorHandle | undefined;
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  let pendingPath: string | undefined; // 防抖窗口内的最新待保存内容（flushSave 用）
+  let pendingDoc: string | undefined;
   let saveFailed = false; // 上次保存链失败 → 下次成功时 Toast 提示恢复
   let toastEl: HTMLDivElement | undefined;
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -48,31 +50,49 @@ export function App() {
     toastTimer = setTimeout(() => toastEl?.classList.remove('show'), 3000);
   }
 
-  /** 自动保存：防抖 1s → api.writeFile(path, text, 当前 roMode)；失败每 1s 重试共 3 次，仍失败 Toast */
+  /** 保存链：api.writeFile(path, text, ro)；失败每 1s 重试共 3 次，仍失败 Toast。
+   *  ro 传值则固定用该值（flushSave 用——切换前捕获 ro=0，重试不随模式翻转）；缺省每次尝试现读 */
+  async function saveWithRetry(path: string, text: string, ro?: boolean) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await api.writeFile(path, text, ro !== undefined ? ro : roMode());
+        if (saveFailed) {
+          saveFailed = false;
+          showToast('已恢复保存', 'success');
+        }
+        return;
+      } catch (e) {
+        if (attempt >= 2) {
+          // 已失败 3 次（attempt 0/1/2，间隔 1s）
+          saveFailed = true;
+          showToast(`保存失败：${(e as Error).message}`, 'error');
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+  }
+
+  /** 自动保存：防抖 1s → saveWithRetry；记录最新待保存内容供 flushSave */
   function scheduleSave(path: string, text: string) {
+    pendingPath = path;
+    pendingDoc = text;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      void (async () => {
-        for (let attempt = 0; ; attempt++) {
-          try {
-            await api.writeFile(path, text, roMode()); // roMode 每次尝试时现读
-            if (saveFailed) {
-              saveFailed = false;
-              showToast('已恢复保存', 'success');
-            }
-            return;
-          } catch (e) {
-            if (attempt >= 2) {
-              // 已失败 3 次（attempt 0/1/2，间隔 1s）
-              saveFailed = true;
-              showToast(`保存失败：${(e as Error).message}`, 'error');
-              return;
-            }
-            await new Promise((r) => setTimeout(r, 1000));
-          }
-        }
-      })();
+      void saveWithRetry(path, text);
     }, 1000);
+  }
+
+  /** 编辑→只读切换前调用：清掉防抖计时器，立即保存待写内容。
+   *  此刻 roMode() 仍为 false，固定传值保证重试期间不因已切只读而 403 */
+  function flushSave() {
+    clearTimeout(saveTimer);
+    if (pendingPath === undefined || pendingDoc === undefined) return;
+    const path = pendingPath;
+    const doc = pendingDoc;
+    pendingPath = undefined;
+    pendingDoc = undefined;
+    void saveWithRetry(path, doc, roMode());
   }
 
   function handleEditorChange(doc: string) {
@@ -154,6 +174,8 @@ export function App() {
         <button
           class={`icon-btn ${roMode() ? '' : 'active'}`}
           onClick={() => {
+            // 编辑→只读：先把防抖中的修改立即落盘（此时 roMode 仍为 false，ro=0 放行）
+            if (!roMode()) flushSave();
             const next = !roMode();
             setRoMode(next);
             pushState();
