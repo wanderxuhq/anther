@@ -3,7 +3,7 @@
 // 零依赖实现（无 concurrently 等）：spawn 两个子进程，共享终端输出。
 // 每个子进程独立进程组（detached），SIGINT/SIGTERM/SIGHUP 或任一子进程崩溃时
 // 按进程组整组清理（kill(-pid) 覆盖组内全部，含 node --watch 派生的后端进程）。
-// 透传参数给后端（如 npm run dev -- --rw）。
+// 透传参数给后端（如 npm run dev -- --port 8080）。
 import { spawn } from 'node:child_process';
 
 const backendArgs = process.argv.slice(2);

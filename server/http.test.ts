@@ -8,7 +8,6 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { HttpServer } from './http.ts';
 import { FileStore } from './files.ts';
-import { WriteGate } from './write-gate.ts';
 import { TabStore } from './tab-store.ts';
 import { registerFsRoutes } from './routes/fs.ts';
 import { registerTabsRoutes } from './routes/tabs.ts';
@@ -21,7 +20,7 @@ beforeEach(async () => {
   root = await mkdtemp(path.join(tmpdir(), 'anther-http-'));
   await writeFile(path.join(root, 'a.txt'), 'hello');
   server = new HttpServer({ staticDir: root });
-  registerFsRoutes(server, new FileStore(root), new WriteGate(false)); // 只读
+  registerFsRoutes(server, new FileStore(root));
   registerTabsRoutes(server, new TabStore());
   await server.listen(0, '127.0.0.1');
   base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
@@ -41,10 +40,10 @@ async function call(method: string, url: string, body?: unknown) {
   return { status: res.status, body: await res.json() };
 }
 
-test('GET /api/state 返回服务器运行模式', async () => {
+test('GET /api/state 返回服务器运行模式（写入恒可用，由前端 ro 裁决）', async () => {
   const { status, body } = await call('GET', '/api/state');
   assert.equal(status, 200);
-  assert.deepEqual(body, { allowWrites: false });
+  assert.deepEqual(body, { allowWrites: true });
 });
 
 test('PUT /api/file 无 body → 400（而非 500）', async () => {
@@ -76,8 +75,10 @@ test('POST /api/create 无 body → 400（而非 500）', async () => {
   assert.ok(body.error);
 });
 
-test('POST /api/create 带 ro=1 → 403（只读服务端）', async () => {
+test('POST /api/create 带 ro=1 → 403（前端只读模式拒绝），ro=0 → 200', async () => {
   const { status, body } = await call('POST', '/api/create?ro=1', { path: 'x.txt' });
   assert.equal(status, 403);
   assert.ok(body.error);
+  const ok = await call('POST', '/api/create?ro=0', { path: 'y.txt' });
+  assert.equal(ok.status, 200);
 });

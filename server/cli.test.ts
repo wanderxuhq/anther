@@ -7,17 +7,16 @@ import { parseArgs, staticDirFor } from './cli.ts';
 // 测试文件在 <root>/server/，项目根 = 上一级
 const rootDir = path.dirname(fileURLToPath(import.meta.url)) + '/..';
 
-test('默认：当前目录、端口 3000、只读', () => {
+test('默认：当前目录、端口 3000', () => {
   const a = parseArgs([]);
+  assert.equal(a.dir, process.cwd());
   assert.equal(a.port, 3000);
-  assert.equal(a.allowWrites, false);
 });
 
-test('解析目录、端口、--rw', () => {
-  const a = parseArgs(['/tmp/foo', '--port', '8080', '--rw']);
+test('解析目录、端口', () => {
+  const a = parseArgs(['/tmp/foo', '--port', '8080']);
   assert.equal(a.dir, '/tmp/foo');
   assert.equal(a.port, 8080);
-  assert.equal(a.allowWrites, true);
 });
 
 test('非法端口报错', () => {

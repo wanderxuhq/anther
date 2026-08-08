@@ -2,18 +2,12 @@
 import { HttpError } from './http-error.ts';
 
 /**
- * 写入权限 = 双条件：启动参数 --rw 是必要前提；请求 ro=0 是充分条件。
- * 前端按钮只改 URL ro 参数，服务端这里才是最终裁决者。
+ * 写入校验：服务端始终接受写请求（无需启动参数），
+ * 请求携带 ro=0（前端编辑模式）即放行；ro=1 或缺省 → 403。
+ * 用户决策 2026-08-08：移除 --rw 启动必要条件，写入仅由请求级 ro 裁决。
  */
-export class WriteGate {
-  constructor(readonly allowWrites: boolean) {}
-
-  assertWritable(ro?: string): void {
-    if (!this.allowWrites) {
-      throw new HttpError(403, '服务器为只读模式（以 --rw 启动以允许写入）');
-    }
-    if (ro !== '0') {
-      throw new HttpError(403, '当前为只读模式（切换编辑模式后再写入）');
-    }
+export function assertWritable(ro?: string): void {
+  if (ro !== '0') {
+    throw new HttpError(403, '当前为只读模式（切换编辑模式后再写入）');
   }
 }
