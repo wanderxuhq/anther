@@ -147,8 +147,12 @@ export function App() {
   });
 
   // 只读切换 → Compartment reconfigure（effect 只读 roMode，无需重读文件）
+  // 注意：必须先求值 roMode() 再调用——editor 由异步加载延迟创建，effect 首次运行时
+  // 仍为 undefined，`editor?.setReadOnly(roMode())` 的可选链会短路并跳过参数求值，
+  // 依赖永不建立，✎ 切换永不生效（2026-08-08 修复）。
   createEffect(() => {
-    editor?.setReadOnly(roMode());
+    const ro = roMode();
+    editor?.setReadOnly(ro);
   });
 
   // 字号（?fs= 参数）：走 html 根字号 %；CodeMirror .cm-scroller 未设自身 font-size，沿继承链传导
