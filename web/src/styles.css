@@ -19,7 +19,7 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 }
 .icon-btn.active { background: var(--accent); color: white; }
 
-.editor-area { flex: 1 1 auto; min-height: 0; overflow: hidden; grid-column: 1; grid-row: 2; }
+.editor-area { min-height: 0; overflow: hidden; grid-column: 1; grid-row: 2; }
 
 /* 编辑器容器（Task 13）：高度链撑满 editor-area，代码等宽字体 */
 .editor-container { height: 100%; min-height: 0; }

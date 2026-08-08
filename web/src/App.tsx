@@ -1,7 +1,7 @@
 import { createSignal, createEffect, For, Show, onCleanup } from 'solid-js';
 import { views } from './views/registry.tsx';
 import { api } from './api.ts';
-import { currentFile, roMode, setRoMode, pushState } from './stores.ts';
+import { currentFile, roMode, setRoMode, setCurrentFile, pushState } from './stores.ts';
 import { createEditor, type EditorHandle } from './editor/index.ts';
 
 const NARROW_QUERY = '(max-width: 599px)';
@@ -106,7 +106,10 @@ export function App() {
     } catch (e) {
       // 过期请求的失败不打扰当前文件（竞态 guard 同规则）
       if (path !== currentFile() || seq !== loadSeq) return;
+      // spec §8：Toast + 降级到文件树（清空当前文件 → 编辑器清空，用户回到文件树）
       showToast(`打开失败：${(e as Error).message}`, 'error');
+      setCurrentFile(null);
+      pushState();
     }
   }
 

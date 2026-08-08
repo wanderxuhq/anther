@@ -83,7 +83,9 @@ export function createEditor(container: HTMLElement, opts: EditorOptions): Edito
       });
     },
     setDoc(doc: string) {
-      view.setState(makeState(doc, view.state.facet(EditorView.editable)));
+      // makeState 的第二个参数是 readOnly；读 EditorView.editable 会把布尔值反相
+      // （只读时 editable=false → 重建出可编辑 state）。改用 EditorState.readOnly。
+      view.setState(makeState(doc, view.state.facet(EditorState.readOnly)));
     },
     destroy() {
       view.destroy();
