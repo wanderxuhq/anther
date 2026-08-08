@@ -90,9 +90,11 @@ export function App() {
     if (!el) return;
     const seq = ++loadSeq;
     try {
-      const { content } = await api.readFile(path);
+      const { content, utf8 } = await api.readFile(path);
       // 响应到达时当前文件已切换 / 已有更新的加载请求 → 丢弃过期响应
       if (path !== currentFile() || seq !== loadSeq) return;
+      // spec §5.3：非 UTF-8 文件仍可浏览，但保存仅支持 UTF-8 → Toast 提示
+      if (!utf8) showToast('非 UTF-8 文件，仅支持 UTF-8 保存', 'error');
       if (!editor) {
         editor = createEditor(el, {
           initialDoc: content,

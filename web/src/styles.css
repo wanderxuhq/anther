@@ -16,6 +16,9 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 .icon-btn {
   background: none; border: none; font-size: 20px;
   padding: 6px 10px; border-radius: 6px; cursor: pointer;
+  /* 触控区 ≥ 40px（spec §7.4 移动端可触达性）：inline-flex 使字形在最小尺寸内居中 */
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 40px; min-height: 40px;
 }
 .icon-btn.active { background: var(--accent); color: white; }
 
@@ -57,7 +60,12 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 9;
 }
 .drawer-views { display: flex; flex-direction: column; gap: 4px; padding: 8px 4px; border-right: 1px solid var(--border); }
-.drawer-views .view-tab { background: none; border: none; font-size: 18px; padding: 8px; border-radius: 6px; }
+.drawer-views .view-tab {
+  background: none; border: none; font-size: 18px; padding: 8px; border-radius: 6px;
+  /* 触控区 ≥ 40px（spec §7.4，核查补充）：view-tab 也是抽屉内主要点击目标 */
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 40px; min-height: 40px;
+}
 .drawer-views .view-tab.active { background: var(--accent); }
 .drawer-content { flex: 1; overflow-y: auto; padding: 8px; }
 
@@ -73,6 +81,7 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   display: flex; align-items: center; gap: 4px;
   padding: 3px 6px; border-radius: 5px; cursor: pointer;
   white-space: nowrap; overflow: hidden;
+  min-height: 40px; /* 文件树行在触屏上是主要点击目标，行高 ≥ 40px（spec §7.4） */
 }
 .tree-row:hover { background: var(--row-hover); }
 .tree-row.active { background: var(--accent); color: white; }
@@ -98,6 +107,9 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   flex: 0 0 auto; background: none; border: none;
   color: var(--muted); font-size: 14px; line-height: 1;
   padding: 2px 6px; border-radius: 4px; cursor: pointer;
+  /* 触控区 ≥ 40px（spec §7.4）：字形居中，视觉不变大 */
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 40px; min-height: 40px;
 }
 .tab-close:hover { background: var(--row-hover); color: var(--accent); }
 .tab-row.active .tab-close { color: inherit; }
