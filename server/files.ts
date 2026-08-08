@@ -5,7 +5,7 @@ import { HttpError } from './http-error.ts';
 
 export type DirEntry = {
   name: string;
-  type: 'file' | 'dir';
+  type: 'file' | 'dir' | 'link';
   size: number;
   mtime: number;
 };
@@ -17,7 +17,7 @@ export class FileStore {
     this.root = root;
   }
 
-  /** 规范化 + 根目录边界校验。越界抛 400。 */
+  /** 规范化 + 根目录边界校验（同步、无 IO）。越界抛 400。 */
   resolve(relPath: string): string {
     if (typeof relPath !== 'string' || relPath === '') {
       throw new HttpError(400, 'invalid path');
@@ -30,25 +30,81 @@ export class FileStore {
     return abs;
   }
 
+  /**
+   * 词法校验 + 真实路径（realpath）边界校验，防符号链接逃逸。
+   * 从 abs 向上找最近可解析的祖先，校验其真实路径在 realpath(root) 之内，再拼接剩余部分。
+   * 悬空符号链接（realpath 失败但 lstat 是链接）拒绝跟随——后续 fs 操作会写到链接目标。
+   * 越界抛 400。
+   */
+  async resolveSafe(relPath: string): Promise<string> {
+    const abs = this.resolve(relPath); // 同步词法校验，语义与 resolve() 一致
+    let rootReal: string;
+    try {
+      rootReal = await fs.realpath(this.root);
+    } catch (e: unknown) {
+      throw this.mapFsError(e);
+    }
+    // 根为 "/" 时 rootReal + path.sep 是 "//"，需规范化后再做前缀判断
+    const rootPrefix = rootReal.endsWith(path.sep) ? rootReal : rootReal + path.sep;
+
+    let current = abs;
+    const suffix: string[] = [];
+    for (;;) {
+      let real: string;
+      try {
+        real = await fs.realpath(current);
+      } catch (e: unknown) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code !== 'ENOENT') throw this.mapFsError(e);
+        // current 不存在，或为悬空符号链接：悬空链接若被后续 fs 操作跟随会写到其目标，拒绝
+        let isLink = false;
+        try {
+          isLink = (await fs.lstat(current)).isSymbolicLink();
+        } catch (e2: unknown) {
+          const code2 = (e2 as NodeJS.ErrnoException).code;
+          if (code2 !== 'ENOENT') throw this.mapFsError(e2);
+          // ENOENT：组件确实不存在，正常向上
+        }
+        if (isLink) {
+          throw new HttpError(400, 'broken symlink');
+        }
+        const parent = path.dirname(current);
+        if (parent === current) throw new HttpError(400, 'path escapes root');
+        suffix.unshift(path.basename(current));
+        current = parent;
+        continue;
+      }
+      // 最近可解析祖先的真实路径必须在根内（abs 等于根本身时放行）
+      if (real !== rootReal && !real.startsWith(rootPrefix)) {
+        throw new HttpError(400, 'path escapes root');
+      }
+      return suffix.length === 0 ? real : path.join(real, ...suffix);
+    }
+  }
+
   async list(relPath: string): Promise<DirEntry[]> {
-    const dir = this.resolve(relPath);
+    const dir = await this.resolveSafe(relPath);
     let names: string[];
     try {
       names = await fs.readdir(dir);
     } catch (e: unknown) {
       throw this.mapFsError(e);
     }
-    const entries = await Promise.all(
-      names.map(async (name): Promise<DirEntry> => {
-        const st = await fs.stat(path.join(dir, name));
-        return {
+    const entries: DirEntry[] = [];
+    for (const name of names) {
+      try {
+        // lstat 不跟随符号链接，避免泄漏根外元数据；悬空链接也能正常列成 link 条目
+        const st = await fs.lstat(path.join(dir, name));
+        entries.push({
           name,
-          type: st.isDirectory() ? 'dir' : 'file',
+          type: st.isDirectory() ? 'dir' : st.isSymbolicLink() ? 'link' : 'file',
           size: st.size,
           mtime: st.mtimeMs,
-        };
-      }),
-    );
+        });
+      } catch {
+        // 单条目 stat 失败（权限、竞态等）跳过该条目，不影响其余条目
+      }
+    }
     return entries.sort((a, b) => {
       if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
       return a.name.localeCompare(b.name);
@@ -56,7 +112,7 @@ export class FileStore {
   }
 
   async read(relPath: string): Promise<{ content: string; utf8: boolean }> {
-    const abs = this.resolve(relPath);
+    const abs = await this.resolveSafe(relPath);
     let buf: Buffer;
     try {
       buf = await fs.readFile(abs);
@@ -68,7 +124,7 @@ export class FileStore {
   }
 
   async write(relPath: string, content: string): Promise<void> {
-    const abs = this.resolve(relPath);
+    const abs = await this.resolveSafe(relPath);
     try {
       await fs.writeFile(abs, content, 'utf8');
     } catch (e: unknown) {
@@ -77,7 +133,7 @@ export class FileStore {
   }
 
   async mkdir(relPath: string): Promise<void> {
-    const abs = this.resolve(relPath);
+    const abs = await this.resolveSafe(relPath);
     try {
       await fs.mkdir(abs);
     } catch (e: unknown) {
@@ -86,8 +142,8 @@ export class FileStore {
   }
 
   async rename(relPath: string, toRel: string): Promise<void> {
-    const from = this.resolve(relPath);
-    const to = this.resolve(toRel); // 目标同样过边界校验
+    const from = await this.resolveSafe(relPath);
+    const to = await this.resolveSafe(toRel); // 目标同样过边界校验
     try {
       await fs.rename(from, to);
     } catch (e: unknown) {
@@ -96,7 +152,7 @@ export class FileStore {
   }
 
   async del(relPath: string): Promise<void> {
-    const abs = this.resolve(relPath);
+    const abs = await this.resolveSafe(relPath);
     try {
       await fs.rm(abs, { recursive: true });
     } catch (e: unknown) {
