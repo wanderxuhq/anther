@@ -1,7 +1,7 @@
 // web/src/api.test.ts
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { api, getUserId } from './api.ts';
+import { api, getUserId, fallbackUuid } from './api.ts';
 
 // Node 无 localStorage —— 用内存桩（测试前全局注入）
 const store = new Map<string, string>();
@@ -55,4 +55,10 @@ test('getUserId 生成并持久化', () => {
   const id2 = getUserId();
   assert.equal(id1, id2); // 二次读取同一值
   assert.ok(id1.length > 10);
+});
+
+test('fallbackUuid 生成 v4 格式（非安全上下文降级路径）', () => {
+  const re = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  for (let i = 0; i < 50; i++) assert.match(fallbackUuid(), re);
+  assert.notEqual(fallbackUuid(), fallbackUuid());
 });
