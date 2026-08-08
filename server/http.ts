@@ -114,14 +114,19 @@ export class HttpServer {
     if (!abs.startsWith(path.resolve(this.staticDir) + path.sep) && rel !== 'index.html') {
       throw new HttpError(400, 'bad path');
     }
+    // Content-Type 按实际读取到的文件决定：fallback 分支返回的是 index.html，
+    // 若用请求路径的扩展名（如 .ts）会落到 application/octet-stream → 浏览器把
+    // 应用页面当成文件下载
     let content: Buffer;
+    let ext: string;
     try {
       content = await readFile(abs);
+      ext = path.extname(abs);
     } catch {
       // SPA fallback：任意路径都回 index.html
       content = await readFile(path.join(this.staticDir, 'index.html'));
+      ext = '.html';
     }
-    const ext = path.extname(abs);
     res.writeHead(200, {
       'Content-Type': MIME[ext] ?? 'application/octet-stream',
       'Content-Length': content.length,

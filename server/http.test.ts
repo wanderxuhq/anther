@@ -82,3 +82,11 @@ test('POST /api/create 带 ro=1 → 403（前端只读模式拒绝），ro=0 →
   const ok = await call('POST', '/api/create?ro=0', { path: 'y.txt' });
   assert.equal(ok.status, 200);
 });
+
+test('静态 SPA fallback：未知扩展名的不存在路径返回 index.html 且 Content-Type 为 text/html（不触发下载）', async () => {
+  await writeFile(path.join(root, 'index.html'), '<!doctype html><p>app</p>');
+  const res = await fetch(base + '/web/src/ro-mode-effect.test.ts');
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'text/html; charset=utf-8'); // 修前为 application/octet-stream → 浏览器下载
+  assert.equal(await res.text(), '<!doctype html><p>app</p>');
+});
