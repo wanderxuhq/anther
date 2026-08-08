@@ -87,3 +87,67 @@ test('mkdir 无 ro 返回 403，ro=0 创建成功', async () => {
   assert.equal(ok.status, 200);
   assert.ok((await stat(path.join(root, 'sub'))).isDirectory());
 });
+
+// ---- 全局搜索 SSE（Task 17） ----
+async function collectSse(url: string): Promise<{ status: number; ctype: string; events: Record<string, unknown>[] }> {
+  const res = await fetch(url);
+  assert.equal(res.status, 200);
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  const events: Record<string, unknown>[] = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      if (line.startsWith('data:')) events.push(JSON.parse(line.slice(5).trim()) as Record<string, unknown>);
+    }
+  }
+  return { status: res.status, ctype: res.headers.get('content-type') ?? '', events };
+}
+
+test('search SSE：file + done 事件序列', async () => {
+  const { writeFile: wf, mkdir } = await import('node:fs/promises');
+  await mkdir(path.join(root, 'sub'));
+  await wf(path.join(root, 'sub', 'b.txt'), 'hello world');
+  const { ctype, events } = await collectSse(`${base}/api/search?q=hello`);
+  assert.ok(ctype.startsWith('text/event-stream'));
+  const files = events.filter((e) => e.type === 'file');
+  const done = events.find((e) => e.type === 'done')!;
+  assert.equal(files.length, 2); // a.txt + sub/b.txt
+  assert.ok(files.some((f) => f.path === 'a.txt'));
+  assert.ok(files.some((f) => f.path === 'sub/b.txt'));
+  assert.equal((done.matchCount as number) >= 2, true);
+  assert.equal(done.truncated, false);
+});
+
+test('search q 为空 → error 事件', async () => {
+  const { events } = await collectSse(`${base}/api/search?q=`);
+  assert.equal(events[0].type, 'error');
+});
+
+test('search exclude 参数生效', async () => {
+  const { writeFile: wf, mkdir } = await import('node:fs/promises');
+  await mkdir(path.join(root, 'node_modules'));
+  await wf(path.join(root, 'node_modules', 'x.js'), 'hello');
+  const { events } = await collectSse(`${base}/api/search?q=hello&exclude=node_modules`);
+  const files = events.filter((e) => e.type === 'file');
+  assert.deepEqual(files.map((f) => f.path), ['a.txt']);
+});
+
+test('search case=1 大小写敏感', async () => {
+  const { writeFile: wf, rm } = await import('node:fs/promises');
+  await rm(path.join(root, 'a.txt')); // beforeEach 的 a.txt='hello' 会命中 q=hello，先移除
+  await wf(path.join(root, 'case.txt'), 'HELLO');
+  const { events } = await collectSse(`${base}/api/search?q=hello&case=1`);
+  assert.equal(events.filter((e) => e.type === 'file').length, 0);
+});
+
+test('search 路径越界 → error 事件而非 JSON 500', async () => {
+  const { events } = await collectSse(`${base}/api/search?q=hello&path=..%2F..%2Fetc`);
+  assert.equal(events[0].type, 'error');
+});

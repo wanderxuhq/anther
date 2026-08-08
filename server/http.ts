@@ -10,6 +10,12 @@ export type Handler = (
   query: URLSearchParams,
 ) => Promise<unknown> | unknown;
 
+export type SseHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+  query: URLSearchParams,
+) => void | Promise<void>;
+
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -23,6 +29,7 @@ const MIME: Record<string, string> = {
 
 export class HttpServer {
   private routes = new Map<string, Map<string, Handler>>();
+  private sseRoutes = new Map<string, SseHandler>();
   private server = createServer((req, res) => void this.handle(req, res));
   private staticDir: string;
 
@@ -33,6 +40,8 @@ export class HttpServer {
   get(pattern: string, h: Handler) { this.add('GET', pattern, h); }
   put(pattern: string, h: Handler) { this.add('PUT', pattern, h); }
   post(pattern: string, h: Handler) { this.add('POST', pattern, h); }
+
+  sse(pattern: string, h: SseHandler) { this.sseRoutes.set(pattern, h); }
 
   private add(method: string, pattern: string, h: Handler) {
     if (!this.routes.has(method)) this.routes.set(method, new Map());
@@ -55,6 +64,28 @@ export class HttpServer {
       if (req.method === 'GET' && !url.pathname.startsWith('/api/')) {
         await this.serveStatic(url.pathname, res);
         return;
+      }
+      // SSE 路由：handler 直接拿 res 写流（text/event-stream），不走 JSON 封装；
+      // 错误也写在流里（error 事件），不破坏已建立的连接
+      if (req.method === 'GET') {
+        const sseHandler = this.sseRoutes.get(url.pathname);
+        if (sseHandler) {
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            Connection: 'keep-alive',
+          });
+          try {
+            await sseHandler(req, res, url.searchParams);
+          } catch (e) {
+            if (!res.writableEnded) {
+              const msg = e instanceof HttpError ? e.message : 'internal error';
+              res.write(`data: ${JSON.stringify({ type: 'error', message: msg })}\n\n`);
+            }
+          }
+          if (!res.writableEnded) res.end();
+          return;
+        }
       }
       const handler = this.routes.get(req.method ?? '')?.get(url.pathname);
       if (!handler) throw new HttpError(404, 'not found');

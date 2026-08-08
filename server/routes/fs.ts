@@ -63,4 +63,39 @@ export function registerFsRoutes(http: HttpServer, files: FileStore): void {
     assertWritable(q.get('ro') ?? undefined);
     await files.del(p);
   });
+
+  // 全局搜索（Task 17）：SSE 流式——每搜完一个有匹配的文件发一个 file 事件，
+  // 结束发 done；客户端断开（req close）→ abort 遍历信号（不浪费服务端 CPU）
+  http.sse('/api/search', async (req, res, q) => {
+    const query = q.get('q');
+    if (!query || query.trim() === '') {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: 'missing query' })}\n\n`);
+      return;
+    }
+    const ctrl = new AbortController();
+    req.on('close', () => ctrl.abort());
+    // 客户端断开后的写入会抛 EPIPE：挂在 res 上的 error 事件吞掉，防进程崩溃
+    res.on('error', () => {});
+    const send = (obj: unknown) => {
+      if (res.writableEnded) return;
+      res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    };
+    // path 尾斜杠规范化：'src/' → 'src'，否则返回路径会出现 'src//a.ts'
+    const relPath = (q.get('path') ?? '.').replace(/\/+$/, '');
+    const result = await files.search(relPath, query.trim(), {
+      caseSensitive: q.get('case') === '1',
+      exclude: (q.get('exclude') ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+      signal: ctrl.signal,
+      onFile: (path, matches) => send({ type: 'file', path, matches }),
+    });
+    send({
+      type: 'done',
+      truncated: result.truncated,
+      fileCount: result.fileCount,
+      matchCount: result.matchCount,
+    });
+  });
 }
