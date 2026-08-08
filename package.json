@@ -1,0 +1,29 @@
+{
+  "name": "anther",
+  "version": "0.1.0",
+  "description": "移动优先的浏览器代码查看/编辑工具",
+  "license": "ISC",
+  "author": "wanderxuhq",
+  "type": "module",
+  "bin": {
+    "anther": "./bin/anther.js"
+  },
+  "scripts": {
+    "test": "node --test --experimental-transform-types 'server/**/*.test.ts' 'web/src/**/*.test.ts'",
+    "dev:server": "node --watch --experimental-transform-types server/cli.ts",
+    "dev:web": "vite --config web/vite.config.ts",
+    "build": "tsc -p tsconfig.json && vite build --config web/vite.config.ts",
+    "start": "node bin/anther.js"
+  },
+  "dependencies": {
+    "@codemirror/state": "^6.7.1",
+    "codemirror": "^6.0.2",
+    "solid-js": "^1.9.14"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.3",
+    "vite-plugin-solid": "^2.11.14"
+  }
+}
