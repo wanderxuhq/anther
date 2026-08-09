@@ -10,7 +10,8 @@
   },
   "files": [
     "dist",
-    "bin"
+    "bin",
+    "README.*.md"
   ],
   "scripts": {
     "test": "node --test --experimental-transform-types 'server/**/*.test.ts' 'web/src/**/*.test.ts'",
