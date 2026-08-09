@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
-import { parseArgs, staticDirFor } from './cli.ts';
+import { parseArgs, staticDirFor, lanIPv4 } from './cli.ts';
 
 // 测试文件在 <root>/server/，项目根 = 上一级
 const rootDir = path.dirname(fileURLToPath(import.meta.url)) + '/..';
@@ -35,4 +35,14 @@ test('staticDirFor 编译产物形态解析到 <root>/dist/web（锁定生产模
     staticDirFor(pathToFileURL(`${rootDir}/dist/server/cli.js`).href),
     path.join(rootDir, 'dist/web'),
   );
+});
+
+test('lanIPv4：返回非空字符串或 null（绝不允许抛异常——启动日志不能被网络枚举带崩）', () => {
+  let result: string | null;
+  try {
+    result = lanIPv4();
+  } catch (e) {
+    assert.fail(`lanIPv4 不应抛异常，实际抛了 ${e}`);
+  }
+  assert.ok(result === null || typeof result === 'string');
 });

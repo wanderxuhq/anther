@@ -1,3 +1,4 @@
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { HttpServer } from './http.ts';
@@ -39,6 +40,23 @@ export function parseArgs(argv: string[]): CliArgs {
   return { dir, port };
 }
 
+/** 第一个 IPv4 局域网地址；取不到（无网络接口 / 沙箱受限）返回 null。供启动日志打印手机访问地址。 */
+export function lanIPv4(): string | null {
+  let interfaces: NodeJS.Dict<os.NetworkInterfaceInfo[]>;
+  try {
+    interfaces = os.networkInterfaces();
+  } catch {
+    return null; // 受限环境（如无权限枚举接口）直接放弃，启动日志绝不能被此带崩
+  }
+  for (const infos of Object.values(interfaces)) {
+    if (!infos) continue;
+    for (const info of infos) {
+      if (info.family === 'IPv4' && !info.internal) return info.address;
+    }
+  }
+  return null;
+}
+
 export async function main(argv: string[]): Promise<void> {
   const { dir, port } = parseArgs(argv);
   const files = new FileStore(dir);
@@ -52,6 +70,8 @@ export async function main(argv: string[]): Promise<void> {
 
   await http.listen(port, '0.0.0.0');
   console.log(`anther 已启动：http://localhost:${port}`);
+  const lan = lanIPv4();
+  if (lan) console.log(`局域网访问：http://${lan}:${port}`);
   console.log(`根目录：${dir}`);
   console.log('写入：前端切换编辑模式（ro=0）即可写，只读模式（ro=1）拒绝');
 }
