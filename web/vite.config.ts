@@ -20,7 +20,11 @@ export default defineConfig({
   server: {
     host: true, // 监听所有网卡：手机/其他主机通过 IP 访问（vite 默认只绑 localhost）
     port: 5173,
-    proxy: { '/api': 'http://localhost:3000' },
+    // 原：proxy: { '/api': 'http://localhost:3000' }
+    // 改为（ws: true 让 vite 转发 WS upgrade 到后端）：
+    proxy: {
+      '/api': { target: 'http://localhost:3000', ws: true },
+    },
   },
   build: {
     outDir: path.resolve(import.meta.dirname, '../dist/web'),

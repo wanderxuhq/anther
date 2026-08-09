@@ -32,6 +32,9 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
 }
 
+/* 终端面板（Task 10）：填满主区域，xterm 自管滚动 */
+.terminal-view { height: 100%; min-height: 0; overflow: hidden; padding: 4px 0 0 4px; }
+
 /* 最小 Toast（Task 13；完整系统留给 Task 14/15）：固定定位、3s 自动消失 */
 .toast {
   position: fixed; left: 50%; bottom: 28px;
