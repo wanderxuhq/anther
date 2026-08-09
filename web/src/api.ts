@@ -180,18 +180,31 @@ export type TerminalSocket = {
  * 自定义 header → userId 走 ?user= 查询参数（服务端与 x-user-id 同值校验）。
  * 收到 exit 帧或服务端 4404（终端不存在/被删）→ 不再重连，回调 onExit。
  */
-export function connectTerminal(id: string, handlers: TerminalHandlers): TerminalSocket {
+export function connectTerminal(id: string, handlers: TerminalHandlers, urlOverride?: string): TerminalSocket {
   const user = getUserId();
   let ws: WebSocket | null = null;
+  let pending: string[] = [];
   let disposed = false;
   let dead = false;
   let attempt = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
+  const send = (obj: { type: 'input'; data: string } | { type: 'resize'; cols: number; rows: number }) => {
+    const frame = JSON.stringify(obj);
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(frame);
+    else if (ws && ws.readyState === WebSocket.CONNECTING) pending.push(frame);
+    // CLOSED/null → 丢弃：重连后历史重放覆盖
+  };
+
   const open = () => {
     if (disposed || dead) return;
-    ws = new WebSocket(`/api/terminal?term=${encodeURIComponent(id)}&user=${encodeURIComponent(user)}`);
-    ws.onopen = () => { attempt = 0; handlers.onOpen(); };
+    ws = new WebSocket(urlOverride ?? `/api/terminal?term=${encodeURIComponent(id)}&user=${encodeURIComponent(user)}`);
+    ws.onopen = () => {
+      attempt = 0;
+      const q = pending; pending = [];   // 先 flush 排队的 resize/input
+      for (const f of q) ws!.send(f);
+      handlers.onOpen();                 // 再清屏等服务端历史重放
+    };
     ws.onmessage = (e) => {
       let msg: { type?: string; data?: string; code?: number };
       try { msg = JSON.parse(String(e.data)); } catch { return; }
@@ -211,8 +224,8 @@ export function connectTerminal(id: string, handlers: TerminalHandlers): Termina
   open();
 
   return {
-    input: (data) => ws?.send(JSON.stringify({ type: 'input', data })),
-    resize: (cols, rows) => ws?.send(JSON.stringify({ type: 'resize', cols, rows })),
-    dispose: () => { disposed = true; clearTimeout(timer); ws?.close(); },
+    input: (data) => send({ type: 'input', data }),
+    resize: (cols, rows) => send({ type: 'resize', cols, rows }),
+    dispose: () => { disposed = true; clearTimeout(timer); pending = []; ws?.close(); },
   };
 }

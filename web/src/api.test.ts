@@ -1,7 +1,9 @@
 // web/src/api.test.ts
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { api, getUserId, fallbackUuid, searchStream, type SearchFile } from './api.ts';
+import { createServer } from 'node:http';
+import { WebSocketServer } from 'ws';
+import { api, getUserId, fallbackUuid, searchStream, connectTerminal, type SearchFile } from './api.ts';
 
 // Node 无 localStorage —— 用内存桩（测试前全局注入）
 const store = new Map<string, string>();
@@ -136,4 +138,36 @@ test('searchStream cancel 触发 abort（静默，不触发 onError）', async (
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(signal?.aborted, true);
   assert.equal(err, '');
+});
+
+// ---- connectTerminal WS 客户端（Task 8/11 修复：CONNECTING 发送队列） ----
+test('connectTerminal：CONNECTING 期间 input/resize 不抛，open 后帧送达', async () => {
+  const received: string[] = [];
+  const server = createServer();
+  const wss = new WebSocketServer({ server });
+  wss.on('connection', (s) => s.on('message', (d: Buffer) => received.push(d.toString())));
+  await new Promise<void>((r) => server.listen(0, r));
+  const { port } = server.address() as { port: number };
+
+  try {
+    const sock = connectTerminal(
+      't1',
+      { onOpen: () => {}, onOutput: () => {}, onExit: () => {} },
+      `ws://127.0.0.1:${port}/api/terminal?term=t1&user=u`, // URL 覆盖（node 不能建相对 URL）
+    );
+    // 同步立即发：当前代码 readyState=0 → 抛 DOMException → doesNotThrow 红
+    assert.doesNotThrow(() => { sock.input('a'); sock.resize(120, 40); });
+
+    await new Promise<void>((r) => setTimeout(r, 150)); // 等 open + flush
+    const frames = received.map((f) => JSON.parse(f));
+    assert.equal(frames[0]?.type, 'input');
+    assert.equal(frames[0]?.data, 'a');
+    assert.equal(frames[1]?.type, 'resize');
+    assert.equal(frames[1]?.cols, 120);
+    assert.equal(frames[1]?.rows, 40);
+    sock.dispose();
+  } finally {
+    wss.close();
+    await new Promise<void>((r) => server.close(() => r()));
+  }
 });
