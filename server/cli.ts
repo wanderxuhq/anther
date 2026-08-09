@@ -8,6 +8,8 @@ import { registerFsRoutes } from './routes/fs.ts';
 import { registerTabsRoutes } from './routes/tabs.ts';
 import { TerminalManager } from './terminal.ts';
 import { registerTerminalRoutes } from './routes/terminal.ts';
+import { Git } from './git.ts';
+import { registerGitRoutes } from './routes/git.ts';
 
 export type CliArgs = { dir: string; port: number };
 
@@ -64,9 +66,11 @@ export async function main(argv: string[]): Promise<void> {
 
   const http = new HttpServer({ staticDir: staticDirFor(import.meta.url) });
   const terminals = new TerminalManager(dir);
+  const git = new Git(dir);
   registerFsRoutes(http, files);
   registerTabsRoutes(http, tabs);
   registerTerminalRoutes(http, terminals);
+  registerGitRoutes(http, git);
 
   await http.listen(port, '0.0.0.0');
   console.log(`anther started: http://localhost:${port}`);
