@@ -78,20 +78,21 @@
 ### 5.4 面板布局（`web/src/views/git.tsx`）
 
 ```
-┌──────────────────────────┐
-│ [消息输入框] [提交按钮]    │  ← 顶部提交区
-│ [全选] [取消全选]          │
-├──────────────────────────┤
-│ ☑ file-a.ts    M    │    │  ← 改动列表（多选勾选）
-│ ☑ file-b.ts    ??   │    │
-│ ☐ file-c.ts    D    │    │
-└──────────────────────────┘
+┌────────────────────────────┐
+│ [消息输入框] [提交按钮]      │  ← 顶部提交区
+│ [全选] [取消全选]            │
+├────────────────────────────┤
+│ ☑ file-a.ts    M   [diff]   │  ← 改动列表：点主体=勾选，行尾按钮=看diff
+│ ☑ file-b.ts    ??  [diff]   │
+│ ☐ file-c.ts    D   [diff]   │
+└────────────────────────────┘
 ```
 
 - **状态**：status 返回 → 列表行，每行 `☑` 复选框 + 文件名 + 状态字母
-- **勾选**：默认全选；「全选 / 取消全选」按钮批量切换
+- **勾选（触控优先）**：**点行主体（左侧大块）= 勾选/取消勾选**；**行尾独立「查看 diff」按钮 = 打开该文件 diff**（两个点击目标分离，避免误触）
+- **全选/取消全选**：顶部按钮批量切换
 - **提交**：点提交 → 只 add 勾选文件 → commit → 成功后**刷新 status** + Toast 成功
-- **点文件行**：`openDiffTab(path)` 打开 git-diff 标签（复用 `diff:<path>`），主区域显示该文件 diff（见 §5.1）
+- **查看 diff**：`openDiffTab(path)` 打开 git-diff 标签（复用 `diff:<path>`），主区域显示该文件 diff（见 §5.1）
 - **空态**：`isRepo:false` → 面板显示提示（"不是 git 仓库"），不崩
 
 ## 6. 错误处理 / 边界 / 测试
@@ -119,7 +120,7 @@
 | `server/git.test.ts` | 临时 git 仓库 fixture：init + 文件变更 → 验证 status 解析、diff 语义（未跟踪全 `+`）、commit 后 status 清空 |
 | `server/routes/git.test.ts` | API 层：状态码、`{ error }` 结构、路径处理 |
 | `web/src/editor/diff.test.ts` | diff.ts 对给定 unified diff 文本 → 语言注入正确、只读 |
-| `web/src/views/git.test.ts` | 勾选/全选/取消全选、提交成功刷新 status、点行打开 git-diff 标签 |
+| `web/src/views/git.test.ts` | 勾选/全选/取消全选、提交成功刷新 status、点行主体勾选 vs 行尾按钮开 diff（两目标分离） |
 
 **手动清单**（真机验证，独立于主 spec 附录 A）：手机上开 git 面板 → 改文件 → 勾选提交 → 看 diff 着色 → 验证 commit 生效。
 
