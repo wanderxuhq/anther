@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   addFileTab, removeTabById, fileTabPaths, currentFilePath, nextActiveTabId, terminalExists,
+  GIT_TAB_ID, gitDiffTabId, addGitTab, addGitDiffTab,
 } from './tab-model.ts';
 import type { TabItem } from './tab-model.ts';
 
@@ -39,4 +40,21 @@ test('nextActiveTabId：关当前后回退（文件优先，否则任意剩余�
 test('terminalExists：按 id 判断终端标签', () => {
   assert.equal(terminalExists([fileA, term1], 't_1'), true);
   assert.equal(terminalExists([fileA, term1], 't_9'), false);
+});
+
+const gitTab: TabItem = { kind: 'git', id: GIT_TAB_ID };
+const diffA: TabItem = { kind: 'git-diff', id: 'git-diff:a.ts', path: 'a.ts' };
+
+test('addGitTab：单例不重复', () => {
+  assert.deepEqual(addGitTab([fileA, gitTab]), [fileA, gitTab]);
+  const withGit = addGitTab([fileA]);
+  assert.equal(withGit.length, 2);
+  assert.equal(withGit[1].kind, 'git');
+  assert.equal(withGit[1].id, GIT_TAB_ID);
+});
+
+test('gitDiffTabId：id 前缀 git-diff:，同文件复用', () => {
+  assert.equal(gitDiffTabId('a.ts'), 'git-diff:a.ts');
+  assert.deepEqual(addGitDiffTab([fileA], 'a.ts'), [fileA, diffA]);
+  assert.deepEqual(addGitDiffTab([fileA, diffA], 'a.ts'), [fileA, diffA]); // 已存在 → 原样
 });

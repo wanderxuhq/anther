@@ -61,6 +61,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return (await res.json()) as T;
 }
 
+export type GitChange = { path: string; status: string };
+export type GitStatus = { isRepo: boolean; changes: GitChange[] };
+
 export const api = {
   list: (path: string) => request<{ entries: DirEntry[] }>('GET', `/api/list?path=${encodeURIComponent(path)}`),
   readFile: (path: string) => request<{ content: string; utf8: boolean }>('GET', `/api/file?path=${encodeURIComponent(path)}`),
@@ -83,6 +86,11 @@ export const api = {
     list: () => request<{ terminals: TerminalInfo[] }>('GET', '/api/terminals'),
     create: (name: string) => request<TerminalInfo>('POST', '/api/terminals', { name }),
     close: (id: string) => request('POST', '/api/terminals/close', { id }),
+  },
+  git: {
+    status: () => request<GitStatus>('GET', '/api/git/status'),
+    diff: (path: string) => request<{ diff: string }>('GET', `/api/git/diff?path=${encodeURIComponent(path)}`),
+    commit: (paths: string[], message: string) => request('POST', '/api/git/commit', { paths, message }),
   },
 };
 
