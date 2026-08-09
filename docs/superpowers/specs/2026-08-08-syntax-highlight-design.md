@@ -27,11 +27,13 @@ describeLanguage(path: string): LanguageDescription | null   // 纯同步匹配�
 loadLanguage(desc: LanguageDescription): Promise<Extension | null>  // 调 desc.load() 动态 import
 ```
 
-匹配顺序（遍历 language-data 的 `languages` 数组）：
+匹配顺序（遍历 language-data 的 `languages` 数组，`find` 首个命中）：
 
-1. **扩展名**：取路径最后一段的扩展名（含点，`.ts`/`.jsx`/`.md`…），与 `desc.extensions`（`readonly string[]`，已确认带点格式）匹配
-2. **精确文件名**：扩展名未命中时，用路径 basename 测 `desc.filename`（`RegExp | undefined`，已确认）——覆盖 `Dockerfile`、`Makefile`、`package.json` 等无扩展名/特殊文件
+1. **扩展名**：取路径最后一段的扩展名（**不带点**，如 `ts`/`tsx`/`md`，小写化），与 `desc.extensions`（`readonly string[]`，**已验证为不带点格式**，如 `["ts","mts","cts"]`）匹配
+2. **精确文件名**：扩展名未命中时，用路径 basename 测 `desc.filename`（`RegExp | undefined`，锚定 `^…$`）——覆盖 `Dockerfile`（→Dockerfile）、`Jenkinsfile`（→Groovy）、`CMakeLists.txt`（→CMake）、`Gemfile`/`Rakefile`（→Ruby）、`nginx.conf`（→Nginx）等。**`Makefile` 未被覆盖 → 纯文本**
 3. 均未命中 → `null`（纯文本降级）
+
+> 注：`package.json` 这类「点开头点结尾」无扩展名特例实为有扩展名（`.json`）→ 命中 JSON 条目，无需 filename 特判。
 
 `loadLanguage` 内 `desc.load()` 返回 `Promise<LanguageSupport>`，LanguageSupport 即 `Extension`，可直接进 Compartment。失败（解析器 import 异常）→ 返回 `null`，静默降级纯文本。
 
@@ -65,9 +67,10 @@ loadLanguage(desc: LanguageDescription): Promise<Extension | null>  // 调 desc.
 
 **language.ts（纯函数，node --test 可测，不触 DOM）**：
 
-- 扩展名匹配：`.ts` → TypeScript、`.tsx` → TSX、`.md` → Markdown、`.py` → Python
-- 精确文件名：`Dockerfile`、`Makefile`、`package.json` → 对应语言（匹配逻辑用回归样例锁住）
-- 未知扩展名/无扩展名非特殊文件 → `null`
+- 扩展名匹配（断言返回 desc 的 `name`）：`a.ts` → TypeScript、`a.tsx` → TSX、`a.js` → JavaScript、`a.md` → Markdown、`a.py` → Python、`a.json` → JSON；大小写不敏感（`a.TS` → TypeScript）
+- 精确文件名：`Dockerfile` → Dockerfile、`Jenkinsfile` → Groovy、`CMakeLists.txt` → CMake、`Gemfile` → Ruby、`nginx.conf` → Nginx
+- 含目录路径：`dir/deep/a.tsx` → TSX（basename 提取）
+- 降级：`Makefile` → `null`、`a.xyzabc` → `null`、`.gitignore` → `null`
 - `loadLanguage` 不单测（内部动态 import 依赖 vite 环境），只在语言匹配测试中验证返回的 desc 非空
 
 **编辑器层 setLanguage**：DOM 依赖，真机/手动验证（切换文件高亮正确、快速切换无串色；与现有 ro-mode-effect 测试同款定位）。
