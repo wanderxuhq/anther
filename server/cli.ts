@@ -5,6 +5,8 @@ import { FileStore } from './files.ts';
 import { TabStore } from './tab-store.ts';
 import { registerFsRoutes } from './routes/fs.ts';
 import { registerTabsRoutes } from './routes/tabs.ts';
+import { TerminalManager } from './terminal.ts';
+import { registerTerminalRoutes } from './routes/terminal.ts';
 
 export type CliArgs = { dir: string; port: number };
 
@@ -43,8 +45,10 @@ export async function main(argv: string[]): Promise<void> {
   const tabs = new TabStore();
 
   const http = new HttpServer({ staticDir: staticDirFor(import.meta.url) });
+  const terminals = new TerminalManager(dir);
   registerFsRoutes(http, files);
   registerTabsRoutes(http, tabs);
+  registerTerminalRoutes(http, terminals);
 
   await http.listen(port, '0.0.0.0');
   console.log(`anther 已启动：http://localhost:${port}`);
