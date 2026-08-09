@@ -8,16 +8,16 @@ A mobile-first, browser-based code viewer/editor. View and edit code on your ser
 
 ```bash
 # Run directly without installing (auto-downloads)
-npx anther
+npx @wanderxuhq/anther
 
 # With a working directory
-npx anther /path/to/project
+npx @wanderxuhq/anther /path/to/project
 
 # Custom port
-npx anther /path/to/project --port 8080
+npx @wanderxuhq/anther /path/to/project --port 8080
 
 # Or install globally
-npm i -g anther
+npm i -g @wanderxuhq/anther
 anther /path/to/project
 ```
 

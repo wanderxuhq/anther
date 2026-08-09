@@ -8,16 +8,16 @@
 
 ```bash
 # 免安装直接跑（自动下载）
-npx anther
+npx @wanderxuhq/anther
 
 # 指定工作目录
-npx anther /path/to/project
+npx @wanderxuhq/anther /path/to/project
 
 # 换端口
-npx anther /path/to/project --port 8080
+npx @wanderxuhq/anther /path/to/project --port 8080
 
 # 或全局安装
-npm i -g anther
+npm i -g @wanderxuhq/anther
 anther /path/to/project
 ```
 

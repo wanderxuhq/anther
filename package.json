@@ -1,12 +1,15 @@
 {
-  "name": "anther",
+  "name": "@wanderxuhq/anther",
   "version": "0.1.0",
-  "description": "移动优先的浏览器代码查看/编辑工具",
+  "description": "Mobile-first, browser-based code viewer/editor",
   "license": "ISC",
   "author": "wanderxuhq",
   "type": "module",
   "bin": {
     "anther": "./bin/anther.js"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "files": [
     "dist",
