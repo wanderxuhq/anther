@@ -79,6 +79,11 @@ export const api = {
     restore: (paths: string[]) => request<{ restored: boolean }>('PUT', '/api/tabs/restore', { paths }),
     heartbeat: () => request('PUT', '/api/heartbeat'),
   },
+  terminals: {
+    list: () => request<{ terminals: TerminalInfo[] }>('GET', '/api/terminals'),
+    create: () => request<TerminalInfo>('POST', '/api/terminals'),
+    close: (id: string) => request('POST', '/api/terminals/close', { id }),
+  },
 };
 
 export type DirEntry = { name: string; type: 'file' | 'dir' | 'link'; size: number; mtime: number };
@@ -152,4 +157,62 @@ export function searchStream(
     }
   })();
   return { cancel: () => ctrl.abort() };
+}
+
+export type TerminalInfo = { id: string; name: string };
+
+export type TerminalHandlers = {
+  /** 每次 WS 打开（含重连）：前端清屏，等服务端历史重放重建画面 */
+  onOpen: () => void;
+  onOutput: (data: string) => void;
+  /** 终端进程退出 / id 失效（4404）→ 前端移除标签 */
+  onExit: (code: number) => void;
+};
+
+export type TerminalSocket = {
+  input: (data: string) => void;
+  resize: (cols: number, rows: number) => void;
+  dispose: () => void;
+};
+
+/**
+ * 终端 WS 客户端：自动重连（指数退避 500ms → 8s）。浏览器 WebSocket 不能带
+ * 自定义 header → userId 走 ?user= 查询参数（服务端与 x-user-id 同值校验）。
+ * 收到 exit 帧或服务端 4404（终端不存在/被删）→ 不再重连，回调 onExit。
+ */
+export function connectTerminal(id: string, handlers: TerminalHandlers): TerminalSocket {
+  const user = getUserId();
+  let ws: WebSocket | null = null;
+  let disposed = false;
+  let dead = false;
+  let attempt = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const open = () => {
+    if (disposed || dead) return;
+    ws = new WebSocket(`/api/terminal?term=${encodeURIComponent(id)}&user=${encodeURIComponent(user)}`);
+    ws.onopen = () => { attempt = 0; handlers.onOpen(); };
+    ws.onmessage = (e) => {
+      let msg: { type?: string; data?: string; code?: number };
+      try { msg = JSON.parse(String(e.data)); } catch { return; }
+      if (msg.type === 'output' && typeof msg.data === 'string') handlers.onOutput(msg.data);
+      else if (msg.type === 'exit') { dead = true; handlers.onExit(typeof msg.code === 'number' ? msg.code : 0); }
+    };
+    ws.onclose = (e) => {
+      ws = null;
+      if (disposed || dead) return;
+      if (e.code === 4404) { dead = true; handlers.onExit(1); return; } // 终端已不存在/被删
+      const delay = Math.min(500 * 2 ** attempt, 8000);
+      attempt += 1;
+      timer = setTimeout(open, delay);
+    };
+    ws.onerror = () => { /* 由 onclose 接管重连 */ };
+  };
+  open();
+
+  return {
+    input: (data) => ws?.send(JSON.stringify({ type: 'input', data })),
+    resize: (cols, rows) => ws?.send(JSON.stringify({ type: 'resize', cols, rows })),
+    dispose: () => { disposed = true; clearTimeout(timer); ws?.close(); },
+  };
 }
