@@ -1,9 +1,12 @@
 import { createSignal, createEffect, For, Show, onCleanup } from 'solid-js';
 import { views } from './views/registry.tsx';
 import { TerminalView } from './views/terminal.tsx';
+import { GitView } from './views/git.tsx';
+import { GitDiffView } from './views/git-diff.tsx';
 import { api } from './api.ts';
 import {
-  activeTab, currentTabId, setCurrentTabId, openTerminal, // currentFile 等照旧
+  activeTab, currentTabId, setCurrentTabId, openTerminal,
+  openGit,
   currentFile, roMode, setRoMode, pushState, fontScale,
   pendingGoto, setPendingGoto, docLoadedPath, setDocLoadedPath,
   editorHandle, setEditorHandle,
@@ -35,14 +38,22 @@ export function App() {
   const [editorEl, setEditorEl] = createSignal<HTMLDivElement>();
 
   const activeTabIsTerminal = () => activeTab()?.kind === 'terminal';
+  // 主区域二选一：文件编辑器 ↔ 终端 / git / git-diff 标签视图
+  const activeKind = () => activeTab()?.kind ?? null;
+  // git-diff 前台时其 diff 文件路径（TS 收窄：单次读 activeTab() 再分支）
+  const activeGitDiffPath = (): string | null => {
+    const tab = activeTab();
+    return tab?.kind === 'git-diff' ? tab.path : null;
+  };
 
-  // toolbar 路径文案：终端前台显示终端名，否则当前文件路径（未打开 → 提示）。
-  // 单次读 activeTab() 再分支，规避 TS 对两次调用不做联合类型收窄的限制
+  // toolbar 路径文案：文件路径 / 终端名 / 'Git' / diff 文件路径（未打开 → 提示）
   const toolbarPathLabel = () => {
     const tab = activeTab();
-    return tab?.kind === 'terminal'
-      ? tab.name
-      : (currentFile() ?? <span class="toolbar-path-hint">{t('noFileOpen')}</span>);
+    if (!tab) return <span class="toolbar-path-hint">{t('noFileOpen')}</span>;
+    if (tab.kind === 'terminal') return tab.name;
+    if (tab.kind === 'git') return t('view.git');
+    if (tab.kind === 'git-diff') return tab.path;
+    return currentFile() ?? <span class="toolbar-path-hint">{t('noFileOpen')}</span>;
   };
 
   async function handleNewTerminal() {
@@ -262,10 +273,16 @@ export function App() {
         <div
           ref={setEditorEl}
           class="editor-container"
-          style={activeTabIsTerminal() ? 'display:none' : undefined}
+          style={activeKind() === 'file' || activeKind() === null ? undefined : 'display:none'}
         />
-        <Show when={activeTabIsTerminal()}>
+        <Show when={activeKind() === 'terminal'}>
           <TerminalView id={currentTabId()!} />
+        </Show>
+        <Show when={activeKind() === 'git'}>
+          <GitView />
+        </Show>
+        <Show when={activeGitDiffPath()}>
+          <GitDiffView path={activeGitDiffPath()!} />
         </Show>
       </main>
 
@@ -286,6 +303,9 @@ export function App() {
             </For>
             <button class="view-tab" onClick={() => void handleNewTerminal()} title={t('newTerminal')}>
               ➕
+            </button>
+            <button class="view-tab" onClick={() => void openGit()} title={t('view.git')}>
+              🕘
             </button>
           </nav>
           <div class="drawer-content">
