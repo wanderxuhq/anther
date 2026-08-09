@@ -81,7 +81,7 @@ export const api = {
   },
   terminals: {
     list: () => request<{ terminals: TerminalInfo[] }>('GET', '/api/terminals'),
-    create: () => request<TerminalInfo>('POST', '/api/terminals'),
+    create: (name: string) => request<TerminalInfo>('POST', '/api/terminals', { name }),
     close: (id: string) => request('POST', '/api/terminals/close', { id }),
   },
 };

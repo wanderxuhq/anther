@@ -16,11 +16,15 @@ const userId = (req: import('node:http').IncomingMessage): string => {
 const WS_FORBIDDEN = 4404; // 应用自定义关闭码：终端不存在/不属于该用户
 
 export function registerTerminalRoutes(http: HttpServer, terminals: TerminalManager): void {
-  http.post('/api/terminals', async (req) => {
+  http.post('/api/terminals', async (req, body) => {
+    // name 由前端本地生成（含本地化）后随请求传入；服务端不命名、不兜底
+    if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
+    const name = (body as { name?: unknown }).name;
+    if (typeof name !== 'string') throw new HttpError(400, 'missing name');
     try {
-      return await terminals.create(userId(req));
+      return await terminals.create(userId(req), name);
     } catch (e) {
-      throw new HttpError(400, (e as Error).message || '终端启动失败');
+      throw new HttpError(400, (e as Error).message || 'failed to start terminal');
     }
   });
 

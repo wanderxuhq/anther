@@ -1,6 +1,7 @@
 // web/src/views/tabs.tsx
 import { For, Show } from 'solid-js';
 import { tabs, currentTabId, switchTab, closeTab, closeTerminal } from '../stores.ts';
+import { t } from '../i18n.ts';
 
 export function TabsView() {
   return (
@@ -8,20 +9,20 @@ export function TabsView() {
       <Show when={tabs().length === 0} fallback={
         <ul class="tab-list">
           <For each={tabs()}>
-            {(t) => (
-              <li class={`tab-row ${currentTabId() === t.id ? 'active' : ''}`}>
-                <span class="tab-icon">{t.kind === 'file' ? '📄' : '🖥'}</span>
+            {(tab) => (
+              <li class={`tab-row ${currentTabId() === tab.id ? 'active' : ''}`}>
+                <span class="tab-icon">{tab.kind === 'file' ? '📄' : '🖥'}</span>
                 <span
                   class="tab-name"
-                  onClick={() => void switchTab(t.id)}
-                  title={t.kind === 'file' ? t.path : t.id}
+                  onClick={() => void switchTab(tab.id)}
+                  title={tab.kind === 'file' ? tab.path : tab.id}
                 >
-                  {t.kind === 'file' ? t.path.split('/').pop() : t.name}
+                  {tab.kind === 'file' ? tab.path.split('/').pop() : tab.name}
                 </span>
                 <button
                   class="tab-close"
-                  onClick={() => void (t.kind === 'file' ? closeTab(t.path) : closeTerminal(t.id))}
-                  title="关闭"
+                  onClick={() => void (tab.kind === 'file' ? closeTab(tab.path) : closeTerminal(tab.id))}
+                  title={t('close')}
                 >
                   ×
                 </button>
@@ -30,7 +31,7 @@ export function TabsView() {
           </For>
         </ul>
       }>
-        <div class="view-placeholder">暂无标签，从文件树打开文件</div>
+        <div class="view-placeholder">{t('tabs.empty')}</div>
       </Show>
     </div>
   );

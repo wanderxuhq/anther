@@ -7,6 +7,7 @@ import {
   addFileTab, removeTabById, fileTabPaths, currentFilePath, nextActiveTabId,
   terminalExists, type TabItem,
 } from './tab-model.ts';
+import { t } from './i18n.ts';
 
 export const [tabs, setTabs] = createSignal<TabItem[]>([]);
 export const [currentTabId, setCurrentTabId] = createSignal<string | null>(null);
@@ -29,6 +30,10 @@ export const [docLoadedPath, setDocLoadedPath] = createSignal<string | null>(nul
 export const [editorHandle, setEditorHandle] = createSignal<EditorHandle | null>(null);
 
 let started = false;
+
+// 终端名完全本地生成：计数种子 = startSync 时服务端存活的终端数（服务端内存态、
+// 重启清零）。只增不减：进程退出标签移除，但序号不复用，存活终端内编号不重复。
+let termCount = 0;
 
 /** 将当前状态写入 URL：当前标签是文件 → path 参数；终端 → term 参数（互斥） */
 export function pushState(): void {
@@ -87,6 +92,7 @@ export async function startSync(): Promise<void> {
   try {
     const { terminals } = await api.terminals.list();
     termTabs = terminals.map((t) => ({ kind: 'terminal', id: t.id, name: t.name }));
+    termCount = terminals.length; // 种子：后续新建终端从存活数继续编号
   } catch { /* 静默 */ }
   setTabs([...fileTabs, ...termTabs]);
 
@@ -164,9 +170,10 @@ export async function switchTab(id: string): Promise<void> {
   }
 }
 
-/** 新建终端（活动栏 ➕）：创建 → 加标签 → 设为前台。失败抛错（调用方 Toast） */
+/** 新建终端（活动栏 ➕）：本地生成本地化名 → 创建 → 加标签 → 设为前台。失败抛错（调用方 Toast） */
 export async function openTerminal(): Promise<TerminalInfo> {
-  const info = await api.terminals.create();
+  const name = t('terminal.name', { n: ++termCount });
+  const info = await api.terminals.create(name);
   setTabs((prev) => [...prev, { kind: 'terminal', id: info.id, name: info.name }]);
   setCurrentTabId(info.id);
   pushState();

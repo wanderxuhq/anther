@@ -10,6 +10,7 @@ import {
 } from './stores.ts';
 import { createEditor, type EditorHandle } from './editor/index.ts';
 import { describeLanguage, loadLanguage } from './editor/language.ts';
+import { t } from './i18n.ts';
 
 const NARROW_QUERY = '(max-width: 599px)';
 
@@ -38,17 +39,17 @@ export function App() {
   // toolbar 路径文案：终端前台显示终端名，否则当前文件路径（未打开 → 提示）。
   // 单次读 activeTab() 再分支，规避 TS 对两次调用不做联合类型收窄的限制
   const toolbarPathLabel = () => {
-    const t = activeTab();
-    return t?.kind === 'terminal'
-      ? t.name
-      : (currentFile() ?? <span class="toolbar-path-hint">未打开文件</span>);
+    const tab = activeTab();
+    return tab?.kind === 'terminal'
+      ? tab.name
+      : (currentFile() ?? <span class="toolbar-path-hint">{t('noFileOpen')}</span>);
   };
 
   async function handleNewTerminal() {
     try {
       await openTerminal();
     } catch (e) {
-      showToast(`新建终端失败：${(e as Error).message}`, 'error');
+      showToast(t('toast.terminalCreateFail', { msg: (e as Error).message }), 'error');
     }
   }
 
@@ -94,14 +95,14 @@ export function App() {
         await api.writeFile(path, text, ro !== undefined ? ro : roMode());
         if (saveFailed) {
           saveFailed = false;
-          showToast('已恢复保存', 'success');
+          showToast(t('toast.restored'), 'success');
         }
         return;
       } catch (e) {
         if (attempt >= 2) {
           // 已失败 3 次（attempt 0/1/2，间隔 1s）
           saveFailed = true;
-          showToast(`保存失败：${(e as Error).message}`, 'error');
+          showToast(t('toast.saveFail', { msg: (e as Error).message }), 'error');
           return;
         }
         await new Promise((r) => setTimeout(r, 1000));
@@ -150,7 +151,7 @@ export function App() {
       // 响应到达时当前文件已切换 / 已有更新的加载请求 → 丢弃过期响应
       if (path !== currentFile() || seq !== loadSeq) return;
       // spec §5.3：非 UTF-8 文件仍可浏览，但保存仅支持 UTF-8 → Toast 提示
-      if (!utf8) showToast('非 UTF-8 文件，仅支持 UTF-8 保存', 'error');
+      if (!utf8) showToast(t('toast.notUtf8'), 'error');
       if (!editor) {
         editor = createEditor(el, {
           initialDoc: content,
@@ -175,7 +176,7 @@ export function App() {
       // 过期请求的失败不打扰当前文件（竞态 guard 同规则）
       if (path !== currentFile() || seq !== loadSeq) return;
       // spec §8：Toast + 降级到文件树（清空当前文件 → 编辑器清空，用户回到文件树）
-      showToast(`打开失败：${(e as Error).message}`, 'error');
+      showToast(t('toast.openFail', { msg: (e as Error).message }), 'error');
       setCurrentTabId(null);
       pushState();
       setDocLoadedPath(null);
@@ -235,10 +236,10 @@ export function App() {
   return (
     <div class={`app ${isNarrow() ? 'narrow' : 'wide'}`}>
       <header class="toolbar">
-        <button class="icon-btn" onClick={() => setDrawerOpen(!drawerOpen())} title="菜单">
+        <button class="icon-btn" onClick={() => setDrawerOpen(!drawerOpen())} title={t('menu')}>
           ☰
         </button>
-        <button class="icon-btn" onClick={() => editorHandle()?.openSearch()} title="查找" disabled={!currentFile()}>
+        <button class="icon-btn" onClick={() => editorHandle()?.openSearch()} title={t('find')} disabled={!currentFile()}>
           🔍
         </button>
         <span class="toolbar-path">{toolbarPathLabel()}</span>
@@ -251,7 +252,7 @@ export function App() {
             setRoMode(next);
             pushState();
           }}
-          title={roMode() ? '切换为编辑模式' : '切换为只读模式'}
+          title={roMode() ? t('switchEdit') : t('switchReadonly')}
         >
           ✎
         </button>
@@ -277,13 +278,13 @@ export function App() {
                 <button
                   class={activeView() === v.id ? 'view-tab active' : 'view-tab'}
                   onClick={() => setActiveView(v.id)}
-                  title={v.title}
+                  title={v.title()}
                 >
                   {v.icon}
                 </button>
               )}
             </For>
-            <button class="view-tab" onClick={() => void handleNewTerminal()} title="新建终端">
+            <button class="view-tab" onClick={() => void handleNewTerminal()} title={t('newTerminal')}>
               ➕
             </button>
           </nav>

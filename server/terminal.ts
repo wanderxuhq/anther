@@ -55,16 +55,14 @@ export class Terminal extends EventEmitter {
 
 export class TerminalManager {
   private byUser = new Map<string, Map<string, Terminal>>();
-  private counters = new Map<string, number>();
 
   constructor(private cwd = process.cwd()) {}
 
-  async create(userId: string): Promise<TerminalInfo> {
+  // name 完全由前端本地生成（含本地化），服务端诚实接收、原样存储与返回，不做任何命名。
+  async create(userId: string, name: string): Promise<TerminalInfo> {
     const pty = new PtySession(this.cwd);
     const id = `t_${randomBytes(6).toString('hex')}`;
-    const n = (this.counters.get(userId) ?? 0) + 1;
-    this.counters.set(userId, n);
-    const term = new Terminal(id, `终端 ${n}`, pty);
+    const term = new Terminal(id, name, pty);
     this.map(userId).set(id, term);
     pty.on('exit', (code) => {
       this.map(userId).delete(id); // 进程退出 → 自动移除

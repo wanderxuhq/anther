@@ -5,6 +5,7 @@ import { createSignal, For, onCleanup, Show } from 'solid-js';
 import { searchStream, type SearchFile } from '../api.ts';
 import { gotoLine0 } from '../stores.ts';
 import { splitByQuery } from './search-util.ts';
+import { t } from '../i18n.ts';
 
 const DEFAULT_EXCLUDE = '.git,node_modules,dist';
 
@@ -88,7 +89,7 @@ export function SearchView() {
           ref={inputEl}
           class="search-query"
           type="search"
-          placeholder="搜索文件内容"
+          placeholder={t('search.placeholder')}
           value={query()}
           onInput={(e) => { setQuery(e.currentTarget.value); scheduleSearch(); }}
         />
@@ -99,12 +100,12 @@ export function SearchView() {
               checked={caseSensitive()}
               onChange={(e) => { setCaseSensitive(e.currentTarget.checked); runSearch(); }}
             />
-            Aa 大小写
+            {t('search.caseSensitive')}
           </label>
           <input
             class="search-exclude"
             type="text"
-            placeholder="排除目录（逗号分隔）"
+            placeholder={t('search.excludePlaceholder')}
             value={exclude()}
             onInput={(e) => { setExclude(e.currentTarget.value); scheduleSearch(); }}
           />
@@ -112,17 +113,17 @@ export function SearchView() {
       </div>
       <div class="search-status">
         <Show when={searching()}>
-          搜索中…（<button class="link-btn" onClick={() => { ++seq; cancelCurrent?.(); setSearching(false); }}>取消</button>）
+          {t('search.searching')}（<button class="link-btn" onClick={() => { ++seq; cancelCurrent?.(); setSearching(false); }}>{t('search.cancel')}</button>）
         </Show>
         <Show when={status() && !searching()}>
-          {status()!.fileCount} 个文件 / {status()!.matchCount} 处匹配
-          <Show when={truncated()}><span class="search-truncated">（结果过多，请细化关键词）</span></Show>
+          {t('search.stats', { files: status()!.fileCount, matches: status()!.matchCount })}
+          <Show when={truncated()}><span class="search-truncated">{t('search.truncated')}</span></Show>
         </Show>
         <Show when={!query().trim() && !searching() && !error()}>
-          输入关键词开始搜索
+          {t('search.hint')}
         </Show>
         <Show when={query().trim() && !searching() && !error() && status() && status()!.matchCount === 0}>
-          无结果
+          {t('search.noResults')}
         </Show>
       </div>
       <div class="search-results">

@@ -15,6 +15,7 @@ import { api, type DirEntry } from '../api.ts';
 import { currentFile, openTab, closeTab, roMode, tabs } from '../stores.ts';
 import { parentOf } from '../paths.ts';
 import { NameDialog, type DialogState } from '../components/name-dialog.tsx';
+import { t } from '../i18n.ts';
 
 type DirState = { expanded: boolean; loaded?: DirEntry[]; loading?: boolean };
 
@@ -49,7 +50,7 @@ async function ensureRoot(): Promise<void> {
 
 // 只读守卫：写操作一律先查 roMode（服务端仍是最终裁决，403 时 Toast 服务器文案）
 function ensureWritable(): boolean {
-  if (roMode()) { setError('只读模式：切换编辑模式后再修改文件'); return false; }
+  if (roMode()) { setError(t('filetree.roHint')); return false; }
   return true;
 }
 
@@ -70,9 +71,9 @@ function showMenu(target: MenuTarget) {
 function beginCreate(kind: 'file' | 'dir', target: MenuTarget) {
   const base = target.kind === 'dir' ? target.path : parentOf(target.path);
   setDialog({
-    title: kind === 'file' ? '新建文件' : '新建目录',
+    title: kind === 'file' ? t('filetree.newFile') : t('filetree.newDir'),
     initial: '',
-    submitLabel: '创建',
+    submitLabel: t('filetree.create'),
     onSubmit: (name) => void doCreate(kind, base, name),
   });
 }
@@ -98,9 +99,9 @@ async function doCreate(kind: 'file' | 'dir', base: string, name: string) {
 
 function beginRename(target: MenuTarget) {
   setDialog({
-    title: '重命名',
+    title: t('filetree.rename'),
     initial: target.path.split('/').pop() ?? '',
-    submitLabel: '重命名',
+    submitLabel: t('filetree.rename'),
     onSubmit: (name) => void doRename(target, name),
   });
 }
@@ -192,17 +193,17 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
         <div class="tree-row-actions">
           <button
             class="icon-btn row-menu-btn"
-            title="操作"
+            title={t('filetree.actions')}
             onClick={(e) => { e.stopPropagation(); showMenu({ path: props.path, kind: isDir ? 'dir' : 'file' }); }}
           >⋯</button>
           <Show when={menu()?.path === props.path}>
             <div class="row-menu" onClick={(e) => e.stopPropagation()}>
-              <button class="menu-item" onClick={() => beginCreate('file', menu()!)}>新建文件</button>
-              <button class="menu-item" onClick={() => beginCreate('dir', menu()!)}>新建目录</button>
+              <button class="menu-item" onClick={() => beginCreate('file', menu()!)}>{t('filetree.newFile')}</button>
+              <button class="menu-item" onClick={() => beginCreate('dir', menu()!)}>{t('filetree.newDir')}</button>
               <Show when={menu()?.kind !== 'root'}>
-                <button class="menu-item" onClick={() => beginRename(menu()!)}>重命名</button>
+                <button class="menu-item" onClick={() => beginRename(menu()!)}>{t('filetree.rename')}</button>
                 <button class={`menu-item ${confirmDel() === props.path ? 'danger' : ''}`} onClick={() => onDeleteTap(menu()!)}>
-                  {confirmDel() === props.path ? '确认删除？' : '删除'}
+                  {confirmDel() === props.path ? t('filetree.confirmDelete') : t('filetree.delete')}
                 </button>
               </Show>
             </div>
@@ -231,17 +232,17 @@ export function FileTreeView() {
         <div class="error-banner">{error()}</div>
       </Show>
       <div class="filetree-toolbar">
-        <button class="icon-btn" onClick={() => showMenu({ path: '.', kind: 'root' })}>＋ 新建</button>
+        <button class="icon-btn" onClick={() => showMenu({ path: '.', kind: 'root' })}>＋ {t('filetree.new')}</button>
         <Show when={menu()?.kind === 'root'}>
           <div class="row-menu" onClick={(e) => e.stopPropagation()}>
-            <button class="menu-item" onClick={() => beginCreate('file', menu()!)}>新建文件</button>
-            <button class="menu-item" onClick={() => beginCreate('dir', menu()!)}>新建目录</button>
+            <button class="menu-item" onClick={() => beginCreate('file', menu()!)}>{t('filetree.newFile')}</button>
+            <button class="menu-item" onClick={() => beginCreate('dir', menu()!)}>{t('filetree.newDir')}</button>
           </div>
         </Show>
       </div>
       <Show
         when={nodes['.']?.loaded}
-        fallback={<div class="view-placeholder">{error() ?? '加载中…'}</div>}
+        fallback={<div class="view-placeholder">{error() ?? t('loading')}</div>}
       >
         <For each={nodes['.']?.loaded ?? []}>
           {(child) => <TreeNode path={child.name} entry={child} />}

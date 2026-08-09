@@ -52,7 +52,7 @@ async function call(method: string, url: string, body?: unknown, user = 'u1') {
 }
 
 async function createTerminal(user = 'u1') {
-  const res = await call('POST', '/api/terminals', undefined, user);
+  const res = await call('POST', '/api/terminals', { name: 'Terminal 1' }, user);
   assert.equal(res.status, 200);
   return (await res.json()) as { id: string; name: string };
 }
@@ -60,10 +60,15 @@ async function createTerminal(user = 'u1') {
 test('POST 创建 → GET 列表（每用户隔离）', async () => {
   const info = await createTerminal('u1');
   assert.match(info.id, /^t_/);
+  assert.equal(info.name, 'Terminal 1'); // 名字原样接收返回，服务端不命名
   const mine = (await (await call('GET', '/api/terminals', undefined, 'u1')).json()).terminals;
   assert.deepEqual(mine.map((t: { id: string }) => t.id), [info.id]);
   const other = (await (await call('GET', '/api/terminals', undefined, 'u2')).json()).terminals;
   assert.deepEqual(other, []);
+});
+
+test('POST 缺 name → 400', async () => {
+  assert.equal((await call('POST', '/api/terminals', {}, 'u1')).status, 400);
 });
 
 test('close 他人终端 → 404；缺 id → 400', async () => {

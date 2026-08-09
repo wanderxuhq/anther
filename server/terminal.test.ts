@@ -12,32 +12,32 @@ let m: TerminalManager;
 beforeEach(() => { m = new TerminalManager(cwd); });
 afterEach(async () => { await m.closeAll(); });
 
-test('create：id 为 t_ 前缀、每用户计数命名、列表按用户隔离', async () => {
-  const a = await m.create('u1');
-  const b = await m.create('u1');
+test('create：id 为 t_ 前缀、name 原样接收、列表按用户隔离', async () => {
+  const a = await m.create('u1', 'Terminal 1');
+  const b = await m.create('u1', 'Terminal 2');
   assert.match(a.id, /^t_[0-9a-f]+$/);
   assert.notEqual(a.id, b.id);
   assert.equal(m.list('u1').length, 2);
   assert.equal(m.list('u2').length, 0);
-  assert.equal(m.list('u1')[0].name, '终端 1');
-  assert.equal(m.list('u1')[1].name, '终端 2');
+  assert.equal(m.list('u1')[0].name, 'Terminal 1');
+  assert.equal(m.list('u1')[1].name, 'Terminal 2');
 });
 
 test('get：跨用户不可见（所有权校验）', async () => {
-  const a = await m.create('u1');
+  const a = await m.create('u1', 'T');
   assert.ok(m.get('u1', a.id));
   assert.equal(m.get('u2', a.id), null);
 });
 
 test('close：杀进程并移出列表', async () => {
-  const a = await m.create('u1');
+  const a = await m.create('u1', 'T');
   await m.close('u1', a.id);
   assert.equal(m.get('u1', a.id), null);
   assert.equal(m.list('u1').length, 0);
 });
 
 test('bash 退出 → 自动移除 + exit 事件', async () => {
-  const a = await m.create('u1');
+  const a = await m.create('u1', 'T');
   const term = m.get('u1', a.id)!;
   const exited = new Promise<number>((r) => term.once('exit', r));
   term.write('exit\n');
@@ -47,7 +47,7 @@ test('bash 退出 → 自动移除 + exit 事件', async () => {
 });
 
 test('output：40ms 批处理把连续 data 合并成一次 output', async () => {
-  const a = await m.create('u1');
+  const a = await m.create('u1', 'T');
   const term = m.get('u1', a.id)!;
   const got: string[] = [];
   term.on('output', (b) => got.push(b));
@@ -59,7 +59,7 @@ test('output：40ms 批处理把连续 data 合并成一次 output', async () =>
 });
 
 test('replay：包含全部历史（供重连画面恢复）', async () => {
-  const a = await m.create('u1');
+  const a = await m.create('u1', 'T');
   const term = m.get('u1', a.id)!;
   term.pty.emit('data', 'alpha');
   term.pty.emit('data', 'beta');

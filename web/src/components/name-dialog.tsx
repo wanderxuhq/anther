@@ -3,6 +3,7 @@
 // spec §8：对话框仅用于「输入命名」这一主动操作；错误反馈一律 Toast，不在此处弹错。
 import { createSignal } from 'solid-js';
 import { isValidName } from '../paths.ts';
+import { t } from '../i18n.ts';
 
 export type DialogState = {
   title: string;          // 如「新建文件」「重命名」
@@ -36,7 +37,7 @@ export function NameDialog(props: {
           onInput={(e) => setName(e.currentTarget.value)}
         />
         <div class="dialog-actions">
-          <button type="button" class="icon-btn" onClick={props.onClose}>取消</button>
+          <button type="button" class="icon-btn" onClick={props.onClose}>{t('cancel')}</button>
           <button
             type="submit"
             class="icon-btn"
