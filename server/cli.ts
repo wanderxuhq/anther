@@ -69,11 +69,10 @@ export async function main(argv: string[]): Promise<void> {
   registerTerminalRoutes(http, terminals);
 
   await http.listen(port, '0.0.0.0');
-  console.log(`anther 已启动：http://localhost:${port}`);
+  console.log(`anther started: http://localhost:${port}`);
   const lan = lanIPv4();
-  if (lan) console.log(`局域网访问：http://${lan}:${port}`);
-  console.log(`根目录：${dir}`);
-  console.log('写入：前端切换编辑模式（ro=0）即可写，只读模式（ro=1）拒绝');
+  if (lan) console.log(`LAN access: http://${lan}:${port}`);
+  console.log(`Root directory: ${dir}`);
 }
 
 // 直接运行时（node server/cli.ts）启动服务器；被 import（如测试）时不执行
