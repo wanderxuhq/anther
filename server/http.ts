@@ -2,6 +2,8 @@
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { Duplex } from 'node:stream';
+import { WebSocketServer, type WebSocket } from 'ws';
 import { HttpError } from './http-error.ts';
 
 export type Handler = (
@@ -13,6 +15,12 @@ export type Handler = (
 export type SseHandler = (
   req: IncomingMessage,
   res: ServerResponse,
+  query: URLSearchParams,
+) => void | Promise<void>;
+
+export type WsHandler = (
+  ws: WebSocket,
+  req: IncomingMessage,
   query: URLSearchParams,
 ) => void | Promise<void>;
 
@@ -30,11 +38,24 @@ const MIME: Record<string, string> = {
 export class HttpServer {
   private routes = new Map<string, Map<string, Handler>>();
   private sseRoutes = new Map<string, SseHandler>();
+  private wsRoutes = new Map<string, WsHandler>();
+  private wss = new WebSocketServer({ noServer: true });
   private server = createServer((req, res) => void this.handle(req, res));
   private staticDir: string;
 
   constructor(opts: { staticDir: string }) {
     this.staticDir = opts.staticDir;
+    this.wss.on('connection', (ws, req) => {
+      const url = new URL(req.url ?? '/', 'http://localhost');
+      const h = this.wsRoutes.get(url.pathname);
+      if (h) void h(ws, req, url.searchParams);
+      else ws.close();
+    });
+    this.server.on('upgrade', (req, socket, head) => {
+      const url = new URL(req.url ?? '/', 'http://localhost');
+      if (!this.wsRoutes.has(url.pathname)) { socket.destroy(); return; }
+      this.wss.handleUpgrade(req, socket, head, (ws) => this.wss.emit('connection', ws, req));
+    });
   }
 
   get(pattern: string, h: Handler) { this.add('GET', pattern, h); }
@@ -42,6 +63,8 @@ export class HttpServer {
   post(pattern: string, h: Handler) { this.add('POST', pattern, h); }
 
   sse(pattern: string, h: SseHandler) { this.sseRoutes.set(pattern, h); }
+
+  ws(pattern: string, h: WsHandler) { this.wsRoutes.set(pattern, h); }
 
   private add(method: string, pattern: string, h: Handler) {
     if (!this.routes.has(method)) this.routes.set(method, new Map());
@@ -52,6 +75,8 @@ export class HttpServer {
     return new Promise<void>((resolve) => this.server.listen(port, host, resolve));
   }
   close() {
+    for (const c of this.wss.clients) c.close();
+    this.wss.close();
     return new Promise<void>((resolve, reject) =>
       this.server.close((e) => (e ? reject(e) : resolve())),
     );

@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { WebSocket } from 'ws';
 import { HttpServer } from './http.ts';
 import { FileStore } from './files.ts';
 import { TabStore } from './tab-store.ts';
@@ -22,6 +23,9 @@ beforeEach(async () => {
   server = new HttpServer({ staticDir: root });
   registerFsRoutes(server, new FileStore(root));
   registerTabsRoutes(server, new TabStore());
+  server.ws('/api/echo', (ws) => {
+    ws.on('message', (raw) => ws.send(raw));
+  });
   await server.listen(0, '127.0.0.1');
   base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 });
@@ -98,4 +102,26 @@ test('HEAD 请求：静态服务与 GET 同头但不含 body（curl -I、链接�
   assert.equal(res.headers.get('content-type'), 'text/html; charset=utf-8');
   assert.equal(res.headers.get('content-length'), String(Buffer.byteLength('<!doctype html><p>app</p>')));
   assert.equal(await res.text(), '');
+});
+
+test('ws 路由：echo 往返', async () => {
+  const port = (server.address() as { port: number }).port;
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/echo`);
+  const msg = await new Promise<string>((resolve, reject) => {
+    ws.on('open', () => ws.send('hello'));
+    ws.on('message', (d) => resolve(d.toString()));
+    ws.on('error', reject);
+  });
+  assert.equal(msg, 'hello');
+  ws.close();
+});
+
+test('ws 未注册路径：连接被拒（server destroy，非正常 1000）', async () => {
+  const port = (server.address() as { port: number }).port;
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/nope`);
+  const code = await new Promise<number>((resolve) => {
+    ws.on('close', (c) => resolve(c));
+    ws.on('error', () => resolve(1006)); // 握手期失败可能只发 error，close 不触发
+  });
+  assert.notEqual(code, 1000);
 });
