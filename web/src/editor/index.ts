@@ -10,13 +10,14 @@
 // 2. setDoc 用 setState 重建 state（而非 dispatch changes）：新 state 的 undo 历史
 //    为空，防止切换文件后 Ctrl+Z 把上一文件的旧内容写回新文件（配合本层的
 //    undo/redo 也算用户编辑、会触发 onChange 的设计，可避免旧内容被保存）。
-import { EditorState, Compartment, type Transaction } from '@codemirror/state';
+import { EditorState, Compartment, type Transaction, type Extension } from '@codemirror/state';
 import { search, openSearchPanel, closeSearchPanel } from '@codemirror/search';
 import { EditorView, basicSetup } from 'codemirror';
 
 export type EditorHandle = {
   setReadOnly(r: boolean): void;
   setDoc(doc: string): void;
+  setLanguage(ext: Extension | null): void;
   openSearch(): void;
   gotoLine(line0: number): void;
   destroy(): void;
@@ -29,6 +30,7 @@ export type EditorOptions = {
 };
 
 const editableCompartment = new Compartment();
+const languageCompartment = new Compartment();
 
 /**
  * 是否为「用户编辑」产生的事务。对已安装的 CodeMirror 包 grep 全量 userEvent
@@ -56,6 +58,7 @@ export function createEditor(container: HTMLElement, opts: EditorOptions): Edito
       doc,
       extensions: [
         basicSetup,
+        languageCompartment.of([]),
         search(),
         editableCompartment.of([
           // 两个 facet 一起设：EditorState.readOnly 供 undo/redo 等命令判定
@@ -108,6 +111,11 @@ export function createEditor(container: HTMLElement, opts: EditorOptions): Edito
       // makeState 的第二个参数是 readOnly；读 EditorView.editable 会把布尔值反相
       // （只读时 editable=false → 重建出可编辑 state）。改用 EditorState.readOnly。
       view.setState(makeState(doc, view.state.facet(EditorState.readOnly)));
+    },
+    setLanguage(ext: Extension | null) {
+      view.dispatch({
+        effects: languageCompartment.reconfigure(ext ? [ext] : []),
+      });
     },
     destroy() {
       view.destroy();
