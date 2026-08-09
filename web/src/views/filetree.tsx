@@ -12,7 +12,7 @@
 import { createSignal, For, Show, onCleanup } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { api, type DirEntry } from '../api.ts';
-import { currentFile, openTab, closeTab, setCurrentFile, pushState, roMode, tabs } from '../stores.ts';
+import { currentFile, openTab, closeTab, roMode, tabs } from '../stores.ts';
 import { parentOf } from '../paths.ts';
 import { NameDialog, type DialogState } from '../components/name-dialog.tsx';
 
@@ -113,13 +113,11 @@ async function doRename(target: MenuTarget, name: string) {
   try {
     await api.rename(target.path, to, roMode());
     await refreshParent(parentOf(target.path));
-    if (tabs().includes(target.path)) {
+    if (tabs().some((t) => t.kind === 'file' && t.path === target.path)) {
       // 级联走 stores 的 closeTab/openTab：封装了服务器调用 + 本地信号 + 快照 + pushState，
       // 直接调 api.tabs.close 会漏本地信号更新，旧路径残留标签列表
       await closeTab(target.path);
       await openTab(to);
-    } else if (currentFile() === target.path) {
-      setCurrentFile(to); pushState();
     }
     setError(null);
   } catch (e) { setError((e as Error).message); }
@@ -137,8 +135,7 @@ function onDeleteTap(target: MenuTarget) {
     try {
       await api.del(target.path, roMode());
       await refreshParent(parentOf(target.path));
-      if (currentFile() === target.path) { setCurrentFile(null); pushState(); }
-      if (tabs().includes(target.path)) await closeTab(target.path); // closeTab 含本地移除 + 快照 + pushState
+      if (tabs().some((t) => t.kind === 'file' && t.path === target.path)) await closeTab(target.path); // closeTab 含本地移除 + 快照 + pushState
       setError(null);
     } catch (e) { setError((e as Error).message); }
   })();

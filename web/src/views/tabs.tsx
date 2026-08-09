@@ -1,8 +1,6 @@
 // web/src/views/tabs.tsx
-// 标签列表视图：纵向列出已打开文件；当前文件高亮、点击切换（openTab）、行尾 × 关闭（closeTab）。
-// 服务器同步与 URL 更新由 stores.ts 的 openTab/closeTab 内部完成，视图层只做调用。
 import { For, Show } from 'solid-js';
-import { tabs, currentFile, openTab, closeTab } from '../stores.ts';
+import { tabs, currentTabId, switchTab, closeTab, closeTerminal } from '../stores.ts';
 
 export function TabsView() {
   return (
@@ -11,15 +9,20 @@ export function TabsView() {
         <ul class="tab-list">
           <For each={tabs()}>
             {(t) => (
-              <li class={`tab-row ${currentFile() === t ? 'active' : ''}`}>
+              <li class={`tab-row ${currentTabId() === t.id ? 'active' : ''}`}>
+                <span class="tab-icon">{t.kind === 'file' ? '📄' : '🖥'}</span>
                 <span
                   class="tab-name"
-                  onClick={() => void openTab(t)}
-                  title={t}
+                  onClick={() => void switchTab(t.id)}
+                  title={t.kind === 'file' ? t.path : t.id}
                 >
-                  {t.split('/').pop()}
+                  {t.kind === 'file' ? t.path.split('/').pop() : t.name}
                 </span>
-                <button class="tab-close" onClick={() => void closeTab(t)} title="关闭">
+                <button
+                  class="tab-close"
+                  onClick={() => void (t.kind === 'file' ? closeTab(t.path) : closeTerminal(t.id))}
+                  title="关闭"
+                >
                   ×
                 </button>
               </li>

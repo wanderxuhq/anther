@@ -1,8 +1,10 @@
 import { createSignal, createEffect, For, Show, onCleanup } from 'solid-js';
 import { views } from './views/registry.tsx';
+import { TerminalView } from './views/terminal.tsx';
 import { api } from './api.ts';
 import {
-  currentFile, roMode, setRoMode, setCurrentFile, pushState, fontScale,
+  activeTab, currentTabId, setCurrentTabId, openTerminal, // currentFile 等照旧
+  currentFile, roMode, setRoMode, pushState, fontScale,
   pendingGoto, setPendingGoto, docLoadedPath, setDocLoadedPath,
   editorHandle, setEditorHandle,
 } from './stores.ts';
@@ -30,6 +32,25 @@ export function App() {
   // 编辑器容器用信号持有：ref 回调（首帧 insert 时触发）会令下方 createEffect 重跑，
   // 天然消解「首帧 currentFile 已有值但容器未挂载」的竞态，无需 onMount 兜底。
   const [editorEl, setEditorEl] = createSignal<HTMLDivElement>();
+
+  const activeTabIsTerminal = () => activeTab()?.kind === 'terminal';
+
+  // toolbar 路径文案：终端前台显示终端名，否则当前文件路径（未打开 → 提示）。
+  // 单次读 activeTab() 再分支，规避 TS 对两次调用不做联合类型收窄的限制
+  const toolbarPathLabel = () => {
+    const t = activeTab();
+    return t?.kind === 'terminal'
+      ? t.name
+      : (currentFile() ?? <span class="toolbar-path-hint">未打开文件</span>);
+  };
+
+  async function handleNewTerminal() {
+    try {
+      await openTerminal();
+    } catch (e) {
+      showToast(`新建终端失败：${(e as Error).message}`, 'error');
+    }
+  }
 
   // 桌面端 Ctrl+Shift+F → 全局搜索（打开抽屉 + 切到搜索视图；SearchView 挂载时自动聚焦）
   const onKeyDown = (e: KeyboardEvent) => {
@@ -155,7 +176,7 @@ export function App() {
       if (path !== currentFile() || seq !== loadSeq) return;
       // spec §8：Toast + 降级到文件树（清空当前文件 → 编辑器清空，用户回到文件树）
       showToast(`打开失败：${(e as Error).message}`, 'error');
-      setCurrentFile(null);
+      setCurrentTabId(null);
       pushState();
       setDocLoadedPath(null);
     }
@@ -220,9 +241,7 @@ export function App() {
         <button class="icon-btn" onClick={() => editorHandle()?.openSearch()} title="查找" disabled={!currentFile()}>
           🔍
         </button>
-        <span class="toolbar-path">
-          {currentFile() ?? <span class="toolbar-path-hint">未打开文件</span>}
-        </span>
+        <span class="toolbar-path">{toolbarPathLabel()}</span>
         <button
           class={`icon-btn ${roMode() ? '' : 'active'}`}
           onClick={() => {
@@ -239,7 +258,14 @@ export function App() {
       </header>
 
       <main class="editor-area">
-        <div ref={setEditorEl} class="editor-container" />
+        <div
+          ref={setEditorEl}
+          class="editor-container"
+          style={activeTabIsTerminal() ? 'display:none' : undefined}
+        />
+        <Show when={activeTabIsTerminal()}>
+          <TerminalView id={currentTabId()!} />
+        </Show>
       </main>
 
       <Show when={drawerOpen() || !isNarrow()}>
@@ -257,6 +283,9 @@ export function App() {
                 </button>
               )}
             </For>
+            <button class="view-tab" onClick={() => void handleNewTerminal()} title="新建终端">
+              ➕
+            </button>
           </nav>
           <div class="drawer-content">
             <For each={views}>
