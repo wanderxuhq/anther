@@ -1,0 +1,42 @@
+// web/src/tab-model.test.ts
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  addFileTab, removeTabById, fileTabPaths, currentFilePath, nextActiveTabId, terminalExists,
+} from './tab-model.ts';
+import type { TabItem } from './tab-model.ts';
+
+const fileA: TabItem = { kind: 'file', id: 'a.ts', path: 'a.ts' };
+const fileB: TabItem = { kind: 'file', id: 'b.ts', path: 'b.ts' };
+const term1: TabItem = { kind: 'terminal', id: 't_1', name: '终端 1' };
+const term2: TabItem = { kind: 'terminal', id: 't_2', name: '终端 2' };
+
+test('addFileTab：已存在不重复，新文件尾插', () => {
+  assert.deepEqual(addFileTab([fileA, term1], 'a.ts'), [fileA, term1]);
+  assert.deepEqual(addFileTab([fileA], 'b.ts'), [fileA, fileB]);
+});
+
+test('removeTabById：按 id 移除任意 kind', () => {
+  assert.deepEqual(removeTabById([fileA, term1, fileB], 't_1'), [fileA, fileB]);
+});
+
+test('fileTabPaths：只取文件标签路径（供快照）', () => {
+  assert.deepEqual(fileTabPaths([fileA, term1, fileB]), ['a.ts', 'b.ts']);
+});
+
+test('currentFilePath：文件→path，终端/无→null', () => {
+  assert.equal(currentFilePath([fileA, term1], fileA.id), 'a.ts');
+  assert.equal(currentFilePath([fileA, term1], term1.id), null);
+  assert.equal(currentFilePath([fileA, term1], null), null);
+});
+
+test('nextActiveTabId：关当前后回退（文件优先，否则任意剩余，无则 null）', () => {
+  assert.equal(nextActiveTabId([fileA, term1], term1.id), fileA.id); // 关终端→回文件
+  assert.equal(nextActiveTabId([term1, term2], term1.id), term2.id); // 无文件→回另一终端
+  assert.equal(nextActiveTabId([fileA], fileA.id), null);            // 关唯一标签→空
+});
+
+test('terminalExists：按 id 判断终端标签', () => {
+  assert.equal(terminalExists([fileA, term1], 't_1'), true);
+  assert.equal(terminalExists([fileA, term1], 't_9'), false);
+});
