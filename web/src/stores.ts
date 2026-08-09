@@ -23,6 +23,7 @@ let started = false;
 export function pushState(): void {
   const state: UrlState = {
     path: currentFile(),
+    term: null,
     ro: roMode(),
     theme: theme(),
     fs: fontScale(),
