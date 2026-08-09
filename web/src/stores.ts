@@ -5,7 +5,7 @@ import { api, loadTabsSnapshot, saveTabsSnapshot, type TerminalInfo } from './ap
 import type { EditorHandle } from './editor/index.ts';
 import {
   addFileTab, removeTabById, fileTabPaths, currentFilePath, nextActiveTabId,
-  terminalExists, type TabItem,
+  terminalExists, addGitTab, addGitDiffTab, gitDiffTabId, GIT_TAB_ID, type TabItem,
 } from './tab-model.ts';
 import { t } from './i18n.ts';
 
@@ -188,6 +188,28 @@ export async function closeTerminal(id: string): Promise<void> {
 
 /** 前端移除终端标签（closeTerminal 成功后 / WS exit 帧 / 重连 4404 失效） */
 export function removeTerminalTab(id: string): void {
+  setTabs((prev) => removeTabById(prev, id));
+  if (currentTabId() === id) setCurrentTabId(nextActiveTabId(tabs(), id));
+  pushState();
+}
+
+/** 打开/复用 git 面板标签（单例，完全对齐 openTerminal 的"有则切过去、无则新建"模式）。
+ *  git 无服务端进程，纯前端状态；status 由 GitView 挂载时自行拉取。 */
+export function openGit(): void {
+  setTabs((prev) => addGitTab(prev));
+  setCurrentTabId(GIT_TAB_ID);
+  pushState(); // git 标签不写 URL：path/term 均为 null → URL 回 '/'，刷新不恢复
+}
+
+/** 打开/复用某文件的 git-diff 标签（id 固定 git-diff:<path>，同文件点第二次复用） */
+export function openGitDiff(path: string): void {
+  setTabs((prev) => addGitDiffTab(prev, path));
+  setCurrentTabId(gitDiffTabId(path));
+  pushState();
+}
+
+/** 关闭 git / git-diff 标签：只关视图不杀进程（git 无进程），回退到下一个标签 */
+export function closeGitTab(id: string): void {
   setTabs((prev) => removeTabById(prev, id));
   if (currentTabId() === id) setCurrentTabId(nextActiveTabId(tabs(), id));
   pushState();
