@@ -7,6 +7,7 @@ import {
   editorHandle, setEditorHandle,
 } from './stores.ts';
 import { createEditor, type EditorHandle } from './editor/index.ts';
+import { describeLanguage, loadLanguage } from './editor/language.ts';
 
 const NARROW_QUERY = '(max-width: 599px)';
 
@@ -141,6 +142,14 @@ export function App() {
       }
       editor.setReadOnly(roMode());
       setDocLoadedPath(path); // 搜索跳转消费 effect 的前提：文档确已加载
+      // 语法高亮：文档先显示纯文本，语言异步加载完成后补上（VS Code 同款体验）。
+      // 竞态守卫与 readFile 一致：响应到达时已切换文件/有更新加载请求 → 丢弃。
+      const desc = describeLanguage(path);
+      if (desc) {
+        const ext = await loadLanguage(desc);
+        if (path !== currentFile() || seq !== loadSeq) return;
+        editor?.setLanguage(ext);
+      }
     } catch (e) {
       // 过期请求的失败不打扰当前文件（竞态 guard 同规则）
       if (path !== currentFile() || seq !== loadSeq) return;
