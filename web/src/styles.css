@@ -23,7 +23,7 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 .icon-btn.active { background: var(--accent); color: white; }
 .icon-btn:disabled { opacity: .4; }
 
-.editor-area { min-height: 0; overflow: hidden; grid-column: 1; grid-row: 2; }
+.editor-area { min-height: 0; overflow: hidden; grid-column: 1; grid-row: 2; position: relative; }
 
 /* 编辑器容器（Task 13）：高度链撑满 editor-area，代码等宽字体 */
 .editor-container { height: 100%; min-height: 0; }
@@ -392,3 +392,25 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .history-truncated { padding: 6px 10px; color: var(--muted); font-size: 12px; }
+
+/* 悬浮补全按钮（Task 3）：editor-area 相对定位锚定，⌘ 手动触发 startCompletion */
+.complete-btn {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  color: white;
+  font-size: 20px;
+  line-height: 1;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  z-index: 5;
+  touch-action: manipulation;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.complete-btn:active { opacity: 0.8; }

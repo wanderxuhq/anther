@@ -10,6 +10,7 @@ const messages: Record<Lang, Record<string, string>> = {
   en: {
     menu: 'Menu',
     find: 'Find',
+    complete: 'Complete',
     switchEdit: 'Switch to edit mode',
     switchReadonly: 'Switch to read-only mode',
     newTerminal: 'New terminal',
@@ -77,6 +78,7 @@ const messages: Record<Lang, Record<string, string>> = {
   zh: {
     menu: '菜单',
     find: '查找',
+    complete: '补全',
     switchEdit: '切换为编辑模式',
     switchReadonly: '切换为只读模式',
     newTerminal: '新建终端',
