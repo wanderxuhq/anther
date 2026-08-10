@@ -356,6 +356,15 @@ export function App() {
           class="editor-container"
           style={activeKind() === 'file' || activeKind() === null ? undefined : 'display:none'}
         />
+        <Show when={currentFile() && !roMode()}>
+          <button
+            class="complete-btn"
+            onClick={() => editorHandle()?.startCompletion()}
+            title={t('complete')}
+          >
+            ⌘
+          </button>
+        </Show>
         <Show when={activeKind() === 'terminal'}>
           <TerminalView id={currentTabId()!} />
         </Show>
