@@ -6,6 +6,8 @@ import type { EditorHandle } from './editor/index.ts';
 import {
   addFileTab, removeTabById, fileTabPaths, currentFilePath, nextActiveTabId,
   terminalExists, addGitTab, addGitDiffTab, gitDiffTabId, GIT_TAB_ID, type TabItem,
+  addGitHistoryTab, addGitBranchTab, addGitCommitTab, gitCommitTabId,
+  GIT_HISTORY_TAB_ID, GIT_BRANCH_TAB_ID,
 } from './tab-model.ts';
 import { t } from './i18n.ts';
 
@@ -28,6 +30,11 @@ export const currentFile = createMemo<string | null>(() => currentFilePath(tabs(
 export const [pendingGoto, setPendingGoto] = createSignal<{ path: string; line0: number } | null>(null);
 export const [docLoadedPath, setDocLoadedPath] = createSignal<string | null>(null);
 export const [editorHandle, setEditorHandle] = createSignal<EditorHandle | null>(null);
+
+// git 元信息：currentBranch 供工具栏分支名显示（非仓库 → null → 显示 '—'）；
+// gitRefreshTick 是 git 相关视图的统一刷新信号（checkout/commit/新建分支/工具栏 🔄 后 bump → 视图重拉）
+export const [currentBranch, setCurrentBranch] = createSignal<string | null>(null);
+export const [gitRefreshTick, setGitRefreshTick] = createSignal(0);
 
 let started = false;
 
@@ -102,6 +109,8 @@ export async function startSync(): Promise<void> {
   } else {
     setCurrentTabId(s.path);
   }
+
+  void refreshGitMeta(); // 工具栏分支名初始化（非阻塞）
 
   // 心跳：每 30s 上报（保活 + 服务器重启后重连）
   setInterval(() => {
@@ -213,4 +222,44 @@ export function closeGitTab(id: string): void {
   setTabs((prev) => removeTabById(prev, id));
   if (currentTabId() === id) setCurrentTabId(nextActiveTabId(tabs(), id));
   pushState();
+}
+
+/** 拉分支元信息（启动时一次）：currentBranch 失败/非仓库保持 null。checkout/createBranch 成功后各自直接 set。 */
+export async function refreshGitMeta(): Promise<void> {
+  try {
+    const b = await api.git.branches();
+    setCurrentBranch(b.current);
+  } catch { /* 服务器不可达/非仓库：保持 null，工具栏显示 '—' */ }
+}
+
+/** 打开/复用历史标签（单例，对齐 openGit 模式；git 标签不写 URL） */
+export function openGitHistory(): void {
+  setTabs((prev) => addGitHistoryTab(prev));
+  setCurrentTabId(GIT_HISTORY_TAB_ID);
+  pushState();
+}
+
+/** 打开/复用分支标签（单例） */
+export function openGitBranch(): void {
+  setTabs((prev) => addGitBranchTab(prev));
+  setCurrentTabId(GIT_BRANCH_TAB_ID);
+  pushState();
+}
+
+/** 打开/复用某提交的 diff 标签（id git-commit:<hash>，同提交去重） */
+export function openGitCommit(hash: string): void {
+  setTabs((prev) => addGitCommitTab(prev, hash));
+  setCurrentTabId(gitCommitTabId(hash));
+  pushState();
+}
+
+/**
+ * 新建分支（checkout -b）。成功后当前分支即新分支 → 更新 currentBranch + bump gitRefreshTick
+ * （分支视图列表 / 工具栏 ⑂ 名自动刷新）。不涉及工作区改动，无需切换保护（spec §5.4 只保护切换已有分支）。
+ * 失败抛错，调用方 Toast / 错误条。
+ */
+export async function createBranch(name: string): Promise<void> {
+  const { current } = await api.git.createBranch(name);
+  setCurrentBranch(current);
+  setGitRefreshTick((x) => x + 1);
 }
