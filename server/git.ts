@@ -10,6 +10,20 @@ const execFileP = promisify(execFile);
 
 export type GitChange = { path: string; status: string };
 export type GitStatus = { isRepo: boolean; changes: GitChange[] };
+export type GitCommit = { hash: string; shortHash: string; subject: string; author: string; time: number; decorations: string };
+export type GitBranch = { name: string; current: boolean; tip: string };
+export type GitBranches = { isRepo: boolean; current: string | null; branches: GitBranch[] };
+export type GitLog = { isRepo: boolean; commits: GitCommit[] };
+export type GitShow = { commit: GitCommit; diff: string };
+
+/** log/show 元信息统一 format：%x00 分隔字段（%s 不含换行 → 记录按 \n 拆无歧义；%D 可空串作尾字段） */
+const COMMIT_FORMAT = '%H%x00%h%x00%s%x00%an%x00%at%x00%D';
+
+function parseCommitRecord(line: string): GitCommit | null {
+  const [hash, shortHash, subject, author, time, decorations] = line.split('\0');
+  if (!hash || !shortHash || !subject || !author || !time) return null;
+  return { hash, shortHash, subject, author, time: Number(time), decorations: decorations ?? '' };
+}
 
 /** porcelain -z 解析：记录为 `<XY> <path>\0`；重命名/复制（R/C）多一条 `<orig>\0` 原路径记录，跳过。 */
 export function parseStatus(stdout: string): GitChange[] {
@@ -114,5 +128,77 @@ export class Git {
       await this.execGit(['add', '--', p], [0], 400);
     }
     await this.execGit(['commit', '-m', msg, '--', ...paths], [0], 400);
+  }
+
+  /** 本地分支列表：for-each-ref 一次取 HEAD 标记 / 短名 / tip 短 hash。非仓库 → isRepo:false。 */
+  async branches(): Promise<GitBranches> {
+    try {
+      const { stdout } = await this.execGit([
+        'for-each-ref', '--format=%(HEAD)%00%(refname:short)%00%(objectname:short)', 'refs/heads',
+      ]);
+      const list: GitBranch[] = stdout.split('\n').filter(Boolean).map((line) => {
+        const [head, name, tip] = line.split('\0');
+        return { name, current: head === '*', tip };
+      });
+      const current = list.find((b) => b.current)?.name ?? null;
+      return { isRepo: true, current, branches: list };
+    } catch (e) {
+      if ((e as { code?: string }).code === 'ENOENT') return { isRepo: false, current: null, branches: [] };
+      if (e instanceof HttpError && /not a git repository|ambiguous argument/i.test(e.message)) {
+        return { isRepo: false, current: null, branches: [] };
+      }
+      throw e;
+    }
+  }
+
+  /** 提交日志：branch 缺省(null)=当前分支；提供则必须 ∈ branches()（白名单，防注入）。limit∈[1,100]、skip≥0 整数。 */
+  async log(branch: string | null, limit: number, skip: number): Promise<GitLog> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new HttpError(400, 'invalid limit');
+    if (!Number.isInteger(skip) || skip < 0) throw new HttpError(400, 'invalid skip');
+    let ref = 'HEAD';
+    if (branch != null) {
+      const b = await this.branches();
+      if (!b.isRepo) throw new HttpError(400, 'not a git repository');
+      if (!b.branches.some((x) => x.name === branch)) throw new HttpError(400, 'unknown branch');
+      ref = branch;
+    }
+    try {
+      const { stdout } = await this.execGit([
+        'log', ref, `--pretty=format:${COMMIT_FORMAT}`, `--skip=${skip}`, '-n', String(limit),
+      ]);
+      const commits = stdout.split('\n').filter(Boolean).map(parseCommitRecord).filter((c): c is GitCommit => c !== null);
+      return { isRepo: true, commits };
+    } catch (e) {
+      // 空仓库（unborn，零提交）：显式传 HEAD 时 git 报 "ambiguous argument 'HEAD'"（老版本报 "does not have any commits yet"）→ 空列表而非 500
+      if (e instanceof HttpError && /does not have any commits yet|ambiguous argument/i.test(e.message)) {
+        return { isRepo: true, commits: [] };
+      }
+      throw e;
+    }
+  }
+
+  /** 切换分支：name 必须 ∈ branches()。未提交改动冲突 → 400 带 git 原始 stderr（前端 Toast）。 */
+  async checkout(name: string): Promise<void> {
+    const b = await this.branches();
+    if (!b.isRepo) throw new HttpError(400, 'not a git repository');
+    if (!b.branches.some((x) => x.name === name)) throw new HttpError(400, 'unknown branch');
+    await this.execGit(['checkout', name], [0], 400);
+  }
+
+  /** 新建分支并切过去（checkout -b）。名字先过 git check-ref-format 原生校验（非法名 exit 1 → 400）。 */
+  async createBranch(name: string): Promise<void> {
+    if (typeof name !== 'string' || name === '') throw new HttpError(400, 'invalid branch name');
+    await this.execGit(['check-ref-format', '--branch', name], [0], 400);
+    await this.execGit(['checkout', '-b', name], [0], 400); // 已存在/冲突 → 400 + stderr
+  }
+
+  /** 单次提交的元信息 + diff 正文。commit 只接受 log 返回的 hex（短/全 hash），白名单收紧。 */
+  async show(commit: string): Promise<GitShow> {
+    if (typeof commit !== 'string' || !/^[0-9a-f]{4,64}$/i.test(commit)) throw new HttpError(400, 'invalid commit');
+    const { stdout: metaOut } = await this.execGit(['log', '-1', commit, `--pretty=format:${COMMIT_FORMAT}`]);
+    const parsed = parseCommitRecord(metaOut.split('\n')[0]);
+    if (!parsed) throw new HttpError(400, 'invalid commit');
+    const { stdout: diffOut } = await this.execGit(['show', commit, '--format=']);
+    return { commit: parsed, diff: diffOut.replace(/^\n+/, '') }; // 去掉 --format= 留下的头部空行
   }
 }
