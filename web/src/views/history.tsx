@@ -39,6 +39,13 @@ export function HistoryView() {
     let cancelled = false;
     void (async () => {
       try {
+        // 非仓库：跳过 log 请求（服务端也返回 isRepo:false，此处纵深防御 + 省一次请求）
+        if (branches()?.isRepo === false) {
+          setCommits([]);
+          setSkip(0);
+          setError(null);
+          return;
+        }
         const res = await api.git.log(logParams(b, LIMIT, 0));
         if (cancelled) return;
         setCommits(res.commits);
@@ -56,12 +63,15 @@ export function HistoryView() {
 
   async function loadMore(): Promise<void> {
     if (loadingMore()) return;
+    const b = branch(); // 捕获发起时的分支：中途切分支 → 旧分页丢弃（防跨分支追加 + skip 错位）
     setLoadingMore(true);
     try {
-      const res = await api.git.log(logParams(branch(), LIMIT, skip()));
+      const res = await api.git.log(logParams(b, LIMIT, skip()));
+      if (branch() !== b) return; // 已切分支，丢弃旧响应
       setCommits((prev) => [...prev, ...res.commits]);
       setSkip((s) => s + LIMIT);
     } catch (e) {
+      if (branch() !== b) return; // 旧分支的失败不在新分支上弹错
       setError((e as Error).message);
     } finally {
       setLoadingMore(false);

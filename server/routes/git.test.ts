@@ -131,3 +131,21 @@ test('POST /api/git/create-branch：创建 + 切新分支；非法名 / 已存�
   assert.equal((await call('POST', '/api/git/create-branch', { name: 'bad name' })).status, 400);
   assert.equal((await call('POST', '/api/git/create-branch', { name: 'main' })).status, 400);
 });
+
+test('GET /api/git/log：非仓库 → 200 + isRepo:false + 空列表（不再 500）', async () => {
+  const plainDir = await mkdtemp(path.join(os.tmpdir(), 'anther-git-plain-'));
+  const srv = new HttpServer({ staticDir: '' });
+  registerGitRoutes(srv, new Git(plainDir));
+  await srv.listen(0, '127.0.0.1');
+  try {
+    const b = `http://127.0.0.1:${(srv.address() as { port: number }).port}`;
+    const res = await fetch(b + '/api/git/log');
+    assert.equal(res.status, 200);
+    const log = (await res.json()) as { isRepo: boolean; commits: unknown[] };
+    assert.equal(log.isRepo, false);
+    assert.deepEqual(log.commits, []);
+  } finally {
+    await srv.close();
+    await rm(plainDir, { recursive: true, force: true });
+  }
+});

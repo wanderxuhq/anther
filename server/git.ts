@@ -151,14 +151,14 @@ export class Git {
     }
   }
 
-  /** 提交日志：branch 缺省(null)=当前分支；提供则必须 ∈ branches()（白名单，防注入）。limit∈[1,100]、skip≥0 整数。 */
+  /** 提交日志：branch 缺省(null)=当前分支；提供则必须 ∈ branches()（白名单，防注入）。limit∈[1,100]、skip≥0 整数。非仓库 → isRepo:false 空态（spec §6.1）。 */
   async log(branch: string | null, limit: number, skip: number): Promise<GitLog> {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new HttpError(400, 'invalid limit');
     if (!Number.isInteger(skip) || skip < 0) throw new HttpError(400, 'invalid skip');
+    const b = await this.branches(); // 先查 isRepo：非仓库不跑 git log HEAD（会 500），直接返回空态；同时供 branch 白名单复用
+    if (!b.isRepo) return { isRepo: false, commits: [] };
     let ref = 'HEAD';
     if (branch != null) {
-      const b = await this.branches();
-      if (!b.isRepo) throw new HttpError(400, 'not a git repository');
       if (!b.branches.some((x) => x.name === branch)) throw new HttpError(400, 'unknown branch');
       ref = branch;
     }

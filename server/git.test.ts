@@ -177,6 +177,21 @@ test('log：空仓库（unborn）→ isRepo:true + 空 commits', async () => {
   }
 });
 
+test('log：非仓库 → isRepo:false + 空 commits（不再 500）', async () => {
+  const plainDir = await mkdtemp(path.join(os.tmpdir(), 'anther-plain-'));
+  try {
+    const log = await new Git(plainDir).log(null, 50, 0);
+    assert.equal(log.isRepo, false);
+    assert.deepEqual(log.commits, []);
+    // 非仓库下指定 branch 同样返回 isRepo:false（白名单前先判 isRepo，spec §6.1）
+    const named = await new Git(plainDir).log('dev', 50, 0);
+    assert.equal(named.isRepo, false);
+    assert.deepEqual(named.commits, []);
+  } finally {
+    await rm(plainDir, { recursive: true, force: true });
+  }
+});
+
 test('checkout：切换到本地分支', async () => {
   await gitCmd(['checkout', '-qb', 'dev']);
   await gitCmd(['checkout', 'main']);
