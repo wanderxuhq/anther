@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   addFileTab, removeTabById, fileTabPaths, currentFilePath, nextActiveTabId, terminalExists,
   GIT_TAB_ID, gitDiffTabId, addGitTab, addGitDiffTab,
+  GIT_HISTORY_TAB_ID, GIT_BRANCH_TAB_ID, gitCommitTabId, addGitHistoryTab, addGitBranchTab, addGitCommitTab,
 } from './tab-model.ts';
 import type { TabItem } from './tab-model.ts';
 
@@ -57,4 +58,23 @@ test('gitDiffTabId：id 前缀 git-diff:，同文件复用', () => {
   assert.equal(gitDiffTabId('a.ts'), 'git-diff:a.ts');
   assert.deepEqual(addGitDiffTab([fileA], 'a.ts'), [fileA, diffA]);
   assert.deepEqual(addGitDiffTab([fileA, diffA], 'a.ts'), [fileA, diffA]); // 已存在 → 原样
+});
+
+const historyTab: TabItem = { kind: 'git-history', id: GIT_HISTORY_TAB_ID };
+const branchTab: TabItem = { kind: 'git-branch', id: GIT_BRANCH_TAB_ID };
+const commitA: TabItem = { kind: 'git-commit', id: 'git-commit:a1b2c3', commit: 'a1b2c3' };
+
+test('addGitHistoryTab / addGitBranchTab：单例不重复', () => {
+  assert.deepEqual(addGitHistoryTab([fileA, historyTab]), [fileA, historyTab]);
+  assert.deepEqual(addGitBranchTab([fileA, branchTab]), [fileA, branchTab]);
+  const withHist = addGitHistoryTab([fileA]);
+  assert.equal(withHist[1].id, GIT_HISTORY_TAB_ID);
+  const withBranch = addGitBranchTab([fileA]);
+  assert.equal(withBranch[1].id, GIT_BRANCH_TAB_ID);
+});
+
+test('gitCommitTabId / addGitCommitTab：同提交去重', () => {
+  assert.equal(gitCommitTabId('a1b2c3'), 'git-commit:a1b2c3');
+  assert.deepEqual(addGitCommitTab([fileA], 'a1b2c3'), [fileA, commitA]);
+  assert.deepEqual(addGitCommitTab([fileA, commitA], 'a1b2c3'), [fileA, commitA]); // 已存在 → 原样
 });

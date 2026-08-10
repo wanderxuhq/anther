@@ -63,6 +63,11 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 export type GitChange = { path: string; status: string };
 export type GitStatus = { isRepo: boolean; changes: GitChange[] };
+export type GitCommit = { hash: string; shortHash: string; subject: string; author: string; time: number; decorations: string };
+export type GitBranch = { name: string; current: boolean; tip: string };
+export type GitBranches = { isRepo: boolean; current: string | null; branches: GitBranch[] };
+export type GitLog = { isRepo: boolean; commits: GitCommit[] };
+export type GitShow = { commit: GitCommit; diff: string };
 
 export const api = {
   list: (path: string) => request<{ entries: DirEntry[] }>('GET', `/api/list?path=${encodeURIComponent(path)}`),
@@ -91,6 +96,17 @@ export const api = {
     status: () => request<GitStatus>('GET', '/api/git/status'),
     diff: (path: string) => request<{ diff: string }>('GET', `/api/git/diff?path=${encodeURIComponent(path)}`),
     commit: (paths: string[], message: string) => request('POST', '/api/git/commit', { paths, message }),
+    branches: () => request<GitBranches>('GET', '/api/git/branches'),
+    log: (params: { branch?: string; limit?: number; skip?: number }) => {
+      const q = new URLSearchParams();
+      if (params.branch) q.set('branch', params.branch);
+      q.set('limit', String(params.limit ?? 50));
+      q.set('skip', String(params.skip ?? 0));
+      return request<GitLog>('GET', `/api/git/log?${q}`);
+    },
+    show: (commit: string) => request<GitShow>('GET', `/api/git/show?commit=${encodeURIComponent(commit)}`),
+    checkout: (name: string) => request<{ current: string }>('POST', '/api/git/checkout', { name }),
+    createBranch: (name: string) => request<{ current: string }>('POST', '/api/git/create-branch', { name }),
   },
 };
 

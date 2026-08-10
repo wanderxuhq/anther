@@ -5,7 +5,10 @@ export type TabItem =
   | { kind: 'file'; id: string; path: string }
   | { kind: 'terminal'; id: string; name: string }
   | { kind: 'git'; id: 'git' }
-  | { kind: 'git-diff'; id: string; path: string };
+  | { kind: 'git-diff'; id: string; path: string }
+  | { kind: 'git-history'; id: 'git-history' }
+  | { kind: 'git-branch'; id: 'git-branch' }
+  | { kind: 'git-commit'; id: string; commit: string };
 
 export function addFileTab(tabs: TabItem[], path: string): TabItem[] {
   if (tabs.some((t) => t.kind === 'file' && t.path === path)) return tabs;
@@ -51,4 +54,27 @@ export function addGitDiffTab(tabs: TabItem[], path: string): TabItem[] {
   const id = gitDiffTabId(path);
   if (tabs.some((t) => t.id === id)) return tabs;
   return [...tabs, { kind: 'git-diff', id, path }];
+}
+
+export const GIT_HISTORY_TAB_ID = 'git-history';
+export const GIT_BRANCH_TAB_ID = 'git-branch';
+
+export function gitCommitTabId(hash: string): string {
+  return `git-commit:${hash}`;
+}
+
+export function addGitHistoryTab(tabs: TabItem[]): TabItem[] {
+  if (tabs.some((t) => t.kind === 'git-history')) return tabs;
+  return [...tabs, { kind: 'git-history', id: GIT_HISTORY_TAB_ID }];
+}
+
+export function addGitBranchTab(tabs: TabItem[]): TabItem[] {
+  if (tabs.some((t) => t.kind === 'git-branch')) return tabs;
+  return [...tabs, { kind: 'git-branch', id: GIT_BRANCH_TAB_ID }];
+}
+
+export function addGitCommitTab(tabs: TabItem[], hash: string): TabItem[] {
+  const id = gitCommitTabId(hash);
+  if (tabs.some((t) => t.id === id)) return tabs;
+  return [...tabs, { kind: 'git-commit', id, commit: hash }];
 }
