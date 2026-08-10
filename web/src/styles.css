@@ -326,3 +326,40 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 }
 .git-commit-meta { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); }
 .git-commit-subject { font-size: 14px; }
+
+/* 行内 diff（2026-08-10）：双 gutter + 行级红绿 + 文件卡 */
+:root {
+  --diff-add-bg: #e6ffed;
+  --diff-del-bg: #ffeef0;
+  --diff-status-add: #1a7f37;
+  --diff-status-del: #cf222e;
+}
+:root[data-theme='dark'] {
+  --diff-add-bg: rgba(46, 160, 67, .18);
+  --diff-del-bg: rgba(248, 81, 73, .18);
+  --diff-status-add: #3fb950;
+  --diff-status-del: #f85149;
+}
+.cm-diff-status { width: 1.6em; }
+.cm-diff-status .cm-gutterElement { padding: 0; text-align: center; font-weight: 700; }
+.diff-status-add { color: var(--diff-status-add); }
+.diff-status-del { color: var(--diff-status-del); }
+.cm-diff-numbers .cm-gutterElement { padding: 0 6px 0 2px; text-align: right; color: var(--muted); }
+.diff-add { background: var(--diff-add-bg); box-shadow: inset 3px 0 0 var(--diff-status-add); }
+.diff-del { background: var(--diff-del-bg); box-shadow: inset 3px 0 0 var(--diff-status-del); }
+
+.git-commit-files { flex: 1; min-height: 0; overflow-y: auto; }
+.git-commit-file { border-bottom: 1px solid var(--border); }
+.git-commit-file-head {
+  display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+  background: var(--row-hover);
+}
+.git-commit-file-path {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px;
+}
+.git-commit-file-count { flex: 0 0 auto; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.diff-count-add { color: var(--diff-status-add); }
+.diff-count-del { color: var(--diff-status-del); margin-left: 4px; }
+.git-commit-file .git-diff-editor { max-height: 50vh; overflow: hidden; }
+.git-commit-binary { padding: 10px; color: var(--muted); font-size: 13px; }
