@@ -361,6 +361,7 @@ export function App() {
             class="complete-btn"
             onClick={() => editorHandle()?.startCompletion()}
             title={t('complete')}
+            aria-label={t('complete')}
           >
             ⌘
           </button>

@@ -26,7 +26,9 @@ export function parseErrorLinter(view: EditorView): Diagnostic[] {
       severity: 'error',
       message: 'Syntax error',
     }));
-  } catch {
+  } catch (e) {
+    // 防御：linter 异常被 CM 静默，此处至少留痕便于排查
+    console.error('parseErrorLinter:', e);
     return [];
   }
 }
