@@ -63,7 +63,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 export type GitChange = { path: string; status: string };
 export type GitStatus = { isRepo: boolean; changes: GitChange[] };
-export type GitCommit = { hash: string; shortHash: string; subject: string; author: string; time: number; decorations: string };
+export type GitCommit = { hash: string; shortHash: string; subject: string; author: string; time: number; decorations: string; parents: string[] };
 export type GitBranch = { name: string; current: boolean; tip: string };
 export type GitBranches = { isRepo: boolean; current: string | null; branches: GitBranch[] };
 export type GitLog = { isRepo: boolean; commits: GitCommit[] };

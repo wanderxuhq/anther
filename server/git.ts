@@ -10,20 +10,25 @@ const execFileP = promisify(execFile);
 
 export type GitChange = { path: string; status: string };
 export type GitStatus = { isRepo: boolean; changes: GitChange[] };
-export type GitCommit = { hash: string; shortHash: string; subject: string; author: string; time: number; decorations: string };
+export type GitCommit = { hash: string; shortHash: string; subject: string; author: string; time: number; decorations: string; parents: string[] };
 export type GitBranch = { name: string; current: boolean; tip: string };
 export type GitBranches = { isRepo: boolean; current: string | null; branches: GitBranch[] };
 export type GitLog = { isRepo: boolean; commits: GitCommit[] };
 export type GitShow = { commit: GitCommit; diff: string };
 
 /** log/show 元信息统一 format：%x00 分隔字段（%s 不含换行 → 记录按 \n 拆无歧义；%D 可空串作尾字段） */
-const COMMIT_FORMAT = '%H%x00%h%x00%s%x00%an%x00%at%x00%D';
+const COMMIT_FORMAT = '%H%x00%h%x00%s%x00%an%x00%at%x00%D%x00%P';
 
 function parseCommitRecord(line: string): GitCommit | null {
-  const [hash, shortHash, subject, author, time, decorations] = line.split('\0');
+  const [hash, shortHash, subject, author, time, decorations, parents] = line.split('\0');
   if (!hash || !shortHash || !subject || !author || !time) return null;
   // %at 是 epoch 秒，前端按 Date.now()（epoch 毫秒）比较 → 统一转毫秒，否则相对时间/日期全错（1970）
-  return { hash, shortHash, subject, author, time: Number(time) * 1000, decorations: decorations ?? '' };
+  return {
+    hash, shortHash, subject, author,
+    time: Number(time) * 1000,
+    decorations: decorations ?? '',
+    parents: parents ? parents.split(' ').filter(Boolean) : [], // 根提交 %P 空 → []
+  };
 }
 
 /** porcelain -z 解析：记录为 `<XY> <path>\0`；重命名/复制（R/C）多一条 `<orig>\0` 原路径记录，跳过。 */
@@ -152,9 +157,9 @@ export class Git {
     }
   }
 
-  /** 提交日志：branch 缺省(null)=当前分支；提供则必须 ∈ branches()（白名单，防注入）。limit∈[1,100]、skip≥0 整数。非仓库 → isRepo:false 空态（spec §6.1）。 */
+  /** 提交日志：branch 缺省(null)=当前分支；提供则必须 ∈ branches()（白名单，防注入）。limit∈[1,1000]、skip≥0 整数。非仓库 → isRepo:false 空态（spec §6.1）。 */
   async log(branch: string | null, limit: number, skip: number): Promise<GitLog> {
-    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new HttpError(400, 'invalid limit');
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new HttpError(400, 'invalid limit');
     if (!Number.isInteger(skip) || skip < 0) throw new HttpError(400, 'invalid skip');
     const b = await this.branches(); // 先查 isRepo：非仓库不跑 git log HEAD（会 500），直接返回空态；同时供 branch 白名单复用
     if (!b.isRepo) return { isRepo: false, commits: [] };
@@ -165,7 +170,7 @@ export class Git {
     }
     try {
       const { stdout } = await this.execGit([
-        'log', ref, `--pretty=format:${COMMIT_FORMAT}`, `--skip=${skip}`, '-n', String(limit),
+        'log', '--topo-order', ref, `--pretty=format:${COMMIT_FORMAT}`, `--skip=${skip}`, '-n', String(limit),
       ]);
       const commits = stdout.split('\n').filter(Boolean).map(parseCommitRecord).filter((c): c is GitCommit => c !== null);
       return { isRepo: true, commits };

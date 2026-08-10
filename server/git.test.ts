@@ -161,9 +161,38 @@ test('log：branch 过滤历史 + 非法 branch → 400', async () => {
 });
 
 test('log：limit 越界 / 非整数 / skip 负数 → 400', async () => {
-  await assert.rejects(() => git.log(null, 101, 0), (e: unknown) => (e as HttpError).status === 400);
+  await assert.rejects(() => git.log(null, 1001, 0), (e: unknown) => (e as HttpError).status === 400);
   await assert.rejects(() => git.log(null, 1.5, 0), (e: unknown) => (e as HttpError).status === 400);
   await assert.rejects(() => git.log(null, 50, -1), (e: unknown) => (e as HttpError).status === 400);
+});
+
+test('log：parents 解析（线性单父 / merge 双父 / 根空数组）+ topo 序', async () => {
+  await gitCmd(['checkout', '-qb', 'dev']);
+  await writeFile(path.join(repoDir, 'dev.txt'), 'dev\n');
+  await gitCmd(['add', '.']);
+  await gitCmd(['commit', '-qm', 'dev work']);
+  await gitCmd(['checkout', 'main']);
+  await writeFile(path.join(repoDir, 'main.txt'), 'main\n');
+  await gitCmd(['add', '.']);
+  await gitCmd(['commit', '-qm', 'main work']);
+  await gitCmd(['merge', '--no-ff', '-m', 'merge dev', 'dev']);
+  const log = await git.log(null, 50, 0);
+  const bySubject = Object.fromEntries(log.commits.map((c) => [c.subject, c]));
+  assert.equal(bySubject['merge dev'].parents.length, 2);   // merge：双父
+  assert.equal(bySubject['main work'].parents.length, 1);   // 线性：单父
+  assert.equal(bySubject['dev work'].parents.length, 1);
+  assert.deepEqual(bySubject['init'].parents, []);          // 根：空数组
+  const subjects = log.commits.map((c) => c.subject);
+  assert.ok(subjects.indexOf('merge dev') < subjects.indexOf('main work')); // topo：子先父后
+  assert.ok(subjects.indexOf('merge dev') < subjects.indexOf('dev work'));
+  assert.ok(subjects.indexOf('main work') < subjects.indexOf('init'));
+});
+
+test('log：limit 上限放宽到 1000（1001 越界 → 400）', async () => {
+  await assert.rejects(() => git.log(null, 1001, 0), (e: unknown) => (e as HttpError).status === 400);
+  const ok = await git.log(null, 1000, 0);
+  assert.equal(ok.isRepo, true);
+  assert.equal(ok.commits.length, 1); // 当前仓库只有 init
 });
 
 test('log：空仓库（unborn）→ isRepo:true + 空 commits', async () => {

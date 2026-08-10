@@ -101,7 +101,7 @@ test('GET /api/git/log：字段解析 + 非法 branch / limit 越界 → 400', a
   assert.ok(ok.body.commits.length >= 1);
   assert.match(ok.body.commits[0].shortHash, /^[0-9a-f]{7}$/);
   assert.equal((await call('GET', '/api/git/log?branch=nope')).status, 400);
-  assert.equal((await call('GET', '/api/git/log?limit=999')).status, 400);
+  assert.equal((await call('GET', '/api/git/log?limit=1001')).status, 400);
 });
 
 test('GET /api/git/show：元信息 + diff 正文；缺 commit / 非 hex → 400', async () => {
