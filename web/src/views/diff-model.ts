@@ -27,15 +27,18 @@ function parseFile(seg: string): DiffFile {
   const lines = seg.split('\n');
   const header = lines[0]; // 'diff --git a/x b/y'
 
-  // 状态识别：在文件头元信息行中探测（任一命中即定型）
+  // 状态识别：在文件头元信息行中探测。binary 优先（new/deleted 二进制文件的
+  // `new file mode`/`deleted file mode` 行出现在 `Binary files ` 之前，须无视行序判定）。
   let status: DiffFile['status'] = 'modified';
-  for (const line of lines) {
-    if (line.startsWith('Binary files ')) { status = 'binary'; break; }
-    if (line.startsWith('new file mode ')) { status = 'added'; break; }
-    if (line.startsWith('deleted file mode ')) { status = 'deleted'; break; }
-    if (line.startsWith('similarity index ') || line.startsWith('rename from ') || line.startsWith('rename to ')) {
-      status = 'renamed';
-      break;
+  if (lines.some((l) => l.startsWith('Binary files '))) status = 'binary';
+  else {
+    for (const line of lines) {
+      if (line.startsWith('new file mode ')) { status = 'added'; break; }
+      if (line.startsWith('deleted file mode ')) { status = 'deleted'; break; }
+      if (line.startsWith('similarity index ') || line.startsWith('rename from ') || line.startsWith('rename to ')) {
+        status = 'renamed';
+        break;
+      }
     }
   }
 

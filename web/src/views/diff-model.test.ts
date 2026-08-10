@@ -107,6 +107,34 @@ test('parseUnifiedDiff：二进制 → status binary + 空 hunks', () => {
   assert.deepEqual(file.hunks, []);
 });
 
+test('parseUnifiedDiff：新增二进制文件 → status binary（new file mode 行在 Binary files 之前）', () => {
+  const text = D(
+    'diff --git a/dev/null b/new.png',
+    'new file mode 100644',
+    'index 0000000..e69de29',
+    'Binary files /dev/null and b/new.png differ',
+  );
+  const file = parseUnifiedDiff(text)[0];
+  assert.equal(file.status, 'binary');
+  assert.equal(file.addCount, 0);
+  assert.equal(file.delCount, 0);
+  assert.deepEqual(file.hunks, []);
+});
+
+test('parseUnifiedDiff：删除二进制文件 → status binary（deleted file mode 行在 Binary files 之前）', () => {
+  const text = D(
+    'diff --git a/gone.png b/gone.png',
+    'deleted file mode 100644',
+    'index 111..000 100644',
+    'Binary files a/gone.png and /dev/null differ',
+  );
+  const file = parseUnifiedDiff(text)[0];
+  assert.equal(file.status, 'binary');
+  assert.equal(file.addCount, 0);
+  assert.equal(file.delCount, 0);
+  assert.deepEqual(file.hunks, []);
+});
+
 test('parseUnifiedDiff：新增文件 → status added（a/ 侧为 /dev/null 仍取 b/ 路径）', () => {
   const text = D(
     'diff --git a/dev/null b/new.txt',
