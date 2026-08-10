@@ -18,7 +18,7 @@ let base: string;
 
 beforeEach(async () => {
   repoDir = await mkdtemp(path.join(os.tmpdir(), 'anther-git-api-'));
-  await execFileP('git', ['init', '-q'], { cwd: repoDir });
+  await execFileP('git', ['init', '-qb', 'main'], { cwd: repoDir }); // 强制初始分支名 main（环境 init.defaultBranch 未配置时默认 master），Task 2 新测试硬编码 main
   await execFileP('git', ['config', 'user.email', 't@t'], { cwd: repoDir });
   await execFileP('git', ['config', 'user.name', 't'], { cwd: repoDir });
   await writeFile(path.join(repoDir, 'a.txt'), 'one\n');
@@ -84,4 +84,50 @@ test('POST /api/git/commit：提交勾选路径后 status 清空', async () => {
 test('POST /api/git/commit：空消息 / 空路径 → 400', async () => {
   assert.equal((await call('POST', '/api/git/commit', { paths: ['a.txt'], message: '' })).status, 400);
   assert.equal((await call('POST', '/api/git/commit', { paths: [], message: 'x' })).status, 400);
+});
+
+test('GET /api/git/branches：isRepo + current + 列表', async () => {
+  const { status, body } = await call('GET', '/api/git/branches');
+  assert.equal(status, 200);
+  assert.equal(body.isRepo, true);
+  assert.equal(body.current, 'main');
+  assert.ok(body.branches.some((x: { name: string }) => x.name === 'main'));
+});
+
+test('GET /api/git/log：字段解析 + 非法 branch / limit 越界 → 400', async () => {
+  const ok = await call('GET', '/api/git/log');
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.isRepo, true);
+  assert.ok(ok.body.commits.length >= 1);
+  assert.match(ok.body.commits[0].shortHash, /^[0-9a-f]{7}$/);
+  assert.equal((await call('GET', '/api/git/log?branch=nope')).status, 400);
+  assert.equal((await call('GET', '/api/git/log?limit=999')).status, 400);
+});
+
+test('GET /api/git/show：元信息 + diff 正文；缺 commit / 非 hex → 400', async () => {
+  const log = await call('GET', '/api/git/log?limit=1');
+  const hash = log.body.commits[0].shortHash as string;
+  const show = await call('GET', `/api/git/show?commit=${hash}`);
+  assert.equal(show.status, 200);
+  assert.equal(show.body.commit.subject, 'init');
+  assert.match(show.body.diff, /^diff --git/);
+  assert.equal((await call('GET', '/api/git/show')).status, 400);
+  assert.equal((await call('GET', '/api/git/show?commit=HEAD')).status, 400); // HEAD 非 hex
+});
+
+test('POST /api/git/checkout：切到本地分支 → current 更新；未知分支 400', async () => {
+  await execFileP('git', ['checkout', '-qb', 'dev'], { cwd: repoDir });
+  await execFileP('git', ['checkout', 'main'], { cwd: repoDir });
+  const { status, body } = await call('POST', '/api/git/checkout', { name: 'dev' });
+  assert.equal(status, 200);
+  assert.equal(body.current, 'dev');
+  assert.equal((await call('POST', '/api/git/checkout', { name: 'nope' })).status, 400);
+});
+
+test('POST /api/git/create-branch：创建 + 切新分支；非法名 / 已存在 → 400', async () => {
+  const { status, body } = await call('POST', '/api/git/create-branch', { name: 'feat/x' });
+  assert.equal(status, 200);
+  assert.equal(body.current, 'feat/x');
+  assert.equal((await call('POST', '/api/git/create-branch', { name: 'bad name' })).status, 400);
+  assert.equal((await call('POST', '/api/git/create-branch', { name: 'main' })).status, 400);
 });
