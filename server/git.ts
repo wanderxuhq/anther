@@ -193,13 +193,14 @@ export class Git {
     await this.execGit(['checkout', '-b', name], [0], 400); // 已存在/冲突 → 400 + stderr
   }
 
-  /** 单次提交的元信息 + diff 正文。commit 只接受 log 返回的 hex（短/全 hash），白名单收紧。 */
+  /** 单次提交的元信息 + diff 正文。commit 只接受 log 返回的 hex（短/全 hash），白名单收紧。合并提交输出相对第一父的 unified diff。 */
   async show(commit: string): Promise<GitShow> {
     if (typeof commit !== 'string' || !/^[0-9a-f]{4,64}$/i.test(commit)) throw new HttpError(400, 'invalid commit');
     const { stdout: metaOut } = await this.execGit(['log', '-1', commit, `--pretty=format:${COMMIT_FORMAT}`]);
     const parsed = parseCommitRecord(metaOut.split('\n')[0]);
     if (!parsed) throw new HttpError(400, 'invalid commit');
-    const { stdout: diffOut } = await this.execGit(['show', commit, '--format=']);
+    // 合并提交：--first-parent → 标准 unified diff（相对主线改动，GitHub/VSCode 语义），非 combined
+    const { stdout: diffOut } = await this.execGit(['show', commit, '--format=', '--first-parent']);
     return { commit: parsed, diff: diffOut.replace(/^\n+/, '') }; // 去掉 --format= 留下的头部空行
   }
 }

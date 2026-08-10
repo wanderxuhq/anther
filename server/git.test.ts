@@ -245,3 +245,22 @@ test('show：非 hex → 400', async () => {
   await assert.rejects(() => git.show('../x'), (e: unknown) => (e as HttpError).status === 400);
   await assert.rejects(() => git.show('HEAD'), (e: unknown) => (e as HttpError).status === 400);
 });
+
+test('show：合并提交 → --first-parent 标准 unified diff（非 combined）', async () => {
+  // 构造 merge：dev 开分支 → 两线各一提交 → 合并（--no-ff 强制真实 merge commit）
+  await gitCmd(['checkout', '-qb', 'dev']);
+  await writeFile(path.join(repoDir, 'dev.txt'), 'dev\n');
+  await gitCmd(['add', '.']);
+  await gitCmd(['commit', '-qm', 'dev work']);
+  await gitCmd(['checkout', 'main']);
+  await writeFile(path.join(repoDir, 'main.txt'), 'main\n');
+  await gitCmd(['add', '.']);
+  await gitCmd(['commit', '-qm', 'main work']);
+  await gitCmd(['merge', '--no-ff', '-m', 'merge dev', 'dev']);
+  const head = (await gitCmd(['rev-parse', '--short', 'HEAD'])).stdout.trim();
+  const { diff } = await git.show(head);
+  assert.match(diff, /diff --git a\/dev\.txt/);     // 标准 unified（相对第一父 = 合并引入的 dev 改动）
+  assert.doesNotMatch(diff, /diff --cc|diff --combined/); // 非 combined
+  assert.match(diff, /\+dev/);                     // 含合并引入的 dev 侧新增
+  assert.doesNotMatch(diff, /main\.txt/);          // 第一父（main）已有 main.txt → 不出现（第一父语义）
+});
