@@ -8,19 +8,27 @@ function tabIcon(tab: TabItem): string {
   if (tab.kind === 'file') return '📄';
   if (tab.kind === 'terminal') return '🖥';
   if (tab.kind === 'git') return '🕘';
+  if (tab.kind === 'git-history') return '📜';
+  if (tab.kind === 'git-branch') return '⑂';
+  if (tab.kind === 'git-commit') return '↔';
   return '↔'; // git-diff
 }
 
 function tabName(tab: TabItem): string {
   if (tab.kind === 'file' || tab.kind === 'git-diff') return tab.path.split('/').pop() ?? tab.path;
   if (tab.kind === 'terminal') return tab.name;
+  if (tab.kind === 'git-history') return t('git.history');
+  if (tab.kind === 'git-branch') return t('git.branch');
+  if (tab.kind === 'git-commit') return tab.commit;
   return t('view.git');
 }
 
 function tabTitle(tab: TabItem): string {
   if (tab.kind === 'file' || tab.kind === 'git-diff') return tab.path;
-  if (tab.kind === 'git') return t('view.git');
-  return tab.id;
+  if (tab.kind === 'git-history') return t('git.history');
+  if (tab.kind === 'git-branch') return t('git.branch');
+  if (tab.kind === 'git-commit') return tab.commit;
+  return t('view.git');
 }
 
 function closeTabById(tab: TabItem): void {

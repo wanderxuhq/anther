@@ -278,3 +278,51 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 .git-diff-editor { flex: 1; min-height: 0; }
 .git-diff-editor .cm-editor { height: 100%; }
 .git-diff-editor .cm-scroller { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+/* ---- 历史 / 分支 / 提交 视图 + git 工具栏（2026-08-09） ---- */
+.git-branch-btn { min-width: 64px; max-width: 160px; padding: 6px 10px; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.history-view { font-size: 13px; display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; }
+.history-bar { display: flex; padding: 8px; border-bottom: 1px solid var(--border); }
+.history-select {
+  flex: 1; min-height: 44px; font-size: 16px; padding: 0 8px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: inherit;
+}
+.history-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 0; }
+.history-row {
+  width: 100%; background: none; border: none; text-align: left; cursor: pointer;
+  border-bottom: 1px solid var(--border); padding: 6px 10px; min-height: 44px; color: inherit;
+}
+.history-subject { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-meta { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
+.history-decoration {
+  margin-left: 6px; padding: 0 5px; border-radius: 4px; background: var(--border);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px;
+}
+.history-more { padding: 8px; text-align: center; }
+.history-more .link-btn { min-height: 40px; display: inline-flex; align-items: center; }
+
+.branch-view { font-size: 13px; display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; }
+.branch-create-bar { display: flex; gap: 6px; padding: 8px; border-bottom: 1px solid var(--border); }
+.branch-name-input {
+  flex: 1; min-height: 44px; font-size: 16px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: inherit;
+}
+.branch-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 0; }
+.branch-row {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: none; border: none; text-align: left; cursor: pointer;
+  border-bottom: 1px solid var(--border); padding: 4px 10px; min-height: 44px; color: inherit;
+}
+.branch-row:disabled { cursor: default; opacity: 1; } /* 当前分支行不禁用变淡 */
+.branch-current { flex: 0 0 auto; color: var(--accent); width: 16px; }
+.branch-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.branch-tip { flex: 0 0 auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); }
+
+/* 提交标签视图：git-diff 骨架 + 元信息头 */
+.git-commit-header {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 6px 10px; border-bottom: 1px solid var(--border);
+}
+.git-commit-meta { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); }
+.git-commit-subject { font-size: 14px; }

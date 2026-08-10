@@ -3,6 +3,9 @@ import { views } from './views/registry.tsx';
 import { TerminalView } from './views/terminal.tsx';
 import { GitView } from './views/git.tsx';
 import { GitDiffView } from './views/git-diff.tsx';
+import { HistoryView } from './views/history.tsx';
+import { BranchView } from './views/branch.tsx';
+import { CommitView } from './views/commit.tsx';
 import { api } from './api.ts';
 import {
   activeTab, currentTabId, setCurrentTabId, openTerminal,
@@ -10,6 +13,7 @@ import {
   currentFile, roMode, setRoMode, pushState, fontScale,
   pendingGoto, setPendingGoto, docLoadedPath, setDocLoadedPath,
   editorHandle, setEditorHandle,
+  openGitHistory, openGitBranch, createBranch, currentBranch, setCurrentBranch, gitRefreshTick, setGitRefreshTick,
 } from './stores.ts';
 import { createEditor, type EditorHandle } from './editor/index.ts';
 import { describeLanguage, loadLanguage } from './editor/language.ts';
@@ -44,6 +48,17 @@ export function App() {
   const activeGitDiffPath = (): string | null => {
     const tab = activeTab();
     return tab?.kind === 'git-diff' ? tab.path : null;
+  };
+
+  // git 相关标签（git 面板 / 历史 / 分支 / 提交）激活 → 工具栏切 git 态（spec §1；git-diff 保持文件态）
+  const isGitKind = () => {
+    const k = activeTab()?.kind;
+    return k === 'git' || k === 'git-history' || k === 'git-branch' || k === 'git-commit';
+  };
+  // git-commit 前台时其短 hash（TS 收窄：单次读 activeTab() 再分支，同 activeGitDiffPath 约定）
+  const activeCommitHash = (): string | null => {
+    const tab = activeTab();
+    return tab?.kind === 'git-commit' ? tab.commit : null;
   };
 
   // toolbar 路径文案：文件路径 / 终端名 / 'Git' / diff 文件路径（未打开 → 提示）
@@ -148,7 +163,52 @@ export function App() {
     // 有当前文件的场景，此处为防御性 guard
     const path = currentFile();
     if (!path) return;
+    if (roMode()) return; // 只读模式不自动保存（checkout 前切只读后，防抖内的后续编辑不落盘）
     scheduleSave(path, doc);
+  }
+
+  /**
+   * 切换分支保护（spec §5.4，用户规则）：
+   * 1) flushSave() 立即保存防抖中的待写内容（此刻 roMode 仍 false，ro=0 放行）
+   * 2) setRoMode(true) → 编辑器转只读（handleEditorChange 的 roMode guard 同时生效 → 只读期间不自动保存）
+   * 3) api.git.checkout(name)
+   * 4) 成功 → currentBranch 更新 + gitRefreshTick bump（git 面板/历史/分支全部重拉）；
+   *    已打开的文件标签不关闭（用户要求），切回文件标签时 currentFile 变化 → loadDoc 自动从新分支重读；
+   *    编辑器保持只读（用户规则），用户回文件标签按 ✎ 可自行切回可写
+   * 5) 失败 → Toast git 原始 stderr；分支不变；编辑器保持「已保存 + 只读」（flushSave 已把防抖内容落盘旧分支，改动不丢）
+   */
+  async function checkoutBranch(name: string): Promise<void> {
+    flushSave();
+    setRoMode(true);
+    try {
+      await api.git.checkout(name);
+      setCurrentBranch(name);
+      setGitRefreshTick((x) => x + 1);
+      showToast(t('git.checkoutDone', { branch: name }), 'success');
+    } catch (e) {
+      showToast(t('git.checkoutFail', { msg: (e as Error).message }), 'error');
+    }
+  }
+
+  // 工具栏 ➕ 新建分支：直接弹内联 dialog（复用 dialog-backdrop/dialog-card）
+  const [branchDialogOpen, setBranchDialogOpen] = createSignal(false);
+  const [newBranchName, setNewBranchName] = createSignal('');
+  const [branchCreating, setBranchCreating] = createSignal(false);
+
+  async function handleNewBranch(): Promise<void> {
+    const name = newBranchName().trim();
+    if (!name || branchCreating()) return;
+    setBranchCreating(true);
+    try {
+      await createBranch(name);
+      setBranchDialogOpen(false);
+      setNewBranchName('');
+      showToast(t('git.branchCreated', { name }), 'success');
+    } catch (e) {
+      showToast(t('git.branchCreateFail', { msg: (e as Error).message }), 'error');
+    } finally {
+      setBranchCreating(false);
+    }
   }
 
   let loadSeq = 0; // 递增序号：丢弃过期 readFile 响应（竞态 guard 的加强版）
@@ -250,23 +310,44 @@ export function App() {
         <button class="icon-btn" onClick={() => setDrawerOpen(!drawerOpen())} title={t('menu')}>
           ☰
         </button>
-        <button class="icon-btn" onClick={() => editorHandle()?.openSearch()} title={t('find')} disabled={!currentFile()}>
-          🔍
-        </button>
-        <span class="toolbar-path">{toolbarPathLabel()}</span>
-        <button
-          class={`icon-btn ${roMode() ? '' : 'active'}`}
-          onClick={() => {
-            // 编辑→只读：先把防抖中的修改立即落盘（此时 roMode 仍为 false，ro=0 放行）
-            if (!roMode()) flushSave();
-            const next = !roMode();
-            setRoMode(next);
-            pushState();
-          }}
-          title={roMode() ? t('switchEdit') : t('switchReadonly')}
+        <Show
+          when={!isGitKind()}
+          fallback={
+            <>
+              {/* git 态：⑂ 分支名 → 分支标签；📜 历史；🔄 刷新（bump tick）；➕ 新建分支 dialog */}
+              <button class="icon-btn git-branch-btn" onClick={() => openGitBranch()} title={t('git.branch')}>
+                {currentBranch() ?? '—'}
+              </button>
+              <button class="icon-btn" onClick={() => openGitHistory()} title={t('git.history')}>
+                📜
+              </button>
+              <button class="icon-btn" onClick={() => setGitRefreshTick((x) => x + 1)} title={t('git.refresh')}>
+                🔄
+              </button>
+              <button class="icon-btn" onClick={() => setBranchDialogOpen(true)} title={t('git.newBranch')}>
+                ➕
+              </button>
+            </>
+          }
         >
-          ✎
-        </button>
+          <button class="icon-btn" onClick={() => editorHandle()?.openSearch()} title={t('find')} disabled={!currentFile()}>
+            🔍
+          </button>
+          <span class="toolbar-path">{toolbarPathLabel()}</span>
+          <button
+            class={`icon-btn ${roMode() ? '' : 'active'}`}
+            onClick={() => {
+              // 编辑→只读：先把防抖中的修改立即落盘（此时 roMode 仍 false，ro=0 放行）
+              if (!roMode()) flushSave();
+              const next = !roMode();
+              setRoMode(next);
+              pushState();
+            }}
+            title={roMode() ? t('switchEdit') : t('switchReadonly')}
+          >
+            ✎
+          </button>
+        </Show>
       </header>
 
       <main class="editor-area">
@@ -284,7 +365,42 @@ export function App() {
         <Show when={activeGitDiffPath()}>
           <GitDiffView path={activeGitDiffPath()!} />
         </Show>
+        <Show when={activeKind() === 'git-history'}>
+          <HistoryView />
+        </Show>
+        <Show when={activeKind() === 'git-branch'}>
+          <BranchView onCheckout={(name) => void checkoutBranch(name)} />
+        </Show>
+        <Show when={activeCommitHash()}>
+          <CommitView commit={activeCommitHash()!} />
+        </Show>
       </main>
+
+      {/* 工具栏 ➕ 新建分支 dialog（Enter 提交 + 点遮罩关闭） */}
+      <Show when={branchDialogOpen()}>
+        <div class="dialog-backdrop" onClick={() => setBranchDialogOpen(false)}>
+          <div class="dialog-card" onClick={(e) => e.stopPropagation()}>
+            <h3 class="dialog-title">{t('git.newBranch')}</h3>
+            <input
+              class="dialog-input"
+              value={newBranchName()}
+              onInput={(e) => setNewBranchName(e.currentTarget.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void handleNewBranch(); }}
+              placeholder={t('git.newBranchPlaceholder')}
+            />
+            <div class="dialog-actions">
+              <button class="icon-btn" onClick={() => setBranchDialogOpen(false)}>{t('cancel')}</button>
+              <button
+                class="icon-btn"
+                disabled={!newBranchName().trim() || branchCreating()}
+                onClick={() => void handleNewBranch()}
+              >
+                {branchCreating() ? t('loading') : t('git.create')}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Show>
 
       <Show when={drawerOpen() || !isNarrow()}>
         <div class="drawer-backdrop" onClick={() => setDrawerOpen(false)} />

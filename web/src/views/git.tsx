@@ -1,9 +1,9 @@
 // web/src/views/git.tsx
 // Git 面板（主区域独立标签，单例）：顶部提交区 + 全选/取消全选，下方改动列表。
 // 每行：点行主体 = 切换勾选；行尾独立 [diff] 按钮 = 打开该文件 diff 标签（两目标分离，避免误触）。
-import { createSignal, onMount, For, Show } from 'solid-js';
+import { createSignal, createEffect, For, Show } from 'solid-js';
 import { api, type GitStatus, type GitChange } from '../api.ts';
-import { openGitDiff } from '../stores.ts';
+import { openGitDiff, gitRefreshTick } from '../stores.ts';
 import { t } from '../i18n.ts';
 
 export function togglePath(selected: Set<string>, path: string): Set<string> {
@@ -53,7 +53,11 @@ export function GitView() {
     }
   }
 
-  onMount(() => void refresh());
+  // 挂载 + gitRefreshTick（checkout/commit/刷新后 bump → 重拉 status；标签切走再切回即重新挂载 → 自动刷新）
+  createEffect(() => {
+    gitRefreshTick();
+    void refresh();
+  });
 
   async function handleCommit(): Promise<void> {
     const msg = message().trim();
