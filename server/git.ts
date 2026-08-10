@@ -22,7 +22,8 @@ const COMMIT_FORMAT = '%H%x00%h%x00%s%x00%an%x00%at%x00%D';
 function parseCommitRecord(line: string): GitCommit | null {
   const [hash, shortHash, subject, author, time, decorations] = line.split('\0');
   if (!hash || !shortHash || !subject || !author || !time) return null;
-  return { hash, shortHash, subject, author, time: Number(time), decorations: decorations ?? '' };
+  // %at 是 epoch 秒，前端按 Date.now()（epoch 毫秒）比较 → 统一转毫秒，否则相对时间/日期全错（1970）
+  return { hash, shortHash, subject, author, time: Number(time) * 1000, decorations: decorations ?? '' };
 }
 
 /** porcelain -z 解析：记录为 `<XY> <path>\0`；重命名/复制（R/C）多一条 `<orig>\0` 原路径记录，跳过。 */

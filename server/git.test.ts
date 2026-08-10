@@ -129,6 +129,8 @@ test('log：字段解析 + 时间倒序', async () => {
   assert.equal(log.commits[1].subject, 'init');
   assert.match(log.commits[0].shortHash, /^[0-9a-f]{7}$/);
   assert.ok(log.commits[0].time > log.commits[1].time);
+  // %at 是 epoch 秒，接口统一转毫秒：时间戳应接近 Date.now()（若按秒原样透传会差 ~1.7e12）
+  assert.ok(Math.abs(Date.now() - log.commits[0].time) < 60_000);
 });
 
 test('log：skip/limit 翻页不重复', async () => {
