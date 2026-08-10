@@ -97,6 +97,7 @@ export function createInlineDiffEditor(container: HTMLElement, file: DiffFile): 
     setDoc() {},
     setLanguage() {},
     openSearch() { openSearchPanel(view); },
+    startCompletion() {}, // 只读静态 diff，无补全
     gotoLine() {},
     destroy() { view.destroy(); },
   };

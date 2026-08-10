@@ -13,12 +13,16 @@
 import { EditorState, Compartment, type Transaction, type Extension } from '@codemirror/state';
 import { search, openSearchPanel, closeSearchPanel } from '@codemirror/search';
 import { EditorView, basicSetup } from 'codemirror';
+import { linter, lintGutter } from '@codemirror/lint';
+import { startCompletion } from '@codemirror/autocomplete';
+import { parseErrorLinter } from './lint.ts';
 
 export type EditorHandle = {
   setReadOnly(r: boolean): void;
   setDoc(doc: string): void;
   setLanguage(ext: Extension | null): void;
   openSearch(): void;
+  startCompletion(): void;
   gotoLine(line0: number): void;
   destroy(): void;
 };
@@ -59,6 +63,8 @@ export function createEditor(container: HTMLElement, opts: EditorOptions): Edito
       extensions: [
         basicSetup,
         languageCompartment.of([]),
+        lintGutter(),
+        linter(parseErrorLinter, { delay: 300 }),
         search(),
         editableCompartment.of([
           // 两个 facet 一起设：EditorState.readOnly 供 undo/redo 等命令判定
@@ -96,6 +102,10 @@ export function createEditor(container: HTMLElement, opts: EditorOptions): Edito
     },
     openSearch() {
       openSearchPanel(view);
+    },
+    startCompletion() {
+      // 语言异步加载完成前调用 → CM 内部安全 no-op
+      startCompletion(view);
     },
     gotoLine(line0: number) {
       // line0 为 0 基行号；行号越界钳制到文档首/末行
