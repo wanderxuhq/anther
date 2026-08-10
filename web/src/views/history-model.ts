@@ -23,14 +23,3 @@ export function commitTimeLabel(c: { time: number }): string {
   if (kind === 'day') return t('git.time.day', { n });
   return new Date(c.time).toLocaleDateString();
 }
-
-/** 日志查询参数：branch 缺省(null)=当前分支（不传）；limit 钳制 [1,100] 缺省 50；skip ≥ 0。防御性钳制，服务端仍白名单校验。 */
-export function logParams(
-  branch: string | null,
-  limit: number,
-  skip: number,
-): { branch?: string; limit: number; skip: number } {
-  const l = Number.isFinite(limit) ? Math.min(Math.max(Math.trunc(limit), 1), 100) : 50;
-  const s = Number.isFinite(skip) ? Math.max(Math.trunc(skip), 0) : 0;
-  return branch ? { branch, limit: l, skip: s } : { limit: l, skip: s };
-}

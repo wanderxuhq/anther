@@ -1,24 +1,27 @@
 // web/src/views/history.tsx
-// 历史日志视图：顶部分支选择器（仅切换"看哪条分支的历史"，不切换工作分支）+ 提交列表 + 加载更多。
-// 点一行 → openGitCommit(shortHash) 打开该次提交的 diff 标签。
+// 历史视图（图）：分支选择器 + 提交图（泳道岔线/合并菱形）+ 分支徽标。
+// 图取代扁平列表（spec §5.3）：log 一次拉 1000 条 topo 序 → layoutGraph 逐行渲染。
+// 每行整条是点击区 → openGitCommit(shortHash)；超 1000 截断提示。
 import { createEffect, createSignal, Show, For, onCleanup } from 'solid-js';
 import { api, type GitBranches, type GitCommit } from '../api.ts';
 import { gitRefreshTick, openGitCommit } from '../stores.ts';
-import { commitTimeLabel, logParams } from './history-model.ts';
+import { commitTimeLabel } from './history-model.ts';
+import { layoutGraph, parseDecorations, type GraphRow } from './graph-model.ts';
 import { t } from '../i18n.ts';
 
-const LIMIT = 50;
+const LIMIT = 1000;  // 图一次拉全（lane 不可跨页）
+const LANE_W = 16;   // 每泳道宽
+const ROW_H = 20;    // 每行 SVG 高
 
 export function HistoryView() {
   const [branches, setBranches] = createSignal<GitBranches | null>(null);
-  const [branch, setBranch] = createSignal<string | null>(null); // null = 当前分支
+  const [branch, setBranch] = createSignal<string | null>(null);
   const [commits, setCommits] = createSignal<GitCommit[]>([]);
-  const [skip, setSkip] = createSignal(0);
+  const [rows, setRows] = createSignal<GraphRow[]>([]);
   const [loading, setLoading] = createSignal(true);
-  const [loadingMore, setLoadingMore] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
 
-  // 分支选择器数据：挂载 + gitRefreshTick（checkout/新建分支后刷新；默认跟随当前分支）
+  // 分支列表 + 默认选中当前分支（gitRefreshTick 变化 → 刷新）
   createEffect(() => {
     gitRefreshTick();
     void (async () => {
@@ -26,30 +29,28 @@ export function HistoryView() {
         const b = await api.git.branches();
         setBranches(b);
         if (b.current && !b.branches.some((x) => x.name === branch())) setBranch(b.current);
-      } catch { /* 静默：非仓库/失败 → 空态 */ }
+      } catch { /* 静默，错误条由 log effect 承担 */ }
     })();
   });
 
-  // 首屏 / 切分支 / 刷新：重拉第一页（cancelled 竞态守卫，同 git-diff 模板）
+  // 首屏 / 切分支 / 刷新：拉 1000 条 → layoutGraph（cancelled 竞态守卫沿用）
   createEffect(() => {
     const b = branch();
     gitRefreshTick();
     setLoading(true);
-    setCommits([]); // 换分支时先清旧列表，避免显示错分支内容
+    setCommits([]);
+    setRows([]);
     let cancelled = false;
     void (async () => {
       try {
-        // 非仓库：跳过 log 请求（服务端也返回 isRepo:false，此处纵深防御 + 省一次请求）
         if (branches()?.isRepo === false) {
-          setCommits([]);
-          setSkip(0);
           setError(null);
           return;
         }
-        const res = await api.git.log(logParams(b, LIMIT, 0));
+        const res = await api.git.log({ branch: b ?? undefined, limit: LIMIT, skip: 0 });
         if (cancelled) return;
         setCommits(res.commits);
-        setSkip(LIMIT);
+        setRows(layoutGraph(res.commits));
         setError(null);
       } catch (e) {
         if (cancelled) return;
@@ -60,23 +61,6 @@ export function HistoryView() {
     })();
     onCleanup(() => { cancelled = true; });
   });
-
-  async function loadMore(): Promise<void> {
-    if (loadingMore()) return;
-    const b = branch(); // 捕获发起时的分支：中途切分支 → 旧分页丢弃（防跨分支追加 + skip 错位）
-    setLoadingMore(true);
-    try {
-      const res = await api.git.log(logParams(b, LIMIT, skip()));
-      if (branch() !== b) return; // 已切分支，丢弃旧响应
-      setCommits((prev) => [...prev, ...res.commits]);
-      setSkip((s) => s + LIMIT);
-    } catch (e) {
-      if (branch() !== b) return; // 旧分支的失败不在新分支上弹错
-      setError((e as Error).message);
-    } finally {
-      setLoadingMore(false);
-    }
-  }
 
   return (
     <div class="history-view">
@@ -104,28 +88,54 @@ export function HistoryView() {
       <Show when={loading()}>
         <div class="view-placeholder">{t('loading')}</div>
       </Show>
+      <Show when={commits().length >= LIMIT}>
+        <div class="history-truncated">{t('git.graphTruncated')}</div>
+      </Show>
       <ul class="history-list">
-        <For each={commits()}>
-          {(c) => (
-            <li>
-              <button class="history-row" onClick={() => openGitCommit(c.shortHash)}>
-                <span class="history-subject">{c.subject}</span>
-                <span class="history-meta">
-                  {c.author} · {commitTimeLabel(c)}
-                  {c.decorations ? <span class="history-decoration">{c.decorations}</span> : null}
-                </span>
-              </button>
-            </li>
-          )}
+        <For each={rows()}>
+          {(row, i) => {
+            const c = commits()[i()]; // rows 与 commits 并行（layoutGraph 一行一提交）
+            const { branches: decs } = parseDecorations(c.decorations);
+            const laneCount = Math.max(row.col, ...row.segs.map((s) => Math.max(s.a, s.b))) + 1;
+            return (
+              <li>
+                <button class="history-row" onClick={() => openGitCommit(c.shortHash)}>
+                  <span class="history-graph">
+                    <svg width={laneCount * LANE_W} height={ROW_H} class="graph-svg">
+                      {row.segs.map((s) => (
+                        <line
+                          x1={(s.a + 0.5) * LANE_W} y1={0}
+                          x2={(s.b + 0.5) * LANE_W} y2={ROW_H}
+                          class={`graph-line lane-${s.a % 6}`}
+                        />
+                      ))}
+                      {c.parents.length > 1 ? (
+                        // 合并提交：实心菱形 + 双入线
+                        <path
+                          d={`M ${(row.col + 0.5) * LANE_W} ${ROW_H / 2 - 4}
+                              L ${(row.col + 0.5) * LANE_W + 4} ${ROW_H / 2}
+                              L ${(row.col + 0.5) * LANE_W} ${ROW_H / 2 + 4}
+                              L ${(row.col + 0.5) * LANE_W - 4} ${ROW_H / 2} Z`}
+                          class={`graph-dot lane-${row.col % 6}`}
+                        />
+                      ) : (
+                        <circle cx={(row.col + 0.5) * LANE_W} cy={ROW_H / 2} r={3.5} class={`graph-dot lane-${row.col % 6}`} />
+                      )}
+                    </svg>
+                  </span>
+                  <span class="history-main">
+                    <span class="history-subject">{c.subject}</span>
+                    <span class="history-meta">{c.author} · {commitTimeLabel(c)}</span>
+                  </span>
+                  <span class="history-badges">
+                    <For each={decs}>{(d) => <span class="git-branch-badge">{d}</span>}</For>
+                  </span>
+                </button>
+              </li>
+            );
+          }}
         </For>
       </ul>
-      <Show when={commits().length > 0}>
-        <div class="history-more">
-          <button class="link-btn" disabled={loadingMore()} onClick={() => void loadMore()}>
-            {loadingMore() ? t('loading') : t('git.loadMore')}
-          </button>
-        </div>
-      </Show>
     </div>
   );
 }

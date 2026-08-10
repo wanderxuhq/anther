@@ -363,3 +363,32 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 .diff-count-del { color: var(--diff-status-del); margin-left: 4px; }
 .git-commit-file .git-diff-editor { max-height: 50vh; overflow: hidden; }
 .git-commit-binary { padding: 10px; color: var(--muted); font-size: 13px; }
+
+/* 历史图（2026-08-10）：泳道配色 + 徽标 + 行布局 + 截断提示 */
+:root {
+  --graph-lane-0: #3b82f6; --graph-lane-1: #16a34a; --graph-lane-2: #d97706;
+  --graph-lane-3: #7c3aed; --graph-lane-4: #dc2626; --graph-lane-5: #0891b2;
+}
+:root[data-theme='dark'] {
+  --graph-lane-0: #60a5fa; --graph-lane-1: #4ade80; --graph-lane-2: #fbbf24;
+  --graph-lane-3: #a78bfa; --graph-lane-4: #f87171; --graph-lane-5: #22d3ee;
+}
+.history-row { display: flex; align-items: center; gap: 6px; }
+.history-graph { flex: 0 0 auto; display: flex; }
+.graph-svg { display: block; }
+.graph-line { stroke: var(--graph-lane-0); stroke-width: 2; fill: none; }
+.graph-dot { fill: var(--graph-lane-0); }
+.lane-0 { stroke: var(--graph-lane-0); fill: var(--graph-lane-0); }
+.lane-1 { stroke: var(--graph-lane-1); fill: var(--graph-lane-1); }
+.lane-2 { stroke: var(--graph-lane-2); fill: var(--graph-lane-2); }
+.lane-3 { stroke: var(--graph-lane-3); fill: var(--graph-lane-3); }
+.lane-4 { stroke: var(--graph-lane-4); fill: var(--graph-lane-4); }
+.lane-5 { stroke: var(--graph-lane-5); fill: var(--graph-lane-5); }
+.history-main { flex: 1; min-width: 0; }
+.history-badges { flex: 0 0 auto; display: flex; gap: 4px; }
+.git-branch-badge {
+  padding: 1px 6px; border-radius: 4px;
+  background: var(--accent); color: #fff; font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.history-truncated { padding: 6px 10px; color: var(--muted); font-size: 12px; }
