@@ -12,10 +12,10 @@ import { registerLspRoutes, canonicalUriFor, pathToLanguageId } from './lsp.ts';
 const stub = path.join(import.meta.dirname, '..', 'fixtures', 'lsp-stub.js');
 
 // 用 stub 进程替换 typescript 引擎（不碰真实 tsserver）
-function makeManager(root: string, env: Record<string, string> = {}) {
+function makeManager(root: string, env: Record<string, string> = {}, idleDisposeMs = 0) {
   const m = new LspManager({
     workspaceRoot: root,
-    idleDisposeMs: 0, // 测试不触发空闲回收
+    idleDisposeMs, // 默认 0：测试不触发空闲回收；个别用例传正值验证回收
     engines: [{ id: 'typescript', cmd: process.execPath, args: [stub], languageIds: ['typescript'], env }],
   });
   return m;
@@ -141,4 +141,29 @@ test('会话崩溃（stub 退出）→ 客户端收到 restarted 推送', async 
   assert.equal(evt.engineId, 'typescript');
   ws.close();
   await m2.dispose();
+});
+
+test('崩溃重建后重发 open 不重复计数 → 空闲回收仍触发 dispose', async () => {
+  // 回归：openCount 裸计数在 crash→reopen 路径 +1 膨胀，close 后永不为 0 → 空闲回收永不触发。
+  // 集合记账下重发 open 幂等，close 后 set 空 → idleDisposeMs 计时 → disposeEngine。
+  const m2 = makeManager(root, {}, 100);
+  registerLspRoutes(server, m2);
+  const ws = await openWs();
+  const frames: Array<Record<string, unknown>> = [];
+  ws.on('message', (d) => frames.push(JSON.parse(d.toString())));
+  // 1) 打开文件
+  ws.send(JSON.stringify({ id: 1, method: 'open', params: { path: 'src/a.ts', text: 'x' } }));
+  await waitFor(() => frames.some((f) => f.id === 1));
+  // 2) 崩溃 → restarted 推送
+  const s = (m2 as unknown as { sessions: Map<string, { proc: { kill(): void } }> }).sessions.get('typescript')!;
+  s.proc.kill();
+  await waitFor(() => frames.some((f) => f.type === 'restarted'));
+  // 3) 客户端幂等重发 open（新会话）
+  ws.send(JSON.stringify({ id: 2, method: 'open', params: { path: 'src/a.ts', text: 'x' } }));
+  await waitFor(() => frames.some((f) => f.id === 2));
+  // 4) close → open 集合应归零 → 空闲计时触发 disposeEngine → sessions 清空
+  ws.send(JSON.stringify({ id: 3, method: 'close', params: { path: 'src/a.ts' } }));
+  await waitFor(() => frames.some((f) => f.id === 3));
+  await waitFor(() => (m2 as unknown as { sessions: Map<string, unknown> }).sessions.size === 0);
+  ws.close();
 });
