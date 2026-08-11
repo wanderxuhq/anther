@@ -46,7 +46,7 @@ LSP 进程服务器侧，浏览器经 WS 代理。三层：
 
 **`lsp-session.ts`** —— 一个语言服务器进程的 LSP 客户端封装：
 
-- `createProtocolConnection(StreamMessageReader(子进程 stdout), StreamMessageWriter(子进程 stdin))`（官方库，纯 JS）+ `initialize`（capabilities 协商）→ `didOpen/didChange/didClose/completion` → `publishDiagnostics` 监听 → `dispose()`。
+- `createMessageConnection(StreamMessageReader(子进程 stdout), StreamMessageWriter(子进程 stdin))`（`vscode-languageserver-protocol/node` 入口导出，官方库，纯 JS）+ `initialize`（capabilities 协商）→ `didOpen/didChange/didClose/completion` → `publishDiagnostics` 监听 → `dispose()`。协议库只提供 `createMessageConnection`（`createProtocolConnection` 在完整 `vscode-languageserver` 包里，我们不需要其进度 token 层）。
 - **每会话 FIFO 队列**：多客户端消息进同一进程保序（didChange 必须先于后续 completion 到达）。
 - `path`（仓库绝对路径）→ `file://` URI 规范化：`canonicalUriFor(path)` 纯函数（含 Windows 盘符、空格、中文），与浏览器 `pathToLanguageId` 同源逻辑。
 - 启动失败 / 崩溃 / 超时状态机见「错误处理」。
