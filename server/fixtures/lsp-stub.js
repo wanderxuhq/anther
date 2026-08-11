@@ -12,17 +12,21 @@ function send(obj) {
 // 极简帧解析：只处理单帧（stub 仅用于小消息往返测试）
 // 注意：不依赖 readline 行事件——帧体末行往往没有 \n 结尾（本 stub 的 send() 也不加），
 // readline 会一直缓冲到最后一行直到 EOF 才派发；改用原始 data 累积解析。
-let buf = '';
+// 且必须用 Buffer 按字节累积、按字节切 body：Content-Length 是字节数，而字符串
+// 的 .length 按 UTF-16 码元计，多字节 UTF-8（如中文注释）会让字符数 < 字节数，
+// 导致 buf.length 永远达不到 headerLen + len，stub 会一直等数据而挂起。
+let buf = Buffer.alloc(0);
 process.stdin.on('data', (chunk) => {
-  buf += chunk;
-  const m = buf.match(/^Content-Length: (\d+)\r?\n\r?\n/);
+  buf = Buffer.concat([buf, chunk]);
+  const s = buf.toString(); // 仅用于头解析；头是纯 ASCII，字符数即字节数
+  const m = s.match(/^Content-Length: (\d+)\r?\n\r?\n/);
   if (!m) return;
   const len = Number(m[1]);
   const headerLen = m[0].length;
   if (buf.length < headerLen + len) return;
   let msg;
-  try { msg = JSON.parse(buf.slice(headerLen, headerLen + len)); } catch { buf = ''; return; }
-  buf = '';
+  try { msg = JSON.parse(buf.subarray(headerLen, headerLen + len).toString()); } catch { buf = Buffer.alloc(0); return; }
+  buf = Buffer.alloc(0);
   handle(msg);
 });
 
