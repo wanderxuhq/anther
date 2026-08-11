@@ -227,11 +227,13 @@ export function App() {
         editor = createEditor(el, {
           initialDoc: content,
           readOnly: roMode(),
+          path,
           onChange: handleEditorChange,
+          onLspNotice: (msg, kind) => showToast(msg, kind),
         });
         setEditorHandle(editor);
       } else {
-        editor.setDoc(content);
+        editor.setDoc(content, path);
       }
       editor.setReadOnly(roMode());
       setDocLoadedPath(path); // 搜索跳转消费 effect 的前提：文档确已加载

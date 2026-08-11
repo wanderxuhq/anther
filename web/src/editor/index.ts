@@ -16,10 +16,12 @@ import { EditorView, basicSetup } from 'codemirror';
 import { linter, lintGutter } from '@codemirror/lint';
 import { startCompletion } from '@codemirror/autocomplete';
 import { parseErrorLinter } from './lint.ts';
+import { lspExtension } from './lsp.ts';
+import { pathToLanguageId } from './lsp-client.ts';
 
 export type EditorHandle = {
   setReadOnly(r: boolean): void;
-  setDoc(doc: string): void;
+  setDoc(doc: string, path?: string | null): void;   // path 缺省/null → 清 LSP（关标签/空文档）
   setLanguage(ext: Extension | null): void;
   openSearch(): void;
   startCompletion(): void;
@@ -30,7 +32,9 @@ export type EditorHandle = {
 export type EditorOptions = {
   initialDoc: string;
   readOnly: boolean;
+  path: string | null;
   onChange: (doc: string) => void;
+  onLspNotice?: (msg: string, kind: 'success' | 'error') => void;
 };
 
 const editableCompartment = new Compartment();
@@ -57,14 +61,17 @@ function isUserEdit(t: Transaction): boolean {
 export function createEditor(container: HTMLElement, opts: EditorOptions): EditorHandle {
   // setDoc 时用 makeState 重建 state：undo 历史随新 state 清空，且不触发 onChange
   // （setState 产生的 update 无 transactions，some(isUserEdit) 为 false）。
-  const makeState = (doc: string, readOnly: boolean) =>
-    EditorState.create({
+  let currentPath = opts.path ?? null;
+  const makeState = (doc: string, readOnly: boolean) => {
+    const langId = currentPath ? pathToLanguageId(currentPath) : null;
+    const lspOn = langId !== null && !readOnly;
+    const lsp = lspOn ? lspExtension(currentPath!, opts.onLspNotice) : null;
+    return EditorState.create({
       doc,
       extensions: [
         basicSetup,
         languageCompartment.of([]),
         lintGutter(),
-        linter(parseErrorLinter, { delay: 300 }),
         search(),
         editableCompartment.of([
           // 两个 facet 一起设：EditorState.readOnly 供 undo/redo 等命令判定
@@ -72,6 +79,11 @@ export function createEditor(container: HTMLElement, opts: EditorOptions): Edito
           // 视觉/输入。只设 editable 时 Mod-z/Mod-y 在只读模式仍会改文档（F1）。
           EditorState.readOnly.of(readOnly),
           EditorView.editable.of(!readOnly),
+          // LSP 开启 → 类型诊断 linter（延迟 0）；关闭 → 语法级 parseErrorLinter（延迟 300）。
+          // 放进 editableCompartment：只读切换整组重配 → ViewPlugin 销毁/重建，
+          // 天然触发 LSP close/open（重连后 onOpen 重发 open 幂等恢复）。
+          linter(lsp ? lsp.lintSource : parseErrorLinter, { delay: lsp ? 0 : 300 }),
+          ...(lsp ? [lsp.extension] : []),
         ]),
         EditorView.updateListener.of((u) => {
           if (u.docChanged && u.transactions.some(isUserEdit)) {
@@ -80,6 +92,7 @@ export function createEditor(container: HTMLElement, opts: EditorOptions): Edito
         }),
       ],
     });
+  };
 
   const view = new EditorView({
     state: makeState(opts.initialDoc, opts.readOnly),
@@ -88,10 +101,17 @@ export function createEditor(container: HTMLElement, opts: EditorOptions): Edito
 
   return {
     setReadOnly(r: boolean) {
+      // 与 makeState 相同的 lsp 计算（闭包读 currentPath/opts.onLspNotice）：
+      // 整组重配 editableCompartment，使 LSP ViewPlugin 销毁/重建 → close/open 天然触发
+      const langId = currentPath ? pathToLanguageId(currentPath) : null;
+      const lspOn = langId !== null && !r;
+      const lsp = lspOn ? lspExtension(currentPath!, opts.onLspNotice) : null;
       view.dispatch({
         effects: editableCompartment.reconfigure([
           EditorState.readOnly.of(r),
           EditorView.editable.of(!r),
+          linter(lsp ? lsp.lintSource : parseErrorLinter, { delay: lsp ? 0 : 300 }),
+          ...(lsp ? [lsp.extension] : []),
         ]),
       });
       // 只读门控（Task 17）：6.7.1 的 replaceNext/replaceAll 已检查 state.readOnly
@@ -117,9 +137,11 @@ export function createEditor(container: HTMLElement, opts: EditorOptions): Edito
       });
       view.focus();
     },
-    setDoc(doc: string) {
-      // makeState 的第二个参数是 readOnly；读 EditorView.editable 会把布尔值反相
-      // （只读时 editable=false → 重建出可编辑 state）。改用 EditorState.readOnly。
+    setDoc(doc: string, path?: string | null) {
+      // path 缺省/null → 清 LSP（关标签/空文档）；makeState 的第二个参数是 readOnly；
+      // 读 EditorView.editable 会把布尔值反相（只读时 editable=false → 重建出可编辑 state）。
+      // 改用 EditorState.readOnly。
+      currentPath = path ?? null; // 切换文件/关标签 → 更新 LSP 目标路径
       view.setState(makeState(doc, view.state.facet(EditorState.readOnly)));
     },
     setLanguage(ext: Extension | null) {
