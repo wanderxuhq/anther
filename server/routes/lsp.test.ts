@@ -218,3 +218,43 @@ test('两个连接打开同一文件：先关一个不回收，全关后才 disp
     await m2.dispose();
   }
 });
+
+test('误关未持有的 uri 不误回收：另一连接仍持有文件时引擎存活', async () => {
+  // 回归：close 无条件 markClosed 时，conn1 误关 conn2 的 uri 会把全局计数压到 0，
+  // 空闲计时误回收 conn2 仍打开的文件（round-1 的 premature-dispose 类问题）。
+  // 修复：close 按连接持有记账（had = conn.open.delete(uri)），没持有就不减计数。
+  const m2 = makeManager(root, {}, 100);
+  registerLspRoutes(server, m2);
+  const ws1 = await openWs();
+  const ws2 = await openWs();
+  const frames1: Array<Record<string, unknown>> = [];
+  ws1.on('message', (d) => frames1.push(JSON.parse(d.toString())));
+  const frames2: Array<Record<string, unknown>> = [];
+  ws2.on('message', (d) => frames2.push(JSON.parse(d.toString())));
+  try {
+    // 两个连接各打开一个文件：count = 2
+    ws1.send(JSON.stringify({ id: 1, method: 'open', params: { path: 'src/a.ts', text: 'x' } }));
+    await waitFor(() => frames1.some((f) => f.id === 1));
+    ws2.send(JSON.stringify({ id: 1, method: 'open', params: { path: 'src/b.ts', text: 'x' } }));
+    await waitFor(() => frames2.some((f) => f.id === 1));
+    // ws1 误关自己从未打开的 src/b.ts → 不应减计数
+    ws1.send(JSON.stringify({ id: 2, method: 'close', params: { path: 'src/b.ts' } }));
+    await waitFor(() => frames1.some((f) => f.id === 2));
+    // ws1 关闭自己真实持有的 src/a.ts → 计数应仍剩 1（b.ts 仍被 ws2 持有）。
+    // 修复前：误关把计数压到 1，此处再关 a.ts → 0 → 空闲计时误回收 ws2 仍持有的引擎。
+    ws1.send(JSON.stringify({ id: 3, method: 'close', params: { path: 'src/a.ts' } }));
+    await waitFor(() => frames1.some((f) => f.id === 3));
+    ws1.close();
+    // 超过 idleDisposeMs → 引擎必须存活（sessions 按 engineId 键，两文件共享 1 个 typescript 引擎）
+    await sleep(250);
+    assert.equal((m2 as unknown as { sessions: Map<string, unknown> }).sessions.size, 1);
+    // ws2 关闭真实持有的 src/b.ts → 计数归零 → 空闲计时触发 dispose
+    ws2.send(JSON.stringify({ id: 2, method: 'close', params: { path: 'src/b.ts' } }));
+    await waitFor(() => frames2.some((f) => f.id === 2));
+    await waitFor(() => (m2 as unknown as { sessions: Map<string, unknown> }).sessions.size === 0);
+  } finally {
+    ws1.close();
+    ws2.close();
+    await m2.dispose();
+  }
+});

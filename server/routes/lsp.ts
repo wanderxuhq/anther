@@ -80,9 +80,11 @@ export function registerLspRoutes(http: HttpServer, manager: LspManager): void {
           const relPath = String(p.path ?? '');
           const engineId = engineFor(relPath);
           const uri = canonicalUriFor(manager.workspaceRoot, relPath);
-          conn.open.delete(uri);
+          const had = conn.open.delete(uri);
           if (engineId) {
-            manager.markClosed(engineId, uri);
+            // 只在连接确实持有该 uri 时才减计数：误关/重复关别的连接的 uri 不驱动全局计数，
+            // 否则一次假 close 就压到 0 → 空闲计时误回收仍在用的引擎。
+            if (had) manager.markClosed(engineId, uri);
             await manager.sessionFor(engineId).close(uri).catch(() => {}); // 会话已崩则吞掉
           }
           respond(id, { ok: true });
