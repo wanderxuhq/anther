@@ -39,6 +39,7 @@ export class LspSession {
   private conn: MessageConnection | null = null;
   private queue: Promise<unknown> = Promise.resolve();
   private status: 'new' | 'starting' | 'ready' | 'failed' | 'stopped' = 'new';
+  private startPromise: Promise<void> | null = null;
   private version = 0;
 
   constructor(private opts: LspSessionOpts) {}
@@ -55,14 +56,23 @@ export class LspSession {
   }
 
   private async ensureReady(): Promise<MessageConnection> {
-    if (this.status === 'new') await this.start();
+    // 'new' 或 'starting' 都等到 start 完成：spawn 预先 void start() 预热，首个
+    // open/change 必须等握手完成（否则 status='starting' 时误判 unavailable）。
+    // start() 幂等且缓存 startPromise，并发等待共享同一个在途 promise。
+    if (this.status === 'new' || this.status === 'starting') await this.start();
     if (this.status !== 'ready' || !this.conn) throw new Error('language server unavailable');
     return this.conn;
   }
 
   async start(): Promise<void> {
+    if (this.startPromise) return this.startPromise;
     if (this.status !== 'new') return;
     this.status = 'starting';
+    this.startPromise = this.doStart();
+    return this.startPromise;
+  }
+
+  private async doStart(): Promise<void> {
     const proc = spawn(this.opts.cmd, this.opts.args, {
       cwd: this.opts.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
