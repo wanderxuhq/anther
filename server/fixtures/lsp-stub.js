@@ -18,16 +18,21 @@ function send(obj) {
 let buf = Buffer.alloc(0);
 process.stdin.on('data', (chunk) => {
   buf = Buffer.concat([buf, chunk]);
-  const s = buf.toString(); // 仅用于头解析；头是纯 ASCII，字符数即字节数
-  const m = s.match(/^Content-Length: (\d+)\r?\n\r?\n/);
-  if (!m) return;
-  const len = Number(m[1]);
-  const headerLen = m[0].length;
-  if (buf.length < headerLen + len) return;
-  let msg;
-  try { msg = JSON.parse(buf.subarray(headerLen, headerLen + len).toString()); } catch { buf = Buffer.alloc(0); return; }
-  buf = Buffer.alloc(0);
-  handle(msg);
+  // 流式帧解析循环：Content-Length 帧自定界，一次 data 事件可能含多帧
+  // （客户端背靠背写会合并进同一 chunk），且帧边界与 chunk 边界不必对齐——
+  // 每消费完一帧把剩余字节留在 buf 里继续，直到收不全下一帧头/体才等更多数据。
+  for (;;) {
+    const s = buf.toString(); // 仅用于头解析；头是纯 ASCII，字符数即字节数
+    const m = s.match(/^Content-Length: (\d+)\r?\n\r?\n/);
+    if (!m) break;
+    const len = Number(m[1]);
+    const headerLen = m[0].length;
+    if (buf.length < headerLen + len) break; // 帧体未收全，等更多数据
+    let msg;
+    try { msg = JSON.parse(buf.subarray(headerLen, headerLen + len).toString()); } catch { buf = buf.subarray(headerLen + len); continue; }
+    buf = buf.subarray(headerLen + len);
+    handle(msg);
+  }
 });
 
 function handle(msg) {
