@@ -63,7 +63,9 @@ export function registerLspRoutes(http: HttpServer, manager: LspManager): void {
           if (!engineId) return respond(id, { ok: true }); // 非 LSP 文件：浏览器不发，防御
           const uri = canonicalUriFor(manager.workspaceRoot, relPath);
           await manager.sessionFor(engineId).open(uri, text, engineId);
-          manager.markOpen(engineId, uri);
+          // 按连接幂等：本连接已 open 过该 uri（崩溃后重发 open）则不重复计数，
+          // 计数只在两个不同连接都打开同一文件时各加一次（跨连接共享同一 tsserver 的前提）。
+          if (!conn.open.has(uri)) manager.markOpen(engineId, uri);
           conn.open.set(uri, engineId);
           const cached = manager.lastDiagnosticsFor(uri);
           if (cached) sendJson(ws, { type: 'diagnostics', uri, diagnostics: cached }); // 重放

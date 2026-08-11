@@ -44,10 +44,21 @@ afterEach(async () => {
 });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-async function waitFor(fn: () => boolean, timeout = 4000): Promise<void> {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) { if (fn()) return; await sleep(50); }
-  assert.fail('waitFor 超时');
+async function waitFor(fn: () => boolean, timeoutMs = 4000): Promise<void> {
+  const start = Date.now();
+  // 负载下 setTimeout 可能晚到数秒：若按墙钟 deadline 判超时，一次晚到的 sleep
+  // 就会击穿窗口误报（实测 elapsed≈7s 时 polls 才 1）。改为按“名义次数”轮询，
+  // 附加宽松墙钟兜底——真失败时也能终止，不会无限等。
+  const maxPolls = Math.max(10, Math.round(timeoutMs / 50));
+  const hardDeadline = start + 120_000;
+  let polls = 0;
+  for (;;) {
+    polls++;
+    if (fn()) return;
+    if (polls >= maxPolls || Date.now() > hardDeadline) break;
+    await sleep(50);
+  }
+  assert.fail(`waitFor 超时 (elapsed=${Date.now() - start}ms polls=${polls})`);
 }
 
 function openWs() {
@@ -144,26 +155,66 @@ test('会话崩溃（stub 退出）→ 客户端收到 restarted 推送', async 
 });
 
 test('崩溃重建后重发 open 不重复计数 → 空闲回收仍触发 dispose', async () => {
-  // 回归：openCount 裸计数在 crash→reopen 路径 +1 膨胀，close 后永不为 0 → 空闲回收永不触发。
-  // 集合记账下重发 open 幂等，close 后 set 空 → idleDisposeMs 计时 → disposeEngine。
+  // 回归：裸计数 + 无路由守卫时，crash→reopen 路径 +1 膨胀，close 后永不为 0 → 空闲回收永不触发。
+  // 修复：计数恢复原语义，路由层 open 按连接幂等（conn.open 已持有该 uri 则不再 markOpen）。
   const m2 = makeManager(root, {}, 100);
   registerLspRoutes(server, m2);
   const ws = await openWs();
   const frames: Array<Record<string, unknown>> = [];
   ws.on('message', (d) => frames.push(JSON.parse(d.toString())));
-  // 1) 打开文件
-  ws.send(JSON.stringify({ id: 1, method: 'open', params: { path: 'src/a.ts', text: 'x' } }));
-  await waitFor(() => frames.some((f) => f.id === 1));
-  // 2) 崩溃 → restarted 推送
-  const s = (m2 as unknown as { sessions: Map<string, { proc: { kill(): void } }> }).sessions.get('typescript')!;
-  s.proc.kill();
-  await waitFor(() => frames.some((f) => f.type === 'restarted'));
-  // 3) 客户端幂等重发 open（新会话）
-  ws.send(JSON.stringify({ id: 2, method: 'open', params: { path: 'src/a.ts', text: 'x' } }));
-  await waitFor(() => frames.some((f) => f.id === 2));
-  // 4) close → open 集合应归零 → 空闲计时触发 disposeEngine → sessions 清空
-  ws.send(JSON.stringify({ id: 3, method: 'close', params: { path: 'src/a.ts' } }));
-  await waitFor(() => frames.some((f) => f.id === 3));
-  await waitFor(() => (m2 as unknown as { sessions: Map<string, unknown> }).sessions.size === 0);
-  ws.close();
+  try {
+    // 1) 打开文件
+    ws.send(JSON.stringify({ id: 1, method: 'open', params: { path: 'src/a.ts', text: 'x' } }));
+    await waitFor(() => frames.some((f) => f.id === 1));
+    // 2) 崩溃 → restarted 推送
+    const s = (m2 as unknown as { sessions: Map<string, { proc: { kill(): void } }> }).sessions.get('typescript')!;
+    s.proc.kill();
+    await waitFor(() => frames.some((f) => f.type === 'restarted'));
+    // 3) 客户端幂等重发 open（同连接 conn.open 仍持有 uri → 守卫跳过计数）
+    ws.send(JSON.stringify({ id: 2, method: 'open', params: { path: 'src/a.ts', text: 'x' } }));
+    await waitFor(() => frames.some((f) => f.id === 2));
+    // 4) close → 计数归零 → 空闲计时触发 disposeEngine → sessions 清空
+    ws.send(JSON.stringify({ id: 3, method: 'close', params: { path: 'src/a.ts' } }));
+    await waitFor(() => frames.some((f) => f.id === 3));
+    await waitFor(() => (m2 as unknown as { sessions: Map<string, unknown> }).sessions.size === 0);
+  } finally {
+    ws.close();
+    await m2.dispose();
+  }
+});
+
+test('两个连接打开同一文件：先关一个不回收，全关后才 dispose', async () => {
+  // 回归：openCount 按连接计数，两个连接各 open 一次 → count=2；
+  // 关第一个 → count=1 不触发空闲计时（第二个连接仍持有文件）；
+  // 关第二个 → count=0 → idleDisposeMs 计时 → disposeEngine。
+  const m2 = makeManager(root, {}, 100);
+  registerLspRoutes(server, m2);
+  const ws1 = await openWs();
+  const ws2 = await openWs();
+  const frames1: Array<Record<string, unknown>> = [];
+  ws1.on('message', (d) => frames1.push(JSON.parse(d.toString())));
+  const frames2: Array<Record<string, unknown>> = [];
+  ws2.on('message', (d) => frames2.push(JSON.parse(d.toString())));
+  try {
+    // 两个连接都打开 src/a.ts
+    ws1.send(JSON.stringify({ id: 1, method: 'open', params: { path: 'src/a.ts', text: 'x' } }));
+    await waitFor(() => frames1.some((f) => f.id === 1));
+    ws2.send(JSON.stringify({ id: 1, method: 'open', params: { path: 'src/a.ts', text: 'x' } }));
+    await waitFor(() => frames2.some((f) => f.id === 1));
+    // 关闭第一个连接 → 引擎不应被回收（第二个连接仍打开同一文件）
+    ws1.send(JSON.stringify({ id: 2, method: 'close', params: { path: 'src/a.ts' } }));
+    await waitFor(() => frames1.some((f) => f.id === 2));
+    ws1.close();
+    // 等待超过 idleDisposeMs，确认引擎仍存活
+    await sleep(250);
+    assert.equal((m2 as unknown as { sessions: Map<string, unknown> }).sessions.size, 1);
+    // 关闭第二个连接 → 空闲计时触发 dispose → sessions 清空
+    ws2.send(JSON.stringify({ id: 2, method: 'close', params: { path: 'src/a.ts' } }));
+    await waitFor(() => frames2.some((f) => f.id === 2));
+    await waitFor(() => (m2 as unknown as { sessions: Map<string, unknown> }).sessions.size === 0);
+  } finally {
+    ws1.close();
+    ws2.close();
+    await m2.dispose();
+  }
 });

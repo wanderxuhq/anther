@@ -37,7 +37,7 @@ export class LspManager {
   private engines: Map<string, EngineSpec>;
   private sessions = new Map<string, LspSession>();
   private restartCount = new Map<string, number>();
-  private openUris = new Map<string, Set<string>>();       // engineId → 全局打开的 uri 集合（重开幂等）
+  private openCount = new Map<string, number>();          // engineId → 全局打开 uri 数
   private lastDiagnostics = new Map<string, Diagnostic[]>();
   private idleDisposeMs: number;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -91,21 +91,17 @@ export class LspManager {
   }
 
   markOpen(engineId: string, uri: string): void {
-    // 集合记账：崩溃后客户端重发 open 是幂等的（同一 uri add 两次 size 不变），
-    // 不会像裸计数那样在 crash→reopen 路径把计数顶上去导致空闲回收永不触发。
-    let set = this.openUris.get(engineId);
-    if (!set) { set = new Set(); this.openUris.set(engineId, set); }
-    set.add(uri);
+    this.openCount.set(engineId, (this.openCount.get(engineId) ?? 0) + 1);
     this.clearIdleTimer();
   }
 
   markClosed(engineId: string, uri: string): void {
-    const set = this.openUris.get(engineId);
-    set?.delete(uri);
-    if (set && set.size === 0 && this.idleDisposeMs > 0) {
+    const n = (this.openCount.get(engineId) ?? 0) - 1;
+    this.openCount.set(engineId, Math.max(0, n));
+    if (n <= 0 && this.idleDisposeMs > 0) {
       this.clearIdleTimer();
       this.idleTimer = setTimeout(() => {
-        if ((this.openUris.get(engineId)?.size ?? 0) === 0) void this.disposeEngine(engineId);
+        if ((this.openCount.get(engineId) ?? 0) === 0) void this.disposeEngine(engineId);
       }, this.idleDisposeMs);
     }
   }
@@ -125,7 +121,7 @@ export class LspManager {
   async disposeEngine(engineId: string): Promise<void> {
     const s = this.sessions.get(engineId);
     this.sessions.delete(engineId);
-    this.openUris.delete(engineId);
+    this.openCount.delete(engineId);
     this.restartCount.delete(engineId);
     if (s) await s.dispose();
   }
