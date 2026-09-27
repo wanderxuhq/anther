@@ -44,7 +44,7 @@ test('terminalExists：按 id 判断终端标签', () => {
 });
 
 const gitTab: TabItem = { kind: 'git', id: GIT_TAB_ID };
-const diffA: TabItem = { kind: 'git-diff', id: 'git-diff:a.ts', path: 'a.ts' };
+const diffA: TabItem = { kind: 'git-diff', id: gitDiffTabId('a.ts'), path: 'a.ts' };
 
 test('addGitTab：单例不重复', () => {
   assert.deepEqual(addGitTab([fileA, gitTab]), [fileA, gitTab]);
@@ -54,15 +54,14 @@ test('addGitTab：单例不重复', () => {
   assert.equal(withGit[1].id, GIT_TAB_ID);
 });
 
-test('gitDiffTabId：id 前缀 git-diff:，同文件复用', () => {
-  assert.equal(gitDiffTabId('a.ts'), 'git-diff:a.ts');
+test('gitDiffTabId：同文件复用', () => {
   assert.deepEqual(addGitDiffTab([fileA], 'a.ts'), [fileA, diffA]);
   assert.deepEqual(addGitDiffTab([fileA, diffA], 'a.ts'), [fileA, diffA]); // 已存在 → 原样
 });
 
 const historyTab: TabItem = { kind: 'git-history', id: GIT_HISTORY_TAB_ID };
 const branchTab: TabItem = { kind: 'git-branch', id: GIT_BRANCH_TAB_ID };
-const commitA: TabItem = { kind: 'git-commit', id: 'git-commit:a1b2c3', commit: 'a1b2c3' };
+const commitA: TabItem = { kind: 'git-commit', id: gitCommitTabId('a1b2c3'), commit: 'a1b2c3' };
 
 test('addGitHistoryTab / addGitBranchTab：单例不重复', () => {
   assert.deepEqual(addGitHistoryTab([fileA, historyTab]), [fileA, historyTab]);
@@ -74,7 +73,16 @@ test('addGitHistoryTab / addGitBranchTab：单例不重复', () => {
 });
 
 test('gitCommitTabId / addGitCommitTab：同提交去重', () => {
-  assert.equal(gitCommitTabId('a1b2c3'), 'git-commit:a1b2c3');
   assert.deepEqual(addGitCommitTab([fileA], 'a1b2c3'), [fileA, commitA]);
   assert.deepEqual(addGitCommitTab([fileA, commitA], 'a1b2c3'), [fileA, commitA]); // 已存在 → 原样
+});
+
+test('Git 与同名文件可同时打开，关闭 Git 不移除文件', () => {
+  const paths = ['git', 'git-history', 'git-branch', 'git-diff:a.ts', 'git-commit:a1b2c3', '-/git/history'];
+  let tabs: TabItem[] = paths.reduce(addFileTab, [] as TabItem[]);
+  tabs = addGitCommitTab(addGitDiffTab(addGitBranchTab(addGitHistoryTab(addGitTab(tabs))), 'a.ts'), 'a1b2c3');
+  assert.equal(new Set(tabs.map((t) => t.id)).size, paths.length + 5);
+  for (const path of paths) assert.equal(currentFilePath(tabs, path), path);
+  for (const tab of tabs.filter((t) => t.kind !== 'file')) tabs = removeTabById(tabs, tab.id);
+  assert.deepEqual(fileTabPaths(tabs), paths);
 });

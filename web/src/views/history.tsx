@@ -1,10 +1,10 @@
 // web/src/views/history.tsx
 // 历史视图（图）：分支选择器 + 提交图（泳道岔线/合并菱形）+ 分支徽标。
 // 图取代扁平列表（spec §5.3）：log 一次拉 1000 条 topo 序 → layoutGraph 逐行渲染。
-// 每行整条是点击区 → openGitCommit(shortHash)；超 1000 截断提示。
+// 每行整条是点击区 → openGitCommit(hash)；超 1000 截断提示。
 import { createEffect, createSignal, Show, For, onCleanup } from 'solid-js';
 import { api, type GitBranches, type GitCommit } from '../api.ts';
-import { gitRefreshTick, openGitCommit } from '../stores.ts';
+import { gitRefreshTick, openGitCommit, historyBranch, selectHistoryBranch } from '../stores.ts';
 import { commitTimeLabel } from './history-model.ts';
 import { layoutGraph, parseDecorations, type GraphRow } from './graph-model.ts';
 import { t } from '../i18n.ts';
@@ -15,7 +15,7 @@ const ROW_H = 20;    // 每行 SVG 高
 
 export function HistoryView() {
   const [branches, setBranches] = createSignal<GitBranches | null>(null);
-  const [branch, setBranch] = createSignal<string | null>(null);
+  const branch = () => historyBranch() ?? branches()?.current ?? null;
   const [commits, setCommits] = createSignal<GitCommit[]>([]);
   const [rows, setRows] = createSignal<GraphRow[]>([]);
   const [loading, setLoading] = createSignal(true);
@@ -28,7 +28,6 @@ export function HistoryView() {
       try {
         const b = await api.git.branches();
         setBranches(b);
-        if (b.current && !b.branches.some((x) => x.name === branch())) setBranch(b.current);
       } catch { /* 静默，错误条由 log effect 承担 */ }
     })();
   });
@@ -68,9 +67,12 @@ export function HistoryView() {
         <select
           class="history-select"
           value={branch() ?? ''}
-          onInput={(e) => setBranch(e.currentTarget.value || null)}
+          onInput={(e) => selectHistoryBranch(e.currentTarget.value || null)}
           disabled={!branches()?.isRepo}
         >
+          <Show when={branch() && !branches()?.branches.some((b) => b.name === branch())}>
+            <option value={branch()!}>{branch()}</option>
+          </Show>
           <For each={branches()?.branches ?? []}>
             {(b) => <option value={b.name}>{b.name}</option>}
           </For>
@@ -99,7 +101,7 @@ export function HistoryView() {
             const laneCount = Math.max(row.col, ...row.segs.map((s) => Math.max(s.a, s.b))) + 1;
             return (
               <li>
-                <button class="history-row" onClick={() => openGitCommit(c.shortHash)}>
+                <button class="history-row" onClick={() => openGitCommit(c.hash)}>
                   <span class="history-graph">
                     <svg width={laneCount * LANE_W} height={ROW_H} class="graph-svg">
                       {row.segs.map((s) => (

@@ -1,4 +1,4 @@
-import { createSignal, createEffect, For, Show, onCleanup } from 'solid-js';
+import { createSignal, createEffect, For, Show, on, onCleanup } from 'solid-js';
 import { views } from './views/registry.tsx';
 import { TerminalView } from './views/terminal.tsx';
 import { GitView } from './views/git.tsx';
@@ -13,11 +13,15 @@ import {
   currentFile, roMode, setRoMode, pushState, fontScale,
   pendingGoto, setPendingGoto, docLoadedPath, setDocLoadedPath,
   editorHandle, setEditorHandle,
+  activePanel, selectPanel, drawerOpen, setDrawerOpen, updateFilePosition,
   openGitHistory, openGitBranch, createBranch, currentBranch, setCurrentBranch, gitRefreshTick, setGitRefreshTick,
 } from './stores.ts';
 import { createEditor, type EditorHandle } from './editor/index.ts';
 import { describeLanguage, loadLanguage } from './editor/language.ts';
 import { t } from './i18n.ts';
+import { isMarkdownFile } from './markdown.ts';
+import { MarkdownPreview } from './components/markdown-preview.tsx';
+import { preparingDownload, startDownload, setBeforeDownload } from './download.ts';
 
 const NARROW_QUERY = '(max-width: 599px)';
 
@@ -35,11 +39,16 @@ export function useIsNarrow(): () => boolean {
 
 export function App() {
   const isNarrow = useIsNarrow();
-  const [drawerOpen, setDrawerOpen] = createSignal(false);
-  const [activeView, setActiveView] = createSignal('filetree');
   // 编辑器容器用信号持有：ref 回调（首帧 insert 时触发）会令下方 createEffect 重跑，
   // 天然消解「首帧 currentFile 已有值但容器未挂载」的竞态，无需 onMount 兜底。
   const [editorEl, setEditorEl] = createSignal<HTMLDivElement>();
+  const [loadedDoc, setLoadedDoc] = createSignal<{ path: string; content: string } | null>(null);
+  const [markdownSource, setMarkdownSource] = createSignal(false);
+  const canPreviewMarkdown = () => roMode() && isMarkdownFile(currentFile());
+  const showMarkdownPreview = () => canPreviewMarkdown() && !markdownSource();
+
+  // 打开文件或重新进入只读时默认预览；手动切源码不改变只读状态。
+  createEffect(on([currentFile, roMode], () => setMarkdownSource(false)));
 
   const activeTabIsTerminal = () => activeTab()?.kind === 'terminal';
   // 主区域二选一：文件编辑器 ↔ 终端 / git / git-diff 标签视图
@@ -83,8 +92,7 @@ export function App() {
   const onKeyDown = (e: KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
       e.preventDefault();
-      setDrawerOpen(true);
-      setActiveView('search');
+      selectPanel('search');
     }
   };
   window.addEventListener('keydown', onKeyDown);
@@ -94,7 +102,9 @@ export function App() {
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
   let pendingPath: string | undefined; // 防抖窗口内的最新待保存内容（flushSave 用）
   let pendingDoc: string | undefined;
+  let saveChain = Promise.resolve();
   let saveFailed = false; // 上次保存链失败 → 下次成功时 Toast 提示恢复
+  const failedSavePaths = new Set<string>();
   let toastEl: HTMLDivElement | undefined;
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -113,12 +123,13 @@ export function App() {
     toastTimer = setTimeout(() => toastEl?.classList.remove('show'), 3000);
   }
 
-  /** 保存链：api.writeFile(path, text, ro)；失败每 1s 重试共 3 次，仍失败 Toast。
-   *  ro 传值则固定用该值（flushSave 用——切换前捕获 ro=0，重试不随模式翻转）；缺省每次尝试现读 */
-  async function saveWithRetry(path: string, text: string, ro?: boolean) {
+  /** 保存链：api.writeFile(path, text)；失败每 1s 重试共 3 次，仍失败 Toast。
+   *  只读仅控制编辑器（用户决策 2026-08-11）：保存不传 ro，服务端始终放行 */
+  async function saveWithRetry(path: string, text: string) {
     for (let attempt = 0; ; attempt++) {
       try {
-        await api.writeFile(path, text, ro !== undefined ? ro : roMode());
+        await api.writeFile(path, text);
+        failedSavePaths.delete(path);
         if (saveFailed) {
           saveFailed = false;
           showToast(t('toast.restored'), 'success');
@@ -128,6 +139,7 @@ export function App() {
         if (attempt >= 2) {
           // 已失败 3 次（attempt 0/1/2，间隔 1s）
           saveFailed = true;
+          failedSavePaths.add(path);
           showToast(t('toast.saveFail', { msg: (e as Error).message }), 'error');
           return;
         }
@@ -142,20 +154,37 @@ export function App() {
     pendingDoc = text;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      void saveWithRetry(path, text);
+      void flushSave();
     }, 1000);
   }
 
-  /** 编辑→只读切换前调用：清掉防抖计时器，立即保存待写内容。
-   *  此刻 roMode() 仍为 false，固定传值保证重试期间不因已切只读而 403 */
-  function flushSave() {
+  /** 编辑→只读切换前调用：清掉防抖计时器，立即保存待写内容（只读切换前落盘，改动不丢） */
+  function flushSave(): Promise<void> {
     clearTimeout(saveTimer);
-    if (pendingPath === undefined || pendingDoc === undefined) return;
+    if (pendingPath === undefined || pendingDoc === undefined) return saveChain;
     const path = pendingPath;
     const doc = pendingDoc;
     pendingPath = undefined;
     pendingDoc = undefined;
-    void saveWithRetry(path, doc, roMode());
+    saveChain = saveChain.then(() => saveWithRetry(path, doc));
+    return saveChain;
+  }
+
+  setBeforeDownload(async (path, directory) => {
+    await flushSave();
+    if ([...failedSavePaths].some((failed) => failed === path || (directory && (path === '.' || failed.startsWith(`${path}/`))))) {
+      throw new Error(t('download.saveFirst'));
+    }
+  });
+  const downloadPath = () => currentFile() ?? activeGitDiffPath();
+  async function handleDownload() {
+    const path = downloadPath();
+    if (!path || preparingDownload()) return;
+    try {
+      await startDownload(path);
+    } catch (e) {
+      showToast(t('download.failed', { msg: (e as Error).message }), 'error');
+    }
   }
 
   function handleEditorChange(doc: string) {
@@ -163,13 +192,14 @@ export function App() {
     // 有当前文件的场景，此处为防御性 guard
     const path = currentFile();
     if (!path) return;
+    setLoadedDoc({ path, content: doc });
     if (roMode()) return; // 只读模式不自动保存（checkout 前切只读后，防抖内的后续编辑不落盘）
     scheduleSave(path, doc);
   }
 
   /**
    * 切换分支保护（spec §5.4，用户规则）：
-   * 1) flushSave() 立即保存防抖中的待写内容（此刻 roMode 仍 false，ro=0 放行）
+   * 1) flushSave() 立即保存防抖中的待写内容
    * 2) setRoMode(true) → 编辑器转只读（handleEditorChange 的 roMode guard 同时生效 → 只读期间不自动保存）
    * 3) api.git.checkout(name)
    * 4) 成功 → currentBranch 更新 + gitRefreshTick bump（git 面板/历史/分支全部重拉）；
@@ -178,8 +208,10 @@ export function App() {
    * 5) 失败 → Toast git 原始 stderr；分支不变；编辑器保持「已保存 + 只读」（flushSave 已把防抖内容落盘旧分支，改动不丢）
    */
   async function checkoutBranch(name: string): Promise<void> {
-    flushSave();
+    const saved = flushSave();
     setRoMode(true);
+    pushState('replace');
+    await saved;
     try {
       await api.git.checkout(name);
       setCurrentBranch(name);
@@ -217,7 +249,11 @@ export function App() {
     const el = editorEl();
     if (!el) return;
     const seq = ++loadSeq;
+    setDocLoadedPath(null);
     try {
+      // 切文件/浏览器历史导航前先保存旧文档，返回旧文件时等保存完成再读取。
+      await flushSave();
+      if (path !== currentFile() || seq !== loadSeq) return;
       const { content, utf8 } = await api.readFile(path);
       // 响应到达时当前文件已切换 / 已有更新的加载请求 → 丢弃过期响应
       if (path !== currentFile() || seq !== loadSeq) return;
@@ -229,6 +265,8 @@ export function App() {
           readOnly: roMode(),
           path,
           onChange: handleEditorChange,
+          onReveal: () => setMarkdownSource(true),
+          onSelectionChange: updateFilePosition,
           onLspNotice: (msg, kind) => showToast(msg, kind),
         });
         setEditorHandle(editor);
@@ -236,6 +274,7 @@ export function App() {
         editor.setDoc(content, path);
       }
       editor.setReadOnly(roMode());
+      setLoadedDoc({ path, content });
       setDocLoadedPath(path); // 搜索跳转消费 effect 的前提：文档确已加载
       // 语法高亮：文档先显示纯文本，语言异步加载完成后补上（VS Code 同款体验）。
       // 竞态守卫与 readFile 一致：响应到达时已切换文件/有更新加载请求 → 丢弃。
@@ -251,7 +290,7 @@ export function App() {
       // spec §8：Toast + 降级到文件树（清空当前文件 → 编辑器清空，用户回到文件树）
       showToast(t('toast.openFail', { msg: (e as Error).message }), 'error');
       setCurrentTabId(null);
-      pushState();
+      pushState('replace');
       setDocLoadedPath(null);
     }
   }
@@ -260,7 +299,9 @@ export function App() {
   createEffect(() => {
     const path = currentFile();
     if (!path) {
+      void flushSave();
       editor?.setDoc('');
+      setLoadedDoc(null);
       // 同步清 docLoadedPath：closeTab/popstate 置 null 时若滞留旧 path，
       // 消费 effect 的信任前提「docLoadedPath() === g.path ⟹ editor 持有目标文档」被打破，
       // 会在空文档上误 gotoLine 并消费掉 pendingGoto（真跳转随后丢失）
@@ -288,9 +329,9 @@ export function App() {
     const g = pendingGoto();
     const loaded = docLoadedPath();
     const h = editorHandle();
-    if (g && loaded === g.path && h) {
+    if (g && currentFile() === g.path && loaded === g.path && h) {
       setPendingGoto(null);
-      h.gotoLine(g.line0);
+      h.gotoLine(g.line0, g.endLine0, g.reveal);
     }
   });
 
@@ -300,6 +341,7 @@ export function App() {
   });
 
   onCleanup(() => {
+    setBeforeDownload(undefined);
     window.removeEventListener('keydown', onKeyDown);
     clearTimeout(saveTimer);
     editor?.destroy();
@@ -308,7 +350,7 @@ export function App() {
 
   return (
     <div class={`app ${isNarrow() ? 'narrow' : 'wide'}`}>
-      <header class="toolbar">
+      <header class="toolbar" classList={{ 'git-toolbar': isGitKind() }}>
         <button class="icon-btn" onClick={() => setDrawerOpen(!drawerOpen())} title={t('menu')}>
           ☰
         </button>
@@ -316,15 +358,34 @@ export function App() {
           when={!isGitKind()}
           fallback={
             <>
-              {/* git 态：⑂ 分支名 → 分支标签；📜 历史；🔄 刷新（bump tick）；➕ 新建分支 dialog */}
+              {/* Git 工具栏：分支管理、待提交、历史、刷新、新建分支。 */}
               <button class="icon-btn git-branch-btn" onClick={() => openGitBranch()} title={t('git.branch')}>
                 {currentBranch() ?? '—'}
               </button>
-              <button class="icon-btn" onClick={() => openGitHistory()} title={t('git.history')}>
-                📜
-              </button>
-              <button class="icon-btn" onClick={() => setGitRefreshTick((x) => x + 1)} title={t('git.refresh')}>
-                🔄
+              <nav class="git-view-nav" aria-label={t('view.git')}>
+                <button class="icon-btn git-toolbar-action git-view-tab" classList={{ active: activeKind() === 'git' }}
+                  onClick={() => openGit()} title={t('git.changes')} aria-label={t('git.changes')}
+                  aria-current={activeKind() === 'git' ? 'page' : undefined}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M9 5h11M9 12h11M9 19h11M3 5h1M3 12h1M3 19h1" />
+                  </svg>
+                </button>
+                <button class="icon-btn git-toolbar-action git-view-tab" classList={{ active: activeKind() === 'git-history' }}
+                  onClick={() => openGitHistory()} title={t('git.history')} aria-label={t('git.history')}
+                  aria-current={activeKind() === 'git-history' ? 'page' : undefined}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 11a9 9 0 1 1 2.6 7.4M3 4v7h7" />
+                    <path d="M12 7v5l3 2" />
+                  </svg>
+                </button>
+              </nav>
+              <button class="icon-btn git-toolbar-action" onClick={() => setGitRefreshTick((x) => x + 1)} title={t('git.refresh')} aria-label={t('git.refresh')}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M20 7a9 9 0 0 0-15-1L2 9m0-6v6h6M4 17a9 9 0 0 0 15 1l3-3m0 6v-6h-6" />
+                </svg>
               </button>
               <button class="icon-btn" onClick={() => setBranchDialogOpen(true)} title={t('git.newBranch')}>
                 ➕
@@ -336,10 +397,35 @@ export function App() {
             🔍
           </button>
           <span class="toolbar-path">{toolbarPathLabel()}</span>
+          <Show when={canPreviewMarkdown()}>
+            <button
+              class="icon-btn markdown-toggle"
+              onClick={() => setMarkdownSource((source) => !source)}
+              title={showMarkdownPreview() ? t('markdown.showSource') : t('markdown.showPreview')}
+              aria-label={showMarkdownPreview() ? t('markdown.showSource') : t('markdown.showPreview')}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <Show when={showMarkdownPreview()} fallback={
+                  <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></>
+                }>
+                  <path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18" />
+                </Show>
+              </svg>
+            </button>
+          </Show>
+          <button class="icon-btn file-download" onClick={() => void handleDownload()}
+            disabled={!downloadPath() || preparingDownload() || (!!currentFile() && docLoadedPath() !== currentFile())}
+            title={t('download.file')} aria-label={t('download.file')} aria-busy={preparingDownload()}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3v12m-5-5 5 5 5-5M4 16v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4" />
+            </svg>
+          </button>
           <button
             class={`icon-btn ${roMode() ? '' : 'active'}`}
             onClick={() => {
-              // 编辑→只读：先把防抖中的修改立即落盘（此时 roMode 仍 false，ro=0 放行）
+              // 编辑→只读：先把防抖中的修改立即落盘（切换前保存，改动不丢）
               if (!roMode()) flushSave();
               const next = !roMode();
               setRoMode(next);
@@ -356,8 +442,15 @@ export function App() {
         <div
           ref={setEditorEl}
           class="editor-container"
-          style={activeKind() === 'file' || activeKind() === null ? undefined : 'display:none'}
+          style={(activeKind() === 'file' || activeKind() === null) && !showMarkdownPreview() ? undefined : 'display:none'}
         />
+        <Show when={showMarkdownPreview()}>
+          <Show when={loadedDoc()?.path === currentFile()} fallback={<div class="view-placeholder" role="status">{t('loading')}</div>}>
+            <Show when={currentFile()} keyed>
+              {(_path) => <MarkdownPreview content={loadedDoc()?.content ?? ''} />}
+            </Show>
+          </Show>
+        </Show>
         <Show when={currentFile() && !roMode()}>
           <button
             class="complete-btn"
@@ -421,8 +514,8 @@ export function App() {
             <For each={views}>
               {(v) => (
                 <button
-                  class={activeView() === v.id ? 'view-tab active' : 'view-tab'}
-                  onClick={() => setActiveView(v.id)}
+                  class={activePanel() === v.id ? 'view-tab active' : 'view-tab'}
+                  onClick={() => selectPanel(v.id)}
                   title={v.title()}
                 >
                   {v.icon}
@@ -439,7 +532,7 @@ export function App() {
           <div class="drawer-content">
             <For each={views}>
               {(v) => (
-                <Show when={activeView() === v.id}>{v.render()}</Show>
+                <Show when={activePanel() === v.id}>{v.render()}</Show>
               )}
             </For>
           </div>

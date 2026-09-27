@@ -4,7 +4,7 @@ import { startSync } from './stores.ts';
 import { initI18n } from './i18n.ts';
 import './styles.css';
 
-// 渲染前定死界面语言（默认英语，按浏览器语言自动切换；?lang= 可覆盖）。
+// 渲染前应用界面语言（默认英语，按浏览器语言自动切换；?lang= 可覆盖）。
 // 必须早于 render：视图 title 等 JSX 在渲染时读 lang 信号。
 initI18n();
 

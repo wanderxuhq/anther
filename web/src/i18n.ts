@@ -1,8 +1,9 @@
 // web/src/i18n.ts
 // 国际化：默认英语，按浏览器语言自动切换（zh* → 中文，其余 → 英语），
 // ?lang=en|zh 可覆盖（测试/调试用）。轻量字典实现，零新增依赖。
-// 语言在页面加载时定死（无运行时切换器），但 t() 读 lang 信号，保持响应式以便将来扩展。
+// 初始加载和浏览器历史恢复都会应用语言；t() 读 lang 信号即时更新界面。
 import { createSignal } from 'solid-js';
+import { parseUrl } from './url-state.ts';
 
 export type Lang = 'en' | 'zh';
 
@@ -15,6 +16,13 @@ const messages: Record<Lang, Record<string, string>> = {
     switchReadonly: 'Switch to read-only mode',
     newTerminal: 'New terminal',
     noFileOpen: 'No file open',
+    'download.file': 'Download file',
+    'filetree.download': 'Download',
+    'download.preparing': 'Preparing download…',
+    'download.saveFirst': 'Save your changes successfully before downloading',
+    'download.failed': 'Failed to download: {msg}',
+    'markdown.showPreview': 'Show Markdown preview',
+    'markdown.showSource': 'Show Markdown source',
     'toast.terminalCreateFail': 'Failed to create terminal: {msg}',
     'toast.saveFail': 'Failed to save: {msg}',
     'toast.restored': 'Save restored',
@@ -36,8 +44,10 @@ const messages: Record<Lang, Record<string, string>> = {
     'search.truncated': '(too many results — refine your query)',
     'search.hint': 'Type a query to start searching',
     'search.noResults': 'No results',
-    'filetree.roHint': 'Read-only mode — switch to edit mode to modify files',
     'filetree.newFile': 'New file',
+    'filetree.uploadFile': 'Upload file',
+    'filetree.uploading': 'Uploading…',
+    'filetree.uploadExists': 'A file named "{name}" already exists',
     'filetree.newDir': 'New folder',
     'filetree.create': 'Create',
     'filetree.rename': 'Rename',
@@ -49,6 +59,7 @@ const messages: Record<Lang, Record<string, string>> = {
     cancel: 'Cancel',
     'terminal.name': 'Terminal {n}',
     'view.git': 'Git',
+    'git.changes': 'Changes',
     'git.commit': 'Commit',
     'git.commitPlaceholder': 'Commit message',
     'git.selectAll': 'Select all',
@@ -85,6 +96,13 @@ const messages: Record<Lang, Record<string, string>> = {
     switchReadonly: '切换为只读模式',
     newTerminal: '新建终端',
     noFileOpen: '未打开文件',
+    'download.file': '下载文件',
+    'filetree.download': '下载',
+    'download.preparing': '正在准备下载…',
+    'download.saveFirst': '请先成功保存修改后再下载',
+    'download.failed': '下载失败：{msg}',
+    'markdown.showPreview': '显示 Markdown 预览',
+    'markdown.showSource': '显示 Markdown 源码',
     'toast.terminalCreateFail': '新建终端失败：{msg}',
     'toast.saveFail': '保存失败：{msg}',
     'toast.restored': '已恢复保存',
@@ -106,8 +124,10 @@ const messages: Record<Lang, Record<string, string>> = {
     'search.truncated': '（结果过多，请细化关键词）',
     'search.hint': '输入关键词开始搜索',
     'search.noResults': '无结果',
-    'filetree.roHint': '只读模式：切换编辑模式后再修改文件',
     'filetree.newFile': '新建文件',
+    'filetree.uploadFile': '上传文件',
+    'filetree.uploading': '上传中…',
+    'filetree.uploadExists': '已存在同名文件「{name}」',
     'filetree.newDir': '新建目录',
     'filetree.create': '创建',
     'filetree.rename': '重命名',
@@ -119,6 +139,7 @@ const messages: Record<Lang, Record<string, string>> = {
     cancel: '取消',
     'terminal.name': '终端 {n}',
     'view.git': 'Git',
+    'git.changes': '待提交',
     'git.commit': '提交',
     'git.commitPlaceholder': '提交信息',
     'git.selectAll': '全选',
@@ -175,7 +196,11 @@ export function t(key: string, params?: Record<string, string | number>): string
 
 /** 页面加载时调用一次：检测语言 → 设信号 + <html lang>。返回识别结果。 */
 export function initI18n(): Lang {
-  const override = new URLSearchParams(window.location.search).get('lang');
+  return applyLanguage(parseUrl(window.location.href).lang);
+}
+
+/** 初始加载和浏览器历史恢复共用；无显式覆盖时跟随浏览器语言。 */
+export function applyLanguage(override: Lang | null): Lang {
   const langs = navigator.languages.length > 0 ? navigator.languages : [navigator.language];
   const l = detectLang(langs, override);
   setLang(l);

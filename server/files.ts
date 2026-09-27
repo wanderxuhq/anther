@@ -2,6 +2,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { HttpError } from './http-error.ts';
+import { createHash } from 'node:crypto';
 
 export type DirEntry = {
   name: string;
@@ -126,6 +127,29 @@ export class FileStore {
     });
   }
 
+  /** 下载使用原始文件句柄，避免文本转码和整文件缓冲。调用方负责关闭。 */
+  async openDownload(relPath: string) {
+    const abs = await this.resolveSafe(relPath);
+    try {
+      if (!(await fs.stat(abs)).isFile()) throw new HttpError(400, 'not a regular file');
+      const file = await fs.open(abs, 'r');
+      try {
+        const stat = await file.stat({ bigint: true });
+        if (!stat.isFile()) throw new HttpError(400, 'not a regular file');
+        // 使用纳秒时间、变更时间和文件标识区分版本；恢复 mtime 或同大小替换也会更新。
+        const version = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
+        const etag = `"${createHash('sha256').update(version).digest('hex')}"`;
+        return { file, size: Number(stat.size), etag, modified: stat.mtime };
+      } catch (e) {
+        await file.close();
+        throw e;
+      }
+    } catch (e) {
+      if (e instanceof HttpError) throw e;
+      throw this.mapFsError(e);
+    }
+  }
+
   async read(relPath: string): Promise<{ content: string; utf8: boolean }> {
     const abs = await this.resolveSafe(relPath);
     let buf: Buffer;
@@ -230,12 +254,10 @@ export class FileStore {
   }
 
   /** 独占创建（O_EXCL）：已存在 → 409（不清空既有文件）。文件与目录同用：content 仅文件有意义 */
-  async create(relPath: string, content = ''): Promise<void> {
+  async create(relPath: string, content: string | Buffer = ''): Promise<void> {
     const abs = await this.resolveSafeNotRoot(relPath);
     try {
-      const fh = await fs.open(abs, 'wx');
-      await fh.writeFile(content, 'utf8');
-      await fh.close();
+      await fs.writeFile(abs, content, { encoding: 'utf8', flag: 'wx' });
     } catch (e: unknown) {
       throw this.mapFsError(e); // EEXIST → 409 already exists（mapFsError 已映射）
     }

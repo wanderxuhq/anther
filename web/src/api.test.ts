@@ -39,16 +39,34 @@ test('readFile 返回内容', async () => {
   assert.equal(r.content, 'hi');
 });
 
-test('非 2xx 抛 ApiError 携带状态码', async () => {
-  mockFetch(403, { error: 'read-only' });
-  await assert.rejects(api.writeFile('a.ts', 'x', true), (e: Error & { status?: number }) => e.status === 403);
+test('upload 发送原始文件并正确编码路径', async () => {
+  mockFetch(200, { ok: true });
+  const file = new Blob([new Uint8Array([0, 255, 128])]);
+  await api.upload('sub/图片 #1.png', file);
+  const [call] = fetchCalls;
+  assert.equal(call.url, `/api/upload?path=${encodeURIComponent('sub/图片 #1.png')}`);
+  assert.equal(call.init.method, 'POST');
+  assert.equal(call.init.body, file);
+  assert.equal((call.init.headers as Record<string, string>)['Content-Type'], 'application/octet-stream');
+  assert.ok((call.init.headers as Record<string, string>)['x-user-id']);
 });
 
-test('writeFile 带 ro 参数与 x-user-id 头', async () => {
+test('upload 同名错误保留 HTTP 状态和错误信息', async () => {
+  mockFetch(409, { error: 'already exists' });
+  await assert.rejects(api.upload('a.txt', new Blob(['new'])),
+    (e: Error & { status?: number }) => e.status === 409 && e.message === 'already exists');
+});
+
+test('非 2xx 抛 ApiError 携带状态码', async () => {
+  mockFetch(403, { error: 'read-only' });
+  await assert.rejects(api.writeFile('a.ts', 'x'), (e: Error & { status?: number }) => e.status === 403);
+});
+
+test('writeFile 不带 ro 参数并携带 x-user-id 头', async () => {
   mockFetch(200, {});
-  await api.writeFile('a.ts', 'x', false);
+  await api.writeFile('a.ts', 'x');
   const [call] = fetchCalls;
-  assert.ok(call.url.includes('ro=0'));
+  assert.equal(call.url, '/api/file?path=a.ts'); // 只读仅前端控制，URL 不再携带 ro
   assert.ok((call.init.headers as Record<string, string>)['x-user-id']);
 });
 

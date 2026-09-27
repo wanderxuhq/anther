@@ -3,7 +3,8 @@
 html, body { margin: 0; height: 100%; }
 body { font-family: system-ui, -apple-system, sans-serif; }
 
-.app { display: grid; grid-template-rows: auto 1fr; grid-template-columns: 1fr; height: var(--vvh, 100dvh); }
+/* 内容行允许收缩到视口内，长文件树不能撑高整页。 */
+.app { display: grid; grid-template-rows: auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); height: var(--vvh, 100dvh); overflow: hidden; }
 .toolbar { grid-column: 1 / -1; }
 
 .toolbar {
@@ -23,14 +24,35 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 .icon-btn.active { background: var(--accent); color: white; }
 .icon-btn:disabled { opacity: .4; }
 
-.editor-area { min-height: 0; overflow: hidden; grid-column: 1; grid-row: 2; position: relative; }
+.editor-area { min-width: 0; min-height: 0; overflow: hidden; grid-column: 1; grid-row: 2; position: relative; }
 
 /* 编辑器容器（Task 13）：高度链撑满 editor-area，代码等宽字体 */
 .editor-container { height: 100%; min-height: 0; }
 .editor-container .cm-editor { height: 100%; }
 .editor-container .cm-scroller {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  overflow: auto; overscroll-behavior: contain;
 }
+
+.markdown-toggle, .file-download { flex-shrink: 0; color: inherit; }
+.markdown-toggle svg, .file-download svg { display: block; }
+.markdown-preview { height: 100%; overflow: auto; overscroll-behavior: contain; padding: 24px clamp(16px, 4vw, 48px); background: var(--bg); }
+.markdown-body { max-width: 900px; margin: 0 auto; line-height: 1.7; overflow-wrap: anywhere; }
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body h1, .markdown-body h2 { border-bottom: 1px solid var(--border); padding-bottom: .3em; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 { line-height: 1.3; margin-top: 1.5em; }
+.markdown-body a { color: var(--accent); }
+.markdown-body img { max-width: 100%; height: auto; }
+.markdown-body pre, .markdown-body code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.markdown-body code { background: var(--row-hover); border-radius: 4px; padding: .15em .35em; font-size: .9em; }
+.markdown-body pre { overflow: auto; padding: 16px; background: var(--row-hover); border-radius: 6px; }
+.markdown-body pre code { padding: 0; background: none; overflow-wrap: normal; }
+.markdown-body blockquote { margin-left: 0; padding-left: 1em; border-left: 4px solid var(--border); color: var(--muted); }
+.markdown-body table { display: block; max-width: 100%; overflow: auto; border-collapse: collapse; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 6px 12px; }
+.markdown-body tr:nth-child(even) { background: var(--row-hover); }
+.markdown-body hr { border: 0; border-top: 1px solid var(--border); margin: 1.5em 0; }
+.markdown-body input[type='checkbox'] { margin-right: .5em; }
 
 /* 终端面板（Task 10）：填满主区域，xterm 自管滚动 */
 .terminal-view { height: 100%; min-height: 0; overflow: hidden; padding: 4px 0 0 4px; }
@@ -56,7 +78,7 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 .drawer {
   position: fixed; top: 0; bottom: 0; left: 0; width: min(320px, 85vw);
   background: var(--bg); border-right: 1px solid var(--border);
-  display: flex; z-index: 10;
+  display: flex; min-height: 0; min-width: 0; z-index: 10;
   animation: slide-in 0.18s ease;
 }
 @keyframes slide-in { from { transform: translateX(-100%); } }
@@ -71,7 +93,7 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   min-width: 40px; min-height: 40px;
 }
 .drawer-views .view-tab.active { background: var(--accent); }
-.drawer-content { flex: 1; overflow-y: auto; padding: 8px; }
+.drawer-content { flex: 1; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; padding: 8px; }
 
 .view-placeholder { color: var(--muted); padding: 12px; font-size: 13px; }
 
@@ -159,7 +181,7 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 :root[data-theme='dark'] .cm-content .tok-labelName { color: #61afef; }
 :root[data-theme='dark'] .cm-content .tok-invalid { color: #ff6b6b; }
 @media (min-width: 600px) { /* 横屏/桌面：抽屉常驻左侧 */
-  .app { grid-template-columns: 260px 1fr; }
+  .app { grid-template-columns: 260px minmax(0, 1fr); }
   .drawer { position: static; width: 260px; animation: none; grid-column: 1; grid-row: 2; }
   .drawer-backdrop { display: none; }
   .editor-area { grid-column: 2; grid-row: 2; }
@@ -280,7 +302,14 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 .git-diff-editor .cm-scroller { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
 /* ---- 历史 / 分支 / 提交 视图 + git 工具栏（2026-08-09） ---- */
+.git-toolbar-action { flex-shrink: 0; color: inherit; }
+.git-toolbar-action svg { display: block; }
 .git-branch-btn { min-width: 64px; max-width: 160px; padding: 6px 10px; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-view-nav { display: flex; flex-shrink: 0; gap: 4px; }
+@media (max-width: 599px) {
+  .git-toolbar { gap: 4px; padding-inline: 8px; }
+  .git-toolbar .git-branch-btn { flex: 1; min-width: 0; max-width: none; }
+}
 
 .history-view { font-size: 13px; display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; }
 .history-bar { display: flex; padding: 8px; border-bottom: 1px solid var(--border); }

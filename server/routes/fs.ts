@@ -1,10 +1,13 @@
 // server/routes/fs.ts
 import type { HttpServer, Handler } from '../http.ts';
 import type { FileStore } from '../files.ts';
-import { assertWritable } from '../write-gate.ts';
 import { HttpError } from '../http-error.ts';
+import { sendDownload } from '../download.ts';
+import { ArchiveManager, type ArchiveOptions } from '../archives.ts';
 
-export function registerFsRoutes(http: HttpServer, files: FileStore): void {
+export function registerFsRoutes(http: HttpServer, files: FileStore, archiveOptions?: ArchiveOptions): ArchiveManager {
+  const archives = new ArchiveManager(files, archiveOptions);
+  http.onClose(() => archives.dispose());
   // spec §5.1 API 表：服务器运行模式（只读/可写）等状态
   http.get('/api/state', async () => ({ allowWrites: true }));
 
@@ -18,24 +21,40 @@ export function registerFsRoutes(http: HttpServer, files: FileStore): void {
     return await files.read(p);
   });
 
+  http.getStream('/api/download', (req, res, q) => sendDownload(files, req, res, q));
+
+  http.post('/api/download/prepare', (_req, body) => {
+    const p = (body as { path?: unknown } | undefined)?.path;
+    if (typeof p !== 'string' || !p) throw new HttpError(400, 'missing path');
+    return archives.prepare(p);
+  });
+  http.get('/api/download/status', (_req, _body, q) => {
+    const id = q.get('id');
+    if (!id) throw new HttpError(400, 'missing id');
+    return archives.status(id);
+  });
+  http.getStream('/api/download/archive', (req, res, q) => {
+    const id = q.get('id');
+    if (!id) throw new HttpError(400, 'missing id');
+    return archives.download(id, req, res);
+  });
+
   http.put('/api/file', async (_req, body, q) => {
     const p = q.get('path');
     if (!p) throw new HttpError(400, 'missing path');
     if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
     const { content } = body as { content?: string };
     if (typeof content !== 'string') throw new HttpError(400, 'missing content');
-    assertWritable(q.get('ro') ?? undefined);
     await files.write(p, content);
   });
 
-  // spec §5.4：写操作需携带 ro=0（前端编辑模式），ro=1/缺省 → 403（与 PUT /api/file 同一裁决）。
+  // 写操作不再校验只读：只读仅由前端编辑器控制，服务端始终放行（用户决策 2026-08-11）。
   // body 守卫同 PUT /api/file（final-fixes 轮次修复的模式）：空 body 时 readBody 返回
   // undefined，直接解构抛 TypeError → 500；先判对象形态再解构 → 400。
   http.post('/api/mkdir', async (_req, body, q) => {
     if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
     const { path: p } = body as { path?: string };
     if (!p) throw new HttpError(400, 'missing path');
-    assertWritable(q.get('ro') ?? undefined);
     await files.mkdir(p);
   });
 
@@ -44,15 +63,21 @@ export function registerFsRoutes(http: HttpServer, files: FileStore): void {
     if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
     const { path: p } = body as { path?: string };
     if (!p) throw new HttpError(400, 'missing path');
-    assertWritable(q.get('ro') ?? undefined);
     await files.create(p);
+  });
+
+  // 原始字节上传，不设文件大小限制；复用独占创建与根目录边界校验。
+  http.postBinary('/api/upload', async (_req, body, q) => {
+    const p = q.get('path');
+    if (!p) throw new HttpError(400, 'missing path');
+    if (!Buffer.isBuffer(body)) throw new HttpError(400, 'missing file');
+    await files.create(p, body);
   });
 
   http.post('/api/rename', async (_req, body, q) => {
     if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
     const { path: p, to } = body as { path?: string; to?: string };
     if (!p || !to) throw new HttpError(400, 'missing path/to');
-    assertWritable(q.get('ro') ?? undefined);
     await files.rename(p, to);
   });
 
@@ -60,7 +85,6 @@ export function registerFsRoutes(http: HttpServer, files: FileStore): void {
     if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
     const { path: p } = body as { path?: string };
     if (!p) throw new HttpError(400, 'missing path');
-    assertWritable(q.get('ro') ?? undefined);
     await files.del(p);
   });
 
@@ -98,4 +122,5 @@ export function registerFsRoutes(http: HttpServer, files: FileStore): void {
       matchCount: result.matchCount,
     });
   });
+  return archives;
 }

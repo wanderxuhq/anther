@@ -11,17 +11,19 @@
 // 每次展开/收起只触发对应子树重渲染。
 import { createSignal, For, Show, onCleanup } from 'solid-js';
 import { createStore } from 'solid-js/store';
-import { api, type DirEntry } from '../api.ts';
-import { currentFile, openTab, closeTab, roMode, tabs } from '../stores.ts';
+import { api, ApiError, type DirEntry } from '../api.ts';
+import { currentFile, openTab, closeTab, tabs } from '../stores.ts';
 import { parentOf } from '../paths.ts';
 import { NameDialog, type DialogState } from '../components/name-dialog.tsx';
 import { t } from '../i18n.ts';
+import { preparingDownload, startDownload } from '../download.ts';
 
 type DirState = { expanded: boolean; loaded?: DirEntry[]; loading?: boolean };
 
 // path → 目录状态。渲染时 nodes[path] 是响应式读取，setNodes 精确更新。
 const [nodes, setNodes] = createStore<{ [path: string]: DirState }>({});
 const [error, setError] = createSignal<string | null>(null);
+const [uploading, setUploading] = createSignal(false);
 
 // ---- 文件管理（Task 16）：菜单 + 命名对话框 + 两击确认删除 ----
 type MenuTarget = { path: string; kind: 'dir' | 'file' | 'root' };
@@ -48,12 +50,7 @@ async function ensureRoot(): Promise<void> {
   }
 }
 
-// 只读守卫：写操作一律先查 roMode（服务端仍是最终裁决，403 时 Toast 服务器文案）
-function ensureWritable(): boolean {
-  if (roMode()) { setError(t('filetree.roHint')); return false; }
-  return true;
-}
-
+// 只读仅控制编辑器内容（用户决策 2026-08-11）：文件树写操作不校验 roMode，随时可用
 /** 操作完成后刷新父目录列表（保持 loaded 数组与磁盘一致） */
 async function refreshParent(parent: string) {
   const { entries } = await api.list(parent);
@@ -61,7 +58,6 @@ async function refreshParent(parent: string) {
 }
 
 function showMenu(target: MenuTarget) {
-  if (!ensureWritable()) return;
   clearTimeout(confirmTimer);
   setConfirmDel(null);
   setMenu(target);
@@ -85,9 +81,9 @@ async function doCreate(kind: 'file' | 'dir', base: string, name: string) {
     if (kind === 'file') {
       // 独占创建（POST /api/create，服务端 O_EXCL）：重名 → 409 already exists（服务器文案），
       // 不清空既有文件；不设客户端守卫，服务器是重名裁决的唯一事实源
-      await api.create(p, roMode());
+      await api.create(p);
     } else {
-      await api.mkDir(p, roMode()); // 服务端 fs.mkdir；重名 → 409 already exists
+      await api.mkDir(p); // 服务端 fs.mkdir；重名 → 409 already exists
     }
     await refreshParent(base);
     if (kind === 'file') {
@@ -106,13 +102,47 @@ function beginRename(target: MenuTarget) {
   });
 }
 
+function UploadItem(props: { target: MenuTarget }) {
+  let input!: HTMLInputElement;
+  const upload = async (file: File) => {
+    if (uploading()) return;
+    const base = props.target.kind === 'dir' ? props.target.path : parentOf(props.target.path);
+    setUploading(true);
+    setError(null);
+    setMenu(null);
+    try {
+      await api.upload(childPath(base, file.name), file);
+      await refreshParent(base);
+      setNodes(base, 'expanded', true);
+    } catch (e) {
+      setError(e instanceof ApiError && e.status === 409
+        ? t('filetree.uploadExists', { name: file.name })
+        : (e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  };
+  return (
+    <>
+      <input ref={input} type="file" hidden onChange={(e) => {
+        const file = e.currentTarget.files?.[0];
+        e.currentTarget.value = '';
+        if (file) void upload(file);
+      }} />
+      <button class="menu-item" disabled={uploading()} onClick={() => input.click()}>
+        {t('filetree.uploadFile')}
+      </button>
+    </>
+  );
+}
+
 async function doRename(target: MenuTarget, name: string) {
   setDialog(null); setMenu(null);
   // 子路径统一 childPath(parentOf(target.path), name)：根级 'a.ts' → childPath('.', 'b.ts') = 'b.ts'
   const to = childPath(parentOf(target.path), name);
   if (to === target.path) return; // 同名重命名 = 取消，静默关闭
   try {
-    await api.rename(target.path, to, roMode());
+    await api.rename(target.path, to);
     await refreshParent(parentOf(target.path));
     if (tabs().some((t) => t.kind === 'file' && t.path === target.path)) {
       // 级联走 stores 的 closeTab/openTab：封装了服务器调用 + 本地信号 + 快照 + pushState，
@@ -134,7 +164,7 @@ function onDeleteTap(target: MenuTarget) {
   setConfirmDel(null); setMenu(null);
   void (async () => {
     try {
-      await api.del(target.path, roMode());
+      await api.del(target.path);
       await refreshParent(parentOf(target.path));
       if (tabs().some((t) => t.kind === 'file' && t.path === target.path)) await closeTab(target.path); // closeTab 含本地移除 + 快照 + pushState
       setError(null);
@@ -199,7 +229,13 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
           <Show when={menu()?.path === props.path}>
             <div class="row-menu" onClick={(e) => e.stopPropagation()}>
               <button class="menu-item" onClick={() => beginCreate('file', menu()!)}>{t('filetree.newFile')}</button>
+              <UploadItem target={menu()!} />
               <button class="menu-item" onClick={() => beginCreate('dir', menu()!)}>{t('filetree.newDir')}</button>
+              <button class="menu-item" disabled={preparingDownload()} onClick={() => {
+                setMenu(null);
+                setError(null);
+                void startDownload(props.path, props.entry.type !== 'file').catch((e) => setError(t('download.failed', { msg: (e as Error).message })));
+              }}>{t('filetree.download')}</button>
               <Show when={menu()?.kind !== 'root'}>
                 <button class="menu-item" onClick={() => beginRename(menu()!)}>{t('filetree.rename')}</button>
                 <button class={`menu-item ${confirmDel() === props.path ? 'danger' : ''}`} onClick={() => onDeleteTap(menu()!)}>
@@ -231,11 +267,18 @@ export function FileTreeView() {
       <Show when={error()}>
         <div class="error-banner">{error()}</div>
       </Show>
+      <Show when={uploading()}>
+        <div role="status">{t('filetree.uploading')}</div>
+      </Show>
+      <Show when={preparingDownload()}>
+        <div role="status">{t('download.preparing')}</div>
+      </Show>
       <div class="filetree-toolbar">
         <button class="icon-btn" onClick={() => showMenu({ path: '.', kind: 'root' })}>＋ {t('filetree.new')}</button>
         <Show when={menu()?.kind === 'root'}>
           <div class="row-menu" onClick={(e) => e.stopPropagation()}>
             <button class="menu-item" onClick={() => beginCreate('file', menu()!)}>{t('filetree.newFile')}</button>
+            <UploadItem target={menu()!} />
             <button class="menu-item" onClick={() => beginCreate('dir', menu()!)}>{t('filetree.newDir')}</button>
           </div>
         </Show>

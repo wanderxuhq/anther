@@ -9,7 +9,7 @@ import {
 import {
   InitializeRequest, InitializedNotification, DidOpenTextDocumentNotification,
   DidChangeTextDocumentNotification, DidCloseTextDocumentNotification,
-  CompletionRequest, PublishDiagnosticsNotification,
+  CompletionRequest, PublishDiagnosticsNotification, DiagnosticTag,
   type CompletionItem, type Diagnostic, type MessageConnection,
 } from 'vscode-languageserver-protocol';
 
@@ -97,7 +97,19 @@ export class LspSession {
         conn.sendRequest(InitializeRequest.type, {
           processId: process.pid,
           rootUri: pathToFileURL(this.opts.cwd).href,
-          capabilities: { textDocument: {}, workspace: {} },
+          // 客户端能力协商（plan 缺陷修复 2026-08-11）：必须声明 textDocument.publishDiagnostics，
+          // 否则 typescript-language-server 的 features.diagnosticsSupport=false → 永不推送诊断
+          // （stub 不检查能力，Task 2-6 测试全绿；真实 tsserver 下诊断缺失，e2e 冒烟暴露）。
+          capabilities: {
+            textDocument: {
+              publishDiagnostics: {
+                relatedInformation: true,
+                versionSupport: false,
+                tagSupport: { valueSet: [DiagnosticTag.Unnecessary, DiagnosticTag.Deprecated] },
+              },
+            },
+            workspace: {},
+          },
         }),
         this.opts.initializeTimeoutMs ?? 8000,
         'initialize',

@@ -45,13 +45,14 @@ export function loadTabsSnapshot(): string[] | null {
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const binary = body instanceof Blob;
   const res = await fetch(path, {
     method,
     headers: {
-      'Content-Type': 'application/json',
+      'Content-Type': binary ? 'application/octet-stream' : 'application/json',
       'x-user-id': getUserId(),
     },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: binary ? body : body === undefined ? undefined : JSON.stringify(body),
   });
   if (!res.ok) {
     let msg = res.statusText;
@@ -68,17 +69,24 @@ export type GitBranch = { name: string; current: boolean; tip: string };
 export type GitBranches = { isRepo: boolean; current: string | null; branches: GitBranch[] };
 export type GitLog = { isRepo: boolean; commits: GitCommit[] };
 export type GitShow = { commit: GitCommit; diff: string };
+export type ArchiveDownload = {
+  kind: 'archive'; id: string; status: 'preparing' | 'ready' | 'failed';
+  phase: 'queued' | 'scanning' | 'packing'; filename: string; size?: number; url?: string; error?: string;
+};
 
 export const api = {
   list: (path: string) => request<{ entries: DirEntry[] }>('GET', `/api/list?path=${encodeURIComponent(path)}`),
   readFile: (path: string) => request<{ content: string; utf8: boolean }>('GET', `/api/file?path=${encodeURIComponent(path)}`),
-  writeFile: (path: string, content: string, ro: boolean) =>
-    request('PUT', `/api/file?path=${encodeURIComponent(path)}&ro=${ro ? '1' : '0'}`, { content }),
-  mkDir: (path: string, ro: boolean) => request('POST', `/api/mkdir?ro=${ro ? '1' : '0'}`, { path }),
-  create: (path: string, ro: boolean) => request('POST', `/api/create?ro=${ro ? '1' : '0'}`, { path }),
-  rename: (path: string, to: string, ro: boolean) =>
-    request('POST', `/api/rename?ro=${ro ? '1' : '0'}`, { path, to }),
-  del: (path: string, ro: boolean) => request('POST', `/api/delete?ro=${ro ? '1' : '0'}`, { path }),
+  downloadUrl: (path: string) => `/api/download?path=${encodeURIComponent(path)}`,
+  prepareDownload: (path: string) => request<ArchiveDownload | { kind: 'file'; url: string; filename: string }>('POST', '/api/download/prepare', { path }),
+  downloadStatus: (id: string) => request<ArchiveDownload>('GET', `/api/download/status?id=${encodeURIComponent(id)}`),
+  writeFile: (path: string, content: string) =>
+    request('PUT', `/api/file?path=${encodeURIComponent(path)}`, { content }),
+  mkDir: (path: string) => request('POST', '/api/mkdir', { path }),
+  create: (path: string) => request('POST', '/api/create', { path }),
+  upload: (path: string, file: Blob) => request('POST', `/api/upload?path=${encodeURIComponent(path)}`, file),
+  rename: (path: string, to: string) => request('POST', '/api/rename', { path, to }),
+  del: (path: string) => request('POST', '/api/delete', { path }),
   tabs: {
     list: () => request<{ tabs: string[] }>('GET', '/api/tabs'),
     open: (path: string) => request('PUT', '/api/tabs/open', { path }),

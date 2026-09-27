@@ -4,10 +4,10 @@
 export type TabItem =
   | { kind: 'file'; id: string; path: string }
   | { kind: 'terminal'; id: string; name: string }
-  | { kind: 'git'; id: 'git' }
+  | { kind: 'git'; id: '/-/git' }
   | { kind: 'git-diff'; id: string; path: string }
-  | { kind: 'git-history'; id: 'git-history' }
-  | { kind: 'git-branch'; id: 'git-branch' }
+  | { kind: 'git-history'; id: '/-/git/history' }
+  | { kind: 'git-branch'; id: '/-/git/branches' }
   | { kind: 'git-commit'; id: string; commit: string };
 
 export function addFileTab(tabs: TabItem[], path: string): TabItem[] {
@@ -39,10 +39,11 @@ export function terminalExists(tabs: TabItem[], id: string): boolean {
   return tabs.some((t) => t.id === id && t.kind === 'terminal');
 }
 
-export const GIT_TAB_ID = 'git';
+// 文件 id 是相对路径；Git id 用前导 / 隔离，避免与名为 git 等的文件冲突。
+export const GIT_TAB_ID = '/-/git';
 
 export function gitDiffTabId(path: string): string {
-  return `git-diff:${path}`;
+  return `/-/git/diff/${path}`;
 }
 
 export function addGitTab(tabs: TabItem[]): TabItem[] {
@@ -56,11 +57,11 @@ export function addGitDiffTab(tabs: TabItem[], path: string): TabItem[] {
   return [...tabs, { kind: 'git-diff', id, path }];
 }
 
-export const GIT_HISTORY_TAB_ID = 'git-history';
-export const GIT_BRANCH_TAB_ID = 'git-branch';
+export const GIT_HISTORY_TAB_ID = '/-/git/history';
+export const GIT_BRANCH_TAB_ID = '/-/git/branches';
 
 export function gitCommitTabId(hash: string): string {
-  return `git-commit:${hash}`;
+  return `/-/git/commit/${hash}`;
 }
 
 export function addGitHistoryTab(tabs: TabItem[]): TabItem[] {

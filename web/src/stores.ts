@@ -1,6 +1,6 @@
 // web/src/stores.ts
-import { createSignal, createMemo } from 'solid-js';
-import { parseUrl, serializeUrl, type UrlState } from './url-state.ts';
+import { batch, createSignal, createMemo } from 'solid-js';
+import { DEFAULT_STATE, DEFAULT_EXCLUDE, parseUrl, serializeUrl, type UrlState, type Panel, type LineRange } from './url-state.ts';
 import { api, loadTabsSnapshot, saveTabsSnapshot, type TerminalInfo } from './api.ts';
 import type { EditorHandle } from './editor/index.ts';
 import {
@@ -9,13 +9,22 @@ import {
   addGitHistoryTab, addGitBranchTab, addGitCommitTab, gitCommitTabId,
   GIT_HISTORY_TAB_ID, GIT_BRANCH_TAB_ID,
 } from './tab-model.ts';
-import { t } from './i18n.ts';
+import { t, applyLanguage } from './i18n.ts';
 
 export const [tabs, setTabs] = createSignal<TabItem[]>([]);
 export const [currentTabId, setCurrentTabId] = createSignal<string | null>(null);
 export const [roMode, setRoMode] = createSignal(true);
 export const [theme, setTheme] = createSignal<'auto' | 'light' | 'dark'>('auto');
 export const [fontScale, setFontScale] = createSignal(100);
+export const [activePanel, setActivePanel] = createSignal<Panel>('files');
+export const [drawerOpen, setDrawerOpen] = createSignal(false);
+export const [searchQuery, setSearchQuery] = createSignal('');
+export const [searchCaseSensitive, setSearchCaseSensitive] = createSignal(false);
+export const [searchExclude, setSearchExclude] = createSignal(DEFAULT_EXCLUDE);
+export const [historyBranch, setHistoryBranch] = createSignal<string | null>(null);
+const [urlLang, setUrlLang] = createSignal<UrlState['lang']>(null);
+const [pendingTerminal, setPendingTerminal] = createSignal<string | null>(null);
+const [filePosition, setFilePosition] = createSignal<{ path: string; line: LineRange } | null>(null);
 
 /** 当前前台标签（文件/终端），无则 null */
 export const activeTab = createMemo<TabItem | null>(() => {
@@ -27,7 +36,7 @@ export const activeTab = createMemo<TabItem | null>(() => {
 export const currentFile = createMemo<string | null>(() => currentFilePath(tabs(), currentTabId()));
 
 // 搜索跳转管道 / 文档加载路径 / 编辑器句柄（原样保留）
-export const [pendingGoto, setPendingGoto] = createSignal<{ path: string; line0: number } | null>(null);
+export const [pendingGoto, setPendingGoto] = createSignal<{ path: string; line0: number; endLine0?: number; reveal?: boolean } | null>(null);
 export const [docLoadedPath, setDocLoadedPath] = createSignal<string | null>(null);
 export const [editorHandle, setEditorHandle] = createSignal<EditorHandle | null>(null);
 
@@ -37,20 +46,115 @@ export const [currentBranch, setCurrentBranch] = createSignal<string | null>(nul
 export const [gitRefreshTick, setGitRefreshTick] = createSignal(0);
 
 let started = false;
+let terminalsLoaded = false;
 
 // 终端名完全本地生成：计数种子 = startSync 时服务端存活的终端数（服务端内存态、
 // 重启清零）。只增不减：进程退出标签移除，但序号不复用，存活终端内编号不重复。
 let termCount = 0;
 
-/** 将当前状态写入 URL：当前标签是文件 → path 参数；终端 → term 参数（互斥） */
-export function pushState(): void {
-  const state: UrlState = { path: null, term: null, ro: roMode(), theme: theme(), fs: fontScale() };
-  const t = activeTab();
-  if (t?.kind === 'file') state.path = t.path;
-  else if (t?.kind === 'terminal') state.term = t.id;
+/** 主导航新增历史；连续输入/选区变化只替换当前历史。恢复 URL 不调用此函数。 */
+export function pushState(mode: 'push' | 'replace' = 'push'): void {
+  const state: UrlState = {
+    ...DEFAULT_STATE, ro: roMode(), theme: theme(), fs: fontScale(), lang: urlLang(),
+    panel: activePanel(), query: searchQuery(), caseSensitive: searchCaseSensitive(), exclude: searchExclude(),
+  };
+  const tab = activeTab();
+  if (tab) setPendingTerminal(null);
+  if (tab?.kind === 'file') {
+    state.path = tab.path;
+    const position = filePosition();
+    state.line = position?.path === tab.path ? position.line : null;
+  } else if (tab?.kind === 'terminal') state.term = tab.id;
+  else if (tab?.kind === 'git') state.view = 'git';
+  else if (tab?.kind === 'git-diff') { state.view = 'diff'; state.path = tab.path; }
+  else if (tab?.kind === 'git-history') { state.view = 'history'; state.branch = historyBranch(); }
+  else if (tab?.kind === 'git-branch') state.view = 'branches';
+  else if (tab?.kind === 'git-commit') { state.view = 'commit'; state.commit = tab.commit; }
+  else if (!tab) state.term = pendingTerminal();
   const url = serializeUrl(state);
   if (window.location.pathname + window.location.search !== url) {
-    window.history.replaceState(null, '', url);
+    if (mode === 'replace') window.history.replaceState(null, '', url);
+    else window.history.pushState(null, '', url);
+  }
+}
+
+export function selectPanel(panel: Panel): void {
+  batch(() => { setActivePanel(panel); setDrawerOpen(true); });
+  pushState();
+}
+
+export function updateSearch(patch: Partial<Pick<UrlState, 'query' | 'caseSensitive' | 'exclude'>>): void {
+  batch(() => {
+    if (patch.query !== undefined) setSearchQuery(patch.query);
+    if (patch.caseSensitive !== undefined) setSearchCaseSensitive(patch.caseSensitive);
+    if (patch.exclude !== undefined) setSearchExclude(patch.exclude);
+  });
+  pushState('replace');
+}
+
+export function selectHistoryBranch(branch: string | null): void {
+  setHistoryBranch(branch);
+  pushState();
+}
+
+/** 编辑器的用户选区变化，不为每次按键新增历史，也不混入其他文件的行号。 */
+export function updateFilePosition(line: LineRange): void {
+  const path = currentFile();
+  if (!path || docLoadedPath() !== path) return;
+  setFilePosition({ path, line });
+  pushState('replace');
+}
+
+async function registerFile(path: string): Promise<void> {
+  await api.tabs.open(path);
+  if (currentFile() === path) await api.tabs.front(path);
+}
+
+/** 初始加载、直接链接、前进/后退共用；先补齐本地标签再激活，网络响应不改变导航目标。 */
+export function restoreUrl(state: UrlState, syncServer = true): void {
+  // 解析会丢弃不属于当前视图的参数；同步修正地址，避免刷新后 URL 与页面不一致。
+  const url = serializeUrl(state);
+  if (window.location.pathname + window.location.search !== url) {
+    window.history.replaceState(null, '', url + window.location.hash);
+  }
+  batch(() => {
+    setRoMode(state.ro);
+    setTheme(state.theme);
+    setFontScale(state.fs);
+    setUrlLang(state.lang);
+    applyTheme(state.theme);
+    applyLanguage(state.lang);
+    setActivePanel(state.panel);
+    // panel 仅记录选中项；抽屉是否展开由本地交互控制，刷新/后退不自动弹出。
+    setSearchQuery(state.query);
+    setSearchCaseSensitive(state.caseSensitive);
+    setSearchExclude(state.exclude);
+    setHistoryBranch(state.branch);
+    setFilePosition(state.path && state.line ? { path: state.path, line: state.line } : null);
+    setPendingGoto(null);
+    setPendingTerminal(!terminalsLoaded ? state.term : null);
+    if (state.term) {
+      setCurrentTabId(terminalExists(tabs(), state.term) ? state.term : null);
+    } else if (state.view === 'git') {
+      setTabs(addGitTab); setCurrentTabId(GIT_TAB_ID);
+    } else if (state.view === 'history') {
+      setTabs(addGitHistoryTab); setCurrentTabId(GIT_HISTORY_TAB_ID);
+    } else if (state.view === 'branches') {
+      setTabs(addGitBranchTab); setCurrentTabId(GIT_BRANCH_TAB_ID);
+    } else if (state.view === 'commit' && state.commit) {
+      setTabs((prev) => addGitCommitTab(prev, state.commit!)); setCurrentTabId(gitCommitTabId(state.commit));
+    } else if (state.view === 'diff' && state.path) {
+      setTabs((prev) => addGitDiffTab(prev, state.path!)); setCurrentTabId(gitDiffTabId(state.path));
+    } else if (state.path) {
+      setTabs((prev) => addFileTab(prev, state.path!)); setCurrentTabId(state.path);
+      if (state.line) setPendingGoto({ path: state.path, line0: state.line.start - 1,
+        endLine0: state.line.end > state.line.start ? state.line.end - 1 : undefined });
+      else setPendingGoto({ path: state.path, line0: 0, reveal: false });
+    } else setCurrentTabId(null);
+  });
+  if (syncServer && currentFile()) {
+    saveTabsSnapshot(fileTabPaths(tabs()));
+    void registerFile(currentFile()!).catch(() => { /* readFile 负责展示文件加载失败 */ });
   }
 }
 
@@ -60,23 +164,11 @@ export async function startSync(): Promise<void> {
   started = true;
 
   const s = parseUrl(window.location.href);
-  setRoMode(s.ro);
-  setTheme(s.theme);
-  setFontScale(s.fs);
-  applyTheme(s.theme);
+  restoreUrl(s, false);
 
   // 浏览器前进/后退：popstate → 重解析 URL → 覆盖状态（term 按当前终端标签校验存在性）
   window.addEventListener('popstate', () => {
-    const st = parseUrl(window.location.href);
-    setRoMode(st.ro);
-    setTheme(st.theme);
-    setFontScale(st.fs);
-    applyTheme(st.theme);
-    if (st.term) {
-      setCurrentTabId(terminalExists(tabs(), st.term) ? st.term : null);
-    } else {
-      setCurrentTabId(st.path);
-    }
+    restoreUrl(parseUrl(window.location.href));
   });
 
   // 文件标签（既有逻辑，转为 TabItem）
@@ -101,14 +193,17 @@ export async function startSync(): Promise<void> {
     termTabs = terminals.map((t) => ({ kind: 'terminal', id: t.id, name: t.name }));
     termCount = terminals.length; // 种子：后续新建终端从存活数继续编号
   } catch { /* 静默 */ }
-  setTabs([...fileTabs, ...termTabs]);
+  terminalsLoaded = true;
+  // 合并加载期间已经打开的本地标签，不用迟到的列表覆盖当前导航。
+  setTabs((local) => [...local, ...[...fileTabs, ...termTabs].filter((tab) => !local.some((x) => x.id === tab.id))]);
 
   // 前台：term 指向的终端还在 → 设为前台；不存在（他人/失效/服务器重启）→ 静默降级（空态）
-  if (s.term) {
-    if (termTabs.some((t) => t.id === s.term)) setCurrentTabId(s.term);
-  } else {
-    setCurrentTabId(s.path);
-  }
+  // 列表加载期间也可能发生 popstate；只解析此刻的 URL，不重新激活启动时的旧目标。
+  const term = parseUrl(window.location.href).term;
+  if (term && terminalExists(tabs(), term)) setCurrentTabId(term);
+  setPendingTerminal(null);
+  if (currentFile()) void registerFile(currentFile()!).catch(() => {});
+  saveTabsSnapshot(fileTabPaths(tabs()));
 
   void refreshGitMeta(); // 工具栏分支名初始化（非阻塞）
 
@@ -138,24 +233,26 @@ export function applyTheme(t: 'auto' | 'light' | 'dark'): void {
 }
 
 /** 打开/前台一个文件标签 */
-export async function openTab(path: string): Promise<void> {
-  await api.tabs.open(path);
-  setTabs((prev) => addFileTab(prev, path));
-  setCurrentTabId(path);
-  await api.tabs.front(path);
+export async function openTab(path: string, line: LineRange | null = null): Promise<void> {
+  batch(() => {
+    if (currentFile() !== path) setFilePosition(null);
+    setPendingGoto(null);
+    setTabs((prev) => addFileTab(prev, path));
+    setCurrentTabId(path);
+    if (line) {
+      setFilePosition({ path, line });
+      setPendingGoto({ path, line0: line.start - 1, endLine0: line.end > line.start ? line.end - 1 : undefined });
+    }
+  });
   saveTabsSnapshot(fileTabPaths(tabs()));
   pushState();
+  await registerFile(path);
 }
 
 /** 搜索跳转统一入口（原逻辑，currentFile 已为 memo） */
 export function gotoLine0(path: string, line0: number): void {
-  const h = editorHandle();
-  if (currentFile() === path && docLoadedPath() === path && h) {
-    h.gotoLine(line0);
-    return;
-  }
-  setPendingGoto({ path, line0 });
-  void openTab(path);
+  const line = Math.max(1, line0 + 1);
+  void openTab(path, { start: line, end: line }).catch(() => {});
 }
 
 export async function closeTab(path: string): Promise<void> {
@@ -207,10 +304,10 @@ export function removeTerminalTab(id: string): void {
 export function openGit(): void {
   setTabs((prev) => addGitTab(prev));
   setCurrentTabId(GIT_TAB_ID);
-  pushState(); // git 标签不写 URL：path/term 均为 null → URL 回 '/'，刷新不恢复
+  pushState();
 }
 
-/** 打开/复用某文件的 git-diff 标签（id 固定 git-diff:<path>，同文件点第二次复用） */
+/** 打开/复用某文件的 git-diff 标签，同文件点第二次复用。 */
 export function openGitDiff(path: string): void {
   setTabs((prev) => addGitDiffTab(prev, path));
   setCurrentTabId(gitDiffTabId(path));
@@ -232,7 +329,7 @@ export async function refreshGitMeta(): Promise<void> {
   } catch { /* 服务器不可达/非仓库：保持 null，工具栏显示 '—' */ }
 }
 
-/** 打开/复用历史标签（单例，对齐 openGit 模式；git 标签不写 URL） */
+/** 打开/复用历史标签（单例），URL 保留历史分支筛选。 */
 export function openGitHistory(): void {
   setTabs((prev) => addGitHistoryTab(prev));
   setCurrentTabId(GIT_HISTORY_TAB_ID);
@@ -246,7 +343,7 @@ export function openGitBranch(): void {
   pushState();
 }
 
-/** 打开/复用某提交的 diff 标签（id git-commit:<hash>，同提交去重） */
+/** 打开/复用某提交的 diff 标签，同提交去重。 */
 export function openGitCommit(hash: string): void {
   setTabs((prev) => addGitCommitTab(prev, hash));
   setCurrentTabId(gitCommitTabId(hash));

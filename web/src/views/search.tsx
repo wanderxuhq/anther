@@ -1,18 +1,13 @@
 // web/src/views/search.tsx
 // 全局搜索视图（Task 17）：关键词 + 大小写 + 排除框 → SSE 流式结果，
 // 按文件分组（VS Code 式），点击匹配跳转到文件对应行。
-import { createSignal, For, onCleanup, Show } from 'solid-js';
+import { createEffect, createSignal, For, on, onCleanup, Show } from 'solid-js';
 import { searchStream, type SearchFile } from '../api.ts';
-import { gotoLine0 } from '../stores.ts';
+import { gotoLine0, searchQuery as query, searchCaseSensitive as caseSensitive, searchExclude as exclude, updateSearch } from '../stores.ts';
 import { splitByQuery } from './search-util.ts';
 import { t } from '../i18n.ts';
 
-const DEFAULT_EXCLUDE = '.git,node_modules,dist';
-
 export function SearchView() {
-  const [query, setQuery] = createSignal('');
-  const [caseSensitive, setCaseSensitive] = createSignal(false);
-  const [exclude, setExclude] = createSignal(DEFAULT_EXCLUDE);
   const [files, setFiles] = createSignal<SearchFile[]>([]);
   const [expanded, setExpanded] = createSignal<Set<string>>(new Set());
   const [searching, setSearching] = createSignal(false);
@@ -27,6 +22,7 @@ export function SearchView() {
   // 视图卸载（切换视图）时清理：清掉挂起的防抖 timer、abort 在途 SSE 流，
   // 否则流会跑完整个服务端遍历（上限 500 文件）、timer 还会触发孤儿 runSearch
   onCleanup(() => {
+    ++seq;
     clearTimeout(debounceTimer);
     cancelCurrent?.();
   });
@@ -35,6 +31,17 @@ export function SearchView() {
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(runSearch, 300);
   }
+
+  // 初次挂载、URL 恢复和输入修改统一触发搜索；先废弃旧结果，防止防抖期串入过期回调。
+  createEffect(on([query, caseSensitive, exclude], () => {
+    ++seq;
+    cancelCurrent?.();
+    setFiles([]);
+    setStatus(null);
+    setError(null);
+    setSearching(false);
+    scheduleSearch();
+  }));
 
   function runSearch() {
     clearTimeout(debounceTimer); // 防抖挂起期被直接触发（大小写切换/取消）时清掉挂起 timer，防双重触发
@@ -91,14 +98,14 @@ export function SearchView() {
           type="search"
           placeholder={t('search.placeholder')}
           value={query()}
-          onInput={(e) => { setQuery(e.currentTarget.value); scheduleSearch(); }}
+          onInput={(e) => updateSearch({ query: e.currentTarget.value })}
         />
         <div class="search-options">
           <label class="search-toggle">
             <input
               type="checkbox"
               checked={caseSensitive()}
-              onChange={(e) => { setCaseSensitive(e.currentTarget.checked); runSearch(); }}
+              onChange={(e) => updateSearch({ caseSensitive: e.currentTarget.checked })}
             />
             {t('search.caseSensitive')}
           </label>
@@ -107,7 +114,7 @@ export function SearchView() {
             type="text"
             placeholder={t('search.excludePlaceholder')}
             value={exclude()}
-            onInput={(e) => { setExclude(e.currentTarget.value); scheduleSearch(); }}
+            onInput={(e) => updateSearch({ exclude: e.currentTarget.value })}
           />
         </div>
       </div>

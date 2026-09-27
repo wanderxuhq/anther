@@ -18,6 +18,7 @@ import { startCompletion } from '@codemirror/autocomplete';
 import { parseErrorLinter } from './lint.ts';
 import { lspExtension } from './lsp.ts';
 import { pathToLanguageId } from './lsp-client.ts';
+import type { LineRange } from '../url-state.ts';
 
 export type EditorHandle = {
   setReadOnly(r: boolean): void;
@@ -25,7 +26,7 @@ export type EditorHandle = {
   setLanguage(ext: Extension | null): void;
   openSearch(): void;
   startCompletion(): void;
-  gotoLine(line0: number): void;
+  gotoLine(line0: number, endLine0?: number, reveal?: boolean): void;
   destroy(): void;
 };
 
@@ -34,6 +35,9 @@ export type EditorOptions = {
   readOnly: boolean;
   path: string | null;
   onChange: (doc: string) => void;
+  /** 搜索或行号跳转时，让宿主切回可见的源码视图。 */
+  onReveal?: () => void;
+  onSelectionChange?: (line: LineRange) => void;
   onLspNotice?: (msg: string, kind: 'success' | 'error') => void;
 };
 
@@ -62,6 +66,7 @@ export function createEditor(container: HTMLElement, opts: EditorOptions): Edito
   // setDoc 时用 makeState 重建 state：undo 历史随新 state 清空，且不触发 onChange
   // （setState 产生的 update 无 transactions，some(isUserEdit) 为 false）。
   let currentPath = opts.path ?? null;
+  let applyingLocation = false;
   const makeState = (doc: string, readOnly: boolean) => {
     const langId = currentPath ? pathToLanguageId(currentPath) : null;
     const lspOn = langId !== null && !readOnly;
@@ -88,6 +93,13 @@ export function createEditor(container: HTMLElement, opts: EditorOptions): Edito
         EditorView.updateListener.of((u) => {
           if (u.docChanged && u.transactions.some(isUserEdit)) {
             opts.onChange(u.state.doc.toString());
+          }
+          if (!applyingLocation && u.selectionSet && u.transactions.length > 0) {
+            const { from, to } = u.state.selection.main;
+            opts.onSelectionChange?.({
+              start: u.state.doc.lineAt(from).number,
+              end: u.state.doc.lineAt(to > from ? to - 1 : to).number,
+            });
           }
         }),
       ],
@@ -121,21 +133,28 @@ export function createEditor(container: HTMLElement, opts: EditorOptions): Edito
       if (r) closeSearchPanel(view);
     },
     openSearch() {
+      opts.onReveal?.();
       openSearchPanel(view);
     },
     startCompletion() {
       // 语言异步加载完成前调用 → CM 内部安全 no-op
       startCompletion(view);
     },
-    gotoLine(line0: number) {
+    gotoLine(line0: number, endLine0?: number, reveal = true) {
+      if (reveal) opts.onReveal?.();
       // line0 为 0 基行号；行号越界钳制到文档首/末行
       const lineNo = Math.min(Math.max(1, line0 + 1), view.state.doc.lines);
       const line = view.state.doc.line(lineNo);
-      view.dispatch({
-        selection: { anchor: line.from },
-        effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
-      });
-      view.focus();
+      const end = endLine0 === undefined ? line.from
+        : view.state.doc.line(Math.min(Math.max(lineNo, endLine0 + 1), view.state.doc.lines)).to;
+      applyingLocation = true;
+      try {
+        view.dispatch({
+          selection: { anchor: line.from, head: end },
+          effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
+        });
+      } finally { applyingLocation = false; }
+      if (reveal) view.focus();
     },
     setDoc(doc: string, path?: string | null) {
       // path 缺省/null → 清 LSP（关标签/空文档）；makeState 的第二个参数是 readOnly；

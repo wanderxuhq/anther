@@ -37,11 +37,14 @@ const MIME: Record<string, string> = {
 
 export class HttpServer {
   private routes = new Map<string, Map<string, Handler>>();
+  private binaryPosts = new Set<string>();
   private sseRoutes = new Map<string, SseHandler>();
+  private streamRoutes = new Map<string, SseHandler>();
   private wsRoutes = new Map<string, WsHandler>();
   private wss = new WebSocketServer({ noServer: true });
   private server = createServer((req, res) => void this.handle(req, res));
   private staticDir: string;
+  private disposers: (() => Promise<void>)[] = [];
 
   constructor(opts: { staticDir: string }) {
     this.staticDir = opts.staticDir;
@@ -69,7 +72,15 @@ export class HttpServer {
   put(pattern: string, h: Handler) { this.add('PUT', pattern, h); }
   post(pattern: string, h: Handler) { this.add('POST', pattern, h); }
 
+  postBinary(pattern: string, h: Handler) {
+    this.binaryPosts.add(pattern);
+    this.post(pattern, h);
+  }
+
   sse(pattern: string, h: SseHandler) { this.sseRoutes.set(pattern, h); }
+
+  /** GET / HEAD 原始响应，由路由设置响应头并处理 HEAD 的空响应体。 */
+  getStream(pattern: string, h: SseHandler) { this.streamRoutes.set(pattern, h); }
 
   ws(pattern: string, h: WsHandler) { this.wsRoutes.set(pattern, h); }
 
@@ -81,12 +92,15 @@ export class HttpServer {
   async listen(port: number, host: string) {
     return new Promise<void>((resolve) => this.server.listen(port, host, resolve));
   }
-  close() {
+  onClose(dispose: () => Promise<void>) { this.disposers.push(dispose); }
+
+  async close() {
     for (const c of this.wss.clients) c.close();
     this.wss.close();
-    return new Promise<void>((resolve, reject) =>
+    await new Promise<void>((resolve, reject) =>
       this.server.close((e) => (e ? reject(e) : resolve())),
     );
+    await Promise.all(this.disposers.map((dispose) => dispose()));
   }
   address() { return this.server.address(); }
 
@@ -98,8 +112,14 @@ export class HttpServer {
         await this.serveStatic(url.pathname, res, req.method === 'HEAD');
         return;
       }
-      // SSE 路由：handler 直接拿 res 写流（text/event-stream），不走 JSON 封装；
-      // 错误也写在流里（error 事件），不破坏已建立的连接
+      if (req.method === 'GET' || req.method === 'HEAD') {
+        const streamHandler = this.streamRoutes.get(url.pathname);
+        if (streamHandler) {
+          await streamHandler(req, res, url.searchParams);
+          return;
+        }
+      }
+      // SSE 路由：handler 直接拿 res 写流；错误也写在流里。
       if (req.method === 'GET') {
         const sseHandler = this.sseRoutes.get(url.pathname);
         if (sseHandler) {
@@ -122,10 +142,14 @@ export class HttpServer {
       }
       const handler = this.routes.get(req.method ?? '')?.get(url.pathname);
       if (!handler) throw new HttpError(404, 'not found');
-      const body = await readBody(req);
+      const binary = req.method === 'POST' && this.binaryPosts.has(url.pathname);
+      const body = await readBody(req, binary);
       const result = await handler(req, body, url.searchParams);
       res.json(result ?? { ok: true });
     } catch (e: unknown) {
+      // 已开始的下载失败或被取消时终止流，不能再追加 JSON 响应。
+      if (res.destroyed) return;
+      if (res.headersSent) { res.destroy(); return; }
       if (e instanceof HttpError) {
         res.json({ error: e.message }, e.status);
       } else {
@@ -168,14 +192,15 @@ export class HttpServer {
   }
 }
 
-async function readBody(req: IncomingMessage): Promise<unknown> {
+async function readBody(req: IncomingMessage, binary = false): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > 1_000_000) throw new HttpError(413, 'body too large');
+    if (!binary && size > 1_000_000) throw new HttpError(413, 'body too large');
     chunks.push(chunk as Buffer);
   }
+  if (binary) return Buffer.concat(chunks);
   if (chunks.length === 0) return undefined;
   try {
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));

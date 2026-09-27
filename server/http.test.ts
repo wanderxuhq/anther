@@ -79,11 +79,14 @@ test('POST /api/create 无 body → 400（而非 500）', async () => {
   assert.ok(body.error);
 });
 
-test('POST /api/create 带 ro=1 → 403（前端只读模式拒绝），ro=0 → 200', async () => {
-  const { status, body } = await call('POST', '/api/create?ro=1', { path: 'x.txt' });
-  assert.equal(status, 403);
-  assert.ok(body.error);
-  const ok = await call('POST', '/api/create?ro=0', { path: 'y.txt' });
+test('取消上传大小限制后，普通 JSON 请求仍保留原限制', async () => {
+  const { status } = await call('PUT', '/api/file?path=a.txt', { content: 'x'.repeat(1_000_001) });
+  assert.equal(status, 413);
+  assert.equal((await call('GET', '/api/file?path=a.txt')).body.content, 'hello');
+});
+
+test('POST /api/create 不带 ro 参数 → 200（只读由前端编辑器控制，服务端不裁决）', async () => {
+  const ok = await call('POST', '/api/create', { path: 'x.txt' });
   assert.equal(ok.status, 200);
 });
 
