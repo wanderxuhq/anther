@@ -50,3 +50,12 @@ test('空 Markdown 正常渲染，代码块里的 HTML 保持为文本', () => {
   assert.equal(doc.querySelector('script'), null);
   assert.match(doc.querySelector('code')?.textContent ?? '', /<script>alert\(1\)<\/script>/);
 });
+
+test('本地 Markdown 图片使用图片接口，外链保持原样，改写后仍无事件处理器', () => {
+  const html = renderMarkdown('![本地](../images/pic.png)\n\n<img src="/logo.svg" onload="alert(1)">\n\n![外链](https://example.com/a.png)', 'docs/README.md');
+  const doc = new dom.window.DOMParser().parseFromString(html, 'text/html');
+  assert.deepEqual([...doc.querySelectorAll('img')].map((img) => img.getAttribute('src')), [
+    '/api/image?path=images%2Fpic.png', '/api/image?path=logo.svg', 'https://example.com/a.png',
+  ]);
+  assert.equal(doc.querySelector('[onload]'), null);
+});

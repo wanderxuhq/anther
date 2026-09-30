@@ -3,6 +3,7 @@ import type { HttpServer, Handler } from '../http.ts';
 import type { FileStore } from '../files.ts';
 import { HttpError } from '../http-error.ts';
 import { sendDownload } from '../download.ts';
+import { sendImage } from '../images.ts';
 import { ArchiveManager, type ArchiveOptions } from '../archives.ts';
 
 export function registerFsRoutes(http: HttpServer, files: FileStore, archiveOptions?: ArchiveOptions): ArchiveManager {
@@ -22,6 +23,7 @@ export function registerFsRoutes(http: HttpServer, files: FileStore, archiveOpti
   });
 
   http.getStream('/api/download', (req, res, q) => sendDownload(files, req, res, q));
+  http.getStream('/api/image', (req, res, q) => sendImage(files, req, res, q));
 
   http.post('/api/download/prepare', (_req, body) => {
     const p = (body as { path?: unknown } | undefined)?.path;

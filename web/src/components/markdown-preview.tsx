@@ -2,8 +2,8 @@ import { createMemo } from 'solid-js';
 import { renderMarkdown } from '../markdown.ts';
 import { t } from '../i18n.ts';
 
-export function MarkdownPreview(props: { content: string }) {
-  const html = createMemo(() => renderMarkdown(props.content));
+export function MarkdownPreview(props: { content: string; path?: string }) {
+  const html = createMemo(() => renderMarkdown(props.content, props.path, String(Date.now())));
   return (
     <section class="markdown-preview" aria-label={t('markdown.preview')} tabIndex={0}>
       <article class="markdown-body" innerHTML={html()} />

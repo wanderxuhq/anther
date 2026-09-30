@@ -78,6 +78,7 @@ export const api = {
   list: (path: string) => request<{ entries: DirEntry[] }>('GET', `/api/list?path=${encodeURIComponent(path)}`),
   readFile: (path: string) => request<{ content: string; utf8: boolean }>('GET', `/api/file?path=${encodeURIComponent(path)}`),
   downloadUrl: (path: string) => `/api/download?path=${encodeURIComponent(path)}`,
+  imageUrl: (path: string) => `/api/image?path=${encodeURIComponent(path)}`,
   prepareDownload: (path: string) => request<ArchiveDownload | { kind: 'file'; url: string; filename: string }>('POST', '/api/download/prepare', { path }),
   downloadStatus: (id: string) => request<ArchiveDownload>('GET', `/api/download/status?id=${encodeURIComponent(id)}`),
   writeFile: (path: string, content: string) =>

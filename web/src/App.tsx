@@ -1,4 +1,4 @@
-import { createSignal, createEffect, For, Show, on, onCleanup } from 'solid-js';
+import { createSignal, createMemo, createEffect, For, Show, on, onCleanup } from 'solid-js';
 import { views } from './views/registry.tsx';
 import { TerminalView } from './views/terminal.tsx';
 import { GitView } from './views/git.tsx';
@@ -22,6 +22,8 @@ import { t } from './i18n.ts';
 import { isMarkdownFile } from './markdown.ts';
 import { MarkdownPreview } from './components/markdown-preview.tsx';
 import { preparingDownload, startDownload, setBeforeDownload } from './download.ts';
+import { isImageFile, isBinaryImage } from './image.ts';
+import { ImagePreview } from './components/image-preview.tsx';
 
 const NARROW_QUERY = '(max-width: 599px)';
 
@@ -44,6 +46,8 @@ export function App() {
   const [editorEl, setEditorEl] = createSignal<HTMLDivElement>();
   const [loadedDoc, setLoadedDoc] = createSignal<{ path: string; content: string } | null>(null);
   const [markdownSource, setMarkdownSource] = createSignal(false);
+  const [imageFile, setImageFile] = createSignal<{ path: string; url: string } | null>(null);
+  const showImagePreview = createMemo(() => isImageFile(currentFile()) && (isBinaryImage(currentFile()) || roMode()));
   const canPreviewMarkdown = () => roMode() && isMarkdownFile(currentFile());
   const showMarkdownPreview = () => canPreviewMarkdown() && !markdownSource();
 
@@ -245,15 +249,26 @@ export function App() {
 
   let loadSeq = 0; // 递增序号：丢弃过期 readFile 响应（竞态 guard 的加强版）
 
-  async function loadDoc(path: string) {
+  async function loadDoc(path: string, imagePreview = false) {
     const el = editorEl();
     if (!el) return;
     const seq = ++loadSeq;
     setDocLoadedPath(null);
+    setImageFile(null);
     try {
       // 切文件/浏览器历史导航前先保存旧文档，返回旧文件时等保存完成再读取。
       await flushSave();
       if (path !== currentFile() || seq !== loadSeq) return;
+      if (imagePreview) {
+        // 图片直接用原始响应流显示，不进行文本解码或送入编辑器/LSP。
+        editor?.destroy();
+        editor = undefined;
+        setEditorHandle(null);
+        setLoadedDoc(null);
+        // 同一文档内浏览器仍可能复用已解码的图片；源码保存后必须使用新地址。
+        setImageFile({ path, url: `${api.imageUrl(path)}&v=${Date.now()}-${seq}` });
+        return;
+      }
       const { content, utf8 } = await api.readFile(path);
       // 响应到达时当前文件已切换 / 已有更新的加载请求 → 丢弃过期响应
       if (path !== currentFile() || seq !== loadSeq) return;
@@ -298,10 +313,13 @@ export function App() {
   // currentFile 变化 → 加载文档到编辑器；path 为 null（关闭当前标签）→ 清空编辑器
   createEffect(() => {
     const path = currentFile();
+    const imagePreview = showImagePreview();
     if (!path) {
+      loadSeq++;
       void flushSave();
       editor?.setDoc('');
       setLoadedDoc(null);
+      setImageFile(null);
       // 同步清 docLoadedPath：closeTab/popstate 置 null 时若滞留旧 path，
       // 消费 effect 的信任前提「docLoadedPath() === g.path ⟹ editor 持有目标文档」被打破，
       // 会在空文档上误 gotoLine 并消费掉 pendingGoto（真跳转随后丢失）
@@ -309,7 +327,7 @@ export function App() {
       return;
     }
     if (!editorEl()) return;
-    void loadDoc(path);
+    void loadDoc(path, imagePreview);
   });
 
   // 只读切换 → Compartment reconfigure（effect 只读 roMode，无需重读文件）
@@ -393,7 +411,7 @@ export function App() {
             </>
           }
         >
-          <button class="icon-btn" onClick={() => editorHandle()?.openSearch()} title={t('find')} disabled={!currentFile()}>
+          <button class="icon-btn" onClick={() => editorHandle()?.openSearch()} title={t('find')} disabled={!currentFile() || showImagePreview()}>
             🔍
           </button>
           <span class="toolbar-path">{toolbarPathLabel()}</span>
@@ -415,7 +433,7 @@ export function App() {
             </button>
           </Show>
           <button class="icon-btn file-download" onClick={() => void handleDownload()}
-            disabled={!downloadPath() || preparingDownload() || (!!currentFile() && docLoadedPath() !== currentFile())}
+            disabled={!downloadPath() || preparingDownload() || (!!currentFile() && !showImagePreview() && docLoadedPath() !== currentFile())}
             title={t('download.file')} aria-label={t('download.file')} aria-busy={preparingDownload()}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -423,7 +441,8 @@ export function App() {
             </svg>
           </button>
           <button
-            class={`icon-btn ${roMode() ? '' : 'active'}`}
+            class={`icon-btn ${!roMode() && !isBinaryImage(currentFile()) ? 'active' : ''}`}
+            disabled={isBinaryImage(currentFile())}
             onClick={() => {
               // 编辑→只读：先把防抖中的修改立即落盘（切换前保存，改动不丢）
               if (!roMode()) flushSave();
@@ -442,16 +461,23 @@ export function App() {
         <div
           ref={setEditorEl}
           class="editor-container"
-          style={(activeKind() === 'file' || activeKind() === null) && !showMarkdownPreview() ? undefined : 'display:none'}
+          style={(activeKind() === 'file' || activeKind() === null) && !showMarkdownPreview() && !showImagePreview() ? undefined : 'display:none'}
         />
-        <Show when={showMarkdownPreview()}>
-          <Show when={loadedDoc()?.path === currentFile()} fallback={<div class="view-placeholder" role="status">{t('loading')}</div>}>
-            <Show when={currentFile()} keyed>
-              {(_path) => <MarkdownPreview content={loadedDoc()?.content ?? ''} />}
+        <Show when={showImagePreview()}>
+          <Show when={imageFile()?.path === currentFile()} fallback={<div class="view-placeholder" role="status">{t('loading')}</div>}>
+            <Show when={imageFile()} keyed>
+              {(file) => <ImagePreview path={file.path} url={file.url} />}
             </Show>
           </Show>
         </Show>
-        <Show when={currentFile() && !roMode()}>
+        <Show when={showMarkdownPreview()}>
+          <Show when={loadedDoc()?.path === currentFile()} fallback={<div class="view-placeholder" role="status">{t('loading')}</div>}>
+            <Show when={currentFile()} keyed>
+              {(path) => <MarkdownPreview content={loadedDoc()?.content ?? ''} path={path} />}
+            </Show>
+          </Show>
+        </Show>
+        <Show when={currentFile() && !roMode() && !showImagePreview()}>
           <button
             class="complete-btn"
             onClick={() => editorHandle()?.startCompletion()}

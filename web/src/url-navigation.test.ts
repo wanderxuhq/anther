@@ -297,6 +297,145 @@ test('下载先保存编辑器的最新修改，再使用原文件的下载地�
   assert.equal(w.location.pathname, '/README.md');
 });
 
+test('图片深链直接预览并可下载，不解码为文本；加载失败有提示，切换图片重置状态', async (t) => {
+  const name = '图片 #%.PNG';
+  const { w, s, calls } = await setup(t, `/${encodeURIComponent(name)}?ro=0&lang=zh`);
+  await until(() => !!w.document.querySelector('.image-preview img'));
+  const img = w.document.querySelector('.image-preview img');
+  assert.equal(new URL(img.src).searchParams.get('path'), name);
+  assert.equal(img.alt, name);
+  assert.equal(s.docLoadedPath(), null);
+  assert.equal(s.editorHandle(), null);
+  assert.equal(w.document.querySelector('.cm-editor'), null);
+  assert.equal(w.document.querySelector('.complete-btn'), null);
+  assert.equal(w.document.querySelector('button[title="查找"]').disabled, true);
+  const download = w.document.querySelector('.file-download');
+  assert.equal(download.nextElementSibling.disabled, true);
+  assert.equal(download.disabled, false);
+  assert.equal(calls.some((call) => call.url.pathname === '/api/file'), false);
+  const downloads: string[] = [];
+  w.HTMLAnchorElement.prototype.click = function () { downloads.push(this.href); };
+  download.click();
+  await until(() => downloads.length === 1);
+  assert.equal(new URL(downloads[0]).searchParams.get('path'), name);
+  img.dispatchEvent(new w.Event('error'));
+  assert.ok(w.document.querySelector('.image-preview [role="alert"]'));
+  await s.openTab('next.gif');
+  await until(() => w.document.querySelector('.image-preview img')?.alt === 'next.gif');
+  assert.equal(w.document.querySelector('.image-preview [role="alert"]'), null);
+  assert.ok(w.document.querySelector('.image-preview [role="status"]'));
+  w.document.querySelector('.image-preview img').dispatchEvent(new w.Event('load'));
+  assert.equal(w.document.querySelector('.image-preview [role="status"]'), null);
+});
+
+test('文本切到图片前保存修改，返回可继续编辑；SVG 切换源码和预览时先保存', async (t) => {
+  const { w, s, docs, editor, history } = await setup(t, '/a.txt?ro=0&lang=zh');
+  await until(() => s.docLoadedPath() === 'a.txt');
+  editor().dispatch({ changes: { from: 0, to: editor().state.doc.length, insert: 'saved before image' }, userEvent: 'input' });
+  await s.openTab('photo.webp');
+  await until(() => !!w.document.querySelector('.image-preview img'));
+  assert.equal(docs.get('a.txt'), 'saved before image');
+  assert.equal(s.editorHandle(), null);
+  await history('back');
+  await until(() => s.docLoadedPath() === 'a.txt');
+  assert.equal(editor().state.doc.toString(), 'saved before image');
+  assert.equal(w.document.querySelector('.image-preview'), null);
+  docs.set('icon.svg', '<svg xmlns="http://www.w3.org/2000/svg"/>');
+  s.setRoMode(true);
+  await s.openTab('icon.svg');
+  await until(() => !!w.document.querySelector('.image-preview img'));
+  const originalImageUrl = w.document.querySelector('.image-preview img').src;
+  w.document.querySelector('button[title="切换为编辑模式"]').click();
+  await until(() => s.docLoadedPath() === 'icon.svg');
+  const modified = '<svg xmlns="http://www.w3.org/2000/svg" width="200"/>';
+  editor().dispatch({ changes: { from: 0, to: editor().state.doc.length, insert: modified }, userEvent: 'input' });
+  w.document.querySelector('button[title="切换为只读模式"]').click();
+  await until(() => !!w.document.querySelector('.image-preview img'));
+  assert.equal(docs.get('icon.svg'), modified);
+  assert.notEqual(w.document.querySelector('.image-preview img').src, originalImageUrl);
+  assert.equal(s.docLoadedPath(), null);
+});
+
+test('图片支持按钮、键盘、滚轮缩放和拖动，双指缩放后切换图片恢复适应窗口', async (t) => {
+  const { w, s } = await setup(t, '/photo.png?lang=zh');
+  await until(() => !!w.document.querySelector('.image-preview img'));
+  const prepareImage = () => {
+    const img = w.document.querySelector('.image-preview img');
+    const viewport = w.document.querySelector('.image-preview-viewport');
+    Object.defineProperties(img, { naturalWidth: { value: 1600 }, naturalHeight: { value: 1200 } });
+    Object.defineProperties(viewport, { clientWidth: { value: 400 }, clientHeight: { value: 300 } });
+    img.dispatchEvent(new w.Event('load'));
+    return viewport;
+  };
+  const viewport = prepareImage();
+  const level = () => w.document.querySelector('.image-preview-scale').textContent;
+  const button = (name: string) => w.document.querySelector(`.image-preview button[title="${name}"]`);
+  assert.equal(level(), '25%');
+  button('放大').click();
+  assert.equal(level(), '31.3%');
+  button('缩小').click();
+  assert.equal(level(), '25%');
+  button('原始尺寸').click();
+  assert.equal(level(), '100%');
+  assert.equal(viewport.scrollLeft, 600);
+  const pointer = (type: string, id: number, x: number, y: number) => {
+    const event = new w.MouseEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0 });
+    Object.defineProperty(event, 'pointerId', { value: id });
+    viewport.dispatchEvent(event);
+  };
+  pointer('pointerdown', 1, 100, 100);
+  pointer('pointermove', 1, 70, 80);
+  pointer('pointerup', 1, 70, 80);
+  assert.equal(viewport.scrollLeft, 630);
+  assert.equal(viewport.scrollTop, 470);
+  viewport.dispatchEvent(new w.KeyboardEvent('keydown', { key: '0', bubbles: true }));
+  assert.equal(level(), '25%');
+  pointer('pointerdown', 1, 100, 150);
+  pointer('pointerdown', 2, 300, 150);
+  pointer('pointermove', 1, 50, 150);
+  pointer('pointermove', 2, 350, 150);
+  assert.equal(level(), '37.5%');
+  pointer('pointercancel', 1, 50, 150);
+  pointer('pointercancel', 2, 350, 150);
+  assert.equal(viewport.classList.contains('image-preview-dragging'), false);
+  viewport.dispatchEvent(new w.WheelEvent('wheel', { deltaY: -200, clientX: 200, clientY: 150, cancelable: true }));
+  assert.ok(parseFloat(level()) > 37.5);
+  for (let i = 0; i < 30; i++) button('放大').click();
+  assert.equal(level(), '800%');
+  assert.equal(button('放大').disabled, true);
+  for (let i = 0; i < 30; i++) button('缩小').click();
+  assert.equal(level(), '5%');
+  assert.equal(button('缩小').disabled, true);
+  await s.openTab('other.webp');
+  await until(() => w.document.querySelector('.image-preview img')?.alt === 'other.webp');
+  prepareImage();
+  assert.equal(level(), '25%');
+  assert.equal(button('适应窗口').getAttribute('aria-pressed'), 'true');
+});
+
+test('切换到图片后到达的旧文本响应不会重建编辑器', async (t) => {
+  let release!: () => void;
+  let started = false;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const { w, s } = await setup(t, '/a.txt', { hook: async (url, init) => {
+    if (url.pathname === '/api/file' && url.searchParams.get('path') === 'slow.txt' && init.method === 'GET') {
+      started = true;
+      await gate;
+      return json({ content: 'late text', utf8: true });
+    }
+  } });
+  await until(() => s.docLoadedPath() === 'a.txt');
+  await s.openTab('slow.txt');
+  await until(() => started);
+  await s.openTab('photo.png');
+  await until(() => !!w.document.querySelector('.image-preview img'));
+  release();
+  await tick();
+  assert.equal(w.document.querySelector('.cm-editor'), null);
+  assert.equal(s.currentFile(), 'photo.png');
+  assert.equal(s.editorHandle(), null);
+});
+
 test('保存失败时不下载旧版本文件', async (t) => {
   const { w, s, editor } = await setup(t, '/a.txt?ro=0&lang=zh', { hook: (u, init) => {
     if (u.pathname === '/api/file' && init.method === 'PUT') return json({ error: 'cannot save' }, 500);

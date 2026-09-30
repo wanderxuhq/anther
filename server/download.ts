@@ -9,6 +9,7 @@ import type { FileHandle } from 'node:fs/promises';
 
 export type ByteRange = { start: number; end: number };
 export type DownloadSource = { file: FileHandle; size: number; etag: string; modified: Date };
+type Presentation = { contentType?: string; disposition?: 'attachment' | 'inline' };
 
 /** undefined 表示忽略 Range，空数组表示合法但无可满足区间（416）。 */
 function byteRanges(value: string | undefined, size: number): ByteRange[] | undefined {
@@ -73,7 +74,7 @@ export async function sendDownload(files: FileStore, req: IncomingMessage, res: 
 }
 
 /** 发送完成后返回本次成功传输的区间，供临时归档判断是否已完整发送。始终关闭句柄。 */
-export async function sendOpenedDownload(source: DownloadSource, filename: string, req: IncomingMessage, res: ServerResponse): Promise<ByteRange[] | undefined> {
+export async function sendOpenedDownload(source: DownloadSource, filename: string, req: IncomingMessage, res: ServerResponse, presentation: Presentation = {}): Promise<ByteRange[] | undefined> {
   const { file, size, etag, modified } = source;
   try {
     const name = encodeURIComponent(filename).replace(/['()*]/g,
@@ -81,8 +82,8 @@ export async function sendOpenedDownload(source: DownloadSource, filename: strin
     const lastModified = modified.toUTCString();
     const modifiedTime = Date.parse(lastModified);
     const headers = {
-      'Content-Type': 'application/octet-stream',
-      'Content-Disposition': `attachment; filename="download"; filename*=UTF-8''${name}`,
+      'Content-Type': presentation.contentType ?? 'application/octet-stream',
+      'Content-Disposition': `${presentation.disposition ?? 'attachment'}; filename="download"; filename*=UTF-8''${name}`,
       'Cache-Control': 'no-store',
       'X-Content-Type-Options': 'nosniff',
       'Accept-Ranges': 'bytes',
@@ -130,7 +131,7 @@ export async function sendOpenedDownload(source: DownloadSource, filename: strin
       return [{ start, end }];
     }
     const boundary = `anther_${randomBytes(18).toString('hex')}`;
-    const parts = ranges.map((r) => Buffer.from(`--${boundary}\r\nContent-Type: application/octet-stream\r\nContent-Range: bytes ${r.start}-${r.end}/${size}\r\n\r\n`));
+    const parts = ranges.map((r) => Buffer.from(`--${boundary}\r\nContent-Type: ${headers['Content-Type']}\r\nContent-Range: bytes ${r.start}-${r.end}/${size}\r\n\r\n`));
     const closing = Buffer.from(`--${boundary}--\r\n`);
     const length = ranges.reduce((sum, r, i) => sum + parts[i].length + r.end - r.start + 1 + 2, closing.length);
     res.writeHead(206, { ...headers, 'Content-Type': `multipart/byteranges; boundary=${boundary}`, 'Content-Length': length });
