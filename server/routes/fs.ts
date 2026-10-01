@@ -4,6 +4,7 @@ import type { FileStore } from '../files.ts';
 import { HttpError } from '../http-error.ts';
 import { sendDownload } from '../download.ts';
 import { sendImage } from '../images.ts';
+import { inspectFile, sendPreview } from '../preview.ts';
 import { ArchiveManager, type ArchiveOptions } from '../archives.ts';
 
 export function registerFsRoutes(http: HttpServer, files: FileStore, archiveOptions?: ArchiveOptions): ArchiveManager {
@@ -24,6 +25,12 @@ export function registerFsRoutes(http: HttpServer, files: FileStore, archiveOpti
 
   http.getStream('/api/download', (req, res, q) => sendDownload(files, req, res, q));
   http.getStream('/api/image', (req, res, q) => sendImage(files, req, res, q));
+  http.getStream('/api/preview', (req, res, q) => sendPreview(files, req, res, q));
+  http.get('/api/file-info', (_req, _body, q) => {
+    const p = q.get('path');
+    if (!p) throw new HttpError(400, 'missing path');
+    return inspectFile(files, p);
+  });
 
   http.post('/api/download/prepare', (_req, body) => {
     const p = (body as { path?: unknown } | undefined)?.path;

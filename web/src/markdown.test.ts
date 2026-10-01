@@ -59,3 +59,12 @@ test('本地 Markdown 图片使用图片接口，外链保持原样，改写后�
   ]);
   assert.equal(doc.querySelector('[onload]'), null);
 });
+
+test('虚拟文件复用 Markdown 渲染，但相对地址不会访问工作区文件', () => {
+  const html = renderMarkdown('![内部](pic.png)\n\n[内部](other.md)\n\n[外部](https://example.com)\n\n[锚点](#title)', 'README.md', undefined, false);
+  const doc = new dom.window.DOMParser().parseFromString(html, 'text/html');
+  assert.equal(doc.querySelector('img')?.hasAttribute('src'), false);
+  assert.equal(doc.querySelector('a')?.hasAttribute('href'), false);
+  assert.equal(doc.querySelectorAll('a[href]').length, 2);
+  assert.equal(doc.querySelector('[src^="/api/"]'), null);
+});

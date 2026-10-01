@@ -25,6 +25,8 @@ export const [historyBranch, setHistoryBranch] = createSignal<string | null>(nul
 const [urlLang, setUrlLang] = createSignal<UrlState['lang']>(null);
 const [pendingTerminal, setPendingTerminal] = createSignal<string | null>(null);
 const [filePosition, setFilePosition] = createSignal<{ path: string; line: LineRange } | null>(null);
+const [archiveLocation, setArchiveLocation] = createSignal<{ path: string; entry: string | null; chain: string[] } | null>(null);
+const EMPTY_ARCHIVE_CHAIN: string[] = [];
 
 /** 当前前台标签（文件/终端），无则 null */
 export const activeTab = createMemo<TabItem | null>(() => {
@@ -34,6 +36,16 @@ export const activeTab = createMemo<TabItem | null>(() => {
 });
 /** 当前前台文件路径：当前标签是文件才有值，终端/无标签为 null（spec §5.3 主区域二选一） */
 export const currentFile = createMemo<string | null>(() => currentFilePath(tabs(), currentTabId()));
+/** 当前文件标签对应的压缩包内部路径；切换到其他文件或普通打开时清空。 */
+export const archiveEntry = createMemo<string | null>(() => {
+  const location = archiveLocation();
+  return location?.path === currentFile() ? location.entry : null;
+});
+/** 当前压缩包内的嵌套路径链；路径不匹配时返回稳定空数组。 */
+export const archiveChain = createMemo<string[]>(() => {
+  const location = archiveLocation();
+  return location?.path === currentFile() ? location.chain : EMPTY_ARCHIVE_CHAIN;
+});
 
 // 搜索跳转管道 / 文档加载路径 / 编辑器句柄（原样保留）
 export const [pendingGoto, setPendingGoto] = createSignal<{ path: string; line0: number; endLine0?: number; reveal?: boolean } | null>(null);
@@ -62,6 +74,8 @@ export function pushState(mode: 'push' | 'replace' = 'push'): void {
   if (tab) setPendingTerminal(null);
   if (tab?.kind === 'file') {
     state.path = tab.path;
+    state.entry = archiveEntry();
+    state.inside = archiveChain();
     const position = filePosition();
     state.line = position?.path === tab.path ? position.line : null;
   } else if (tab?.kind === 'terminal') state.term = tab.id;
@@ -130,6 +144,8 @@ export function restoreUrl(state: UrlState, syncServer = true): void {
     setSearchCaseSensitive(state.caseSensitive);
     setSearchExclude(state.exclude);
     setHistoryBranch(state.branch);
+    setArchiveLocation((state.entry !== null || state.inside.length > 0) && state.path
+      ? { path: state.path, entry: state.entry, chain: state.inside } : null);
     setFilePosition(state.path && state.line ? { path: state.path, line: state.line } : null);
     setPendingGoto(null);
     setPendingTerminal(!terminalsLoaded ? state.term : null);
@@ -233,9 +249,10 @@ export function applyTheme(t: 'auto' | 'light' | 'dark'): void {
 }
 
 /** 打开/前台一个文件标签 */
-export async function openTab(path: string, line: LineRange | null = null): Promise<void> {
+export async function openTab(path: string, line: LineRange | null = null, entry: string | null = null, chain: string[] = []): Promise<void> {
   batch(() => {
-    if (currentFile() !== path) setFilePosition(null);
+    if (currentFile() !== path || entry !== null || chain.length > 0) setFilePosition(null);
+    setArchiveLocation(entry !== null || chain.length > 0 ? { path, entry, chain: [...chain] } : null);
     setPendingGoto(null);
     setTabs((prev) => addFileTab(prev, path));
     setCurrentTabId(path);
@@ -247,6 +264,11 @@ export async function openTab(path: string, line: LineRange | null = null): Prom
   saveTabsSnapshot(fileTabPaths(tabs()));
   pushState();
   await registerFile(path);
+}
+
+/** 打开/切换压缩包内部文件；通过 openTab 只写入一次导航历史。 */
+export async function openArchiveEntry(path: string, entry: string | null, chain: string[] = []): Promise<void> {
+  await openTab(path, null, entry, chain);
 }
 
 /** 搜索跳转统一入口（原逻辑，currentFile 已为 memo） */

@@ -12,6 +12,8 @@ export type UrlState = {
   fs: number;
   view: MainView;
   line: LineRange | null;
+  entry: string | null;
+  inside: string[];
   branch: string | null;
   commit: string | null;
   panel: Panel;
@@ -23,7 +25,7 @@ export type UrlState = {
 
 export const DEFAULT_STATE: UrlState = {
   path: null, term: null, ro: true, theme: 'auto', fs: 100,
-  view: 'file', line: null, branch: null, commit: null,
+  view: 'file', line: null, entry: null, inside: [], branch: null, commit: null,
   panel: 'files', query: '', caseSensitive: false, exclude: DEFAULT_EXCLUDE, lang: null,
 };
 
@@ -31,6 +33,16 @@ const TERM_RE = /^t_[\w-]+$/;
 const COMMIT_RE = /^[0-9a-f]{4,64}$/i;
 const GIT_ROUTE = '-/git';
 const FILE_ROUTE = '-/file/';
+const ARCHIVE_EXT = /\.(?:zip|jar|war|apk|xpi|cbz|7z|rar|tar|gz|tgz|bz2|tbz|tbz2|xz|txz)$/i;
+
+function isValidArchiveEntry(entry: string): boolean {
+  return entry.length > 0
+    && !/[\u0000-\u001f\u007f-\u009f]/.test(entry)
+    && !entry.startsWith('/')
+    && !entry.startsWith('\\')
+    && !/^[a-z]:/i.test(entry)
+    && !entry.split(/[\\/]/).includes('..');
+}
 
 function encodePath(p: string): string {
   return p.split('/').map((seg) => encodeURIComponent(seg)).join('/');
@@ -85,7 +97,15 @@ export function parseUrl(href: string): UrlState {
   } else if (s.view !== 'file' && s.view !== 'diff') {
     s.path = null;
   }
-  if (s.view === 'file' && s.path) s.line = parseLine(q.get('line'));
+  if (s.view === 'file' && s.path && ARCHIVE_EXT.test(s.path)) {
+    const inside = q.getAll('inside');
+    if (inside.length && inside.every((item) => ARCHIVE_EXT.test(item) && isValidArchiveEntry(item))) {
+      s.inside = inside;
+    }
+    const entry = q.get('entry');
+    if (entry && isValidArchiveEntry(entry)) s.entry = entry;
+  }
+  if (s.view === 'file' && s.path && !s.entry && s.inside.length === 0) s.line = parseLine(q.get('line'));
   if (s.view === 'history') s.branch = q.get('branch') || null;
 
   s.ro = q.get('ro') !== '0';
@@ -114,7 +134,14 @@ export function serializeUrl(state: UrlState): string {
   if (state.fs !== 100) params.set('fs', String(state.fs));
   if (state.lang) params.set('lang', state.lang);
   const path = !state.term && (view === 'file' || view === 'diff') ? state.path : null;
-  if (view === 'file' && path && state.line) {
+  const validInside = view === 'file' && path && ARCHIVE_EXT.test(path)
+    && state.inside.length > 0
+    && state.inside.every((item) => ARCHIVE_EXT.test(item) && isValidArchiveEntry(item));
+  if (validInside) for (const item of state.inside) params.append('inside', item);
+  const entry = view === 'file' && path && ARCHIVE_EXT.test(path) && state.entry && isValidArchiveEntry(state.entry)
+    ? state.entry : null;
+  if (entry) params.set('entry', entry);
+  if (view === 'file' && path && !entry && !validInside && state.line) {
     const { start, end } = state.line;
     params.set('line', start === end ? String(start) : `${start}-${end}`);
   }

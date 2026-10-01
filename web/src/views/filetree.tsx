@@ -9,14 +9,17 @@
 //   nodes[path] → { expanded, loaded?, loading? }   （'.' 为根目录键）
 // 渲染时在组件作用域内直接读 nodes[path]（响应式），更新时 setNodes 精确命中该 path，
 // 每次展开/收起只触发对应子树重渲染。
-import { createSignal, For, Show, onCleanup } from 'solid-js';
+import { createEffect, createSignal, ErrorBoundary, For, lazy, Show, Suspense, onCleanup } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { api, ApiError, type DirEntry } from '../api.ts';
-import { currentFile, openTab, closeTab, tabs } from '../stores.ts';
+import { archiveChain, archiveEntry, currentFile, openTab, closeTab, tabs } from '../stores.ts';
 import { parentOf } from '../paths.ts';
 import { NameDialog, type DialogState } from '../components/name-dialog.tsx';
 import { t } from '../i18n.ts';
 import { preparingDownload, startDownload } from '../download.ts';
+import { isArchiveFile } from '../archive.ts';
+
+const ArchiveTree = lazy(() => import('../components/archive-tree.tsx'));
 
 type DirState = { expanded: boolean; loaded?: DirEntry[]; loading?: boolean };
 
@@ -178,7 +181,10 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
   // props 对当前实例固定不变；所有可变状态都从 store 响应式读取
   const state = () => nodes[props.path];
   const isDir = props.entry.type === 'dir';
-  const isCurrent = () => currentFile() === props.path;
+  const archive = !isDir && isArchiveFile(props.path);
+  const [archiveExpanded, setArchiveExpanded] = createSignal(false);
+  createEffect(() => { if (archive && currentFile() === props.path) setArchiveExpanded(true); });
+  const isCurrent = () => currentFile() === props.path && (!archive || (!archiveEntry() && archiveChain().length === 0));
   const expanded = () => state()?.expanded === true;
   const loaded = () => state()?.loaded;
   const loading = () => state()?.loading === true;
@@ -218,7 +224,10 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
         onClick={onRowClick}
         title={props.path}
       >
-        <span class="tree-arrow">{isDir ? (expanded() ? '▾' : '▸') : ''}</span>
+        <span class="tree-arrow"><Show when={archive} fallback={isDir ? (expanded() ? '▾' : '▸') : ''}>
+          <button class="archive-toggle" title={t('archive.expand')} aria-label={t('archive.expand')} aria-expanded={archiveExpanded()} onClick={(e) => { e.stopPropagation(); setArchiveExpanded((value) => !value); }}>{archiveExpanded() ? '▾' : '▸'}</button>
+        </Show></span>
+        <Show when={archive}><svg class="archive-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h10l4 4v14H5zM11 3v3h2v3h-2v3h2v3h-2v3h2"/></svg></Show>
         <span class="tree-name">{props.entry.name}</span>
         <div class="tree-row-actions">
           <button
@@ -254,6 +263,11 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
             )}
           </For>
         </div>
+      </Show>
+      <Show when={archive && archiveExpanded()}>
+        <ErrorBoundary fallback={<div class="error-banner">{t('archive.failed')}</div>}>
+          <Suspense fallback={<div role="status">{t('archive.scanning')}</div>}><ArchiveTree path={props.path}/></Suspense>
+        </ErrorBoundary>
       </Show>
     </div>
   );

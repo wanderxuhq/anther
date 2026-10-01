@@ -10,6 +10,7 @@ import { api } from './api.ts';
 import {
   activeTab, currentTabId, setCurrentTabId, openTerminal,
   openGit,
+  archiveChain, archiveEntry, openArchiveEntry,
   currentFile, roMode, setRoMode, pushState, fontScale,
   pendingGoto, setPendingGoto, docLoadedPath, setDocLoadedPath,
   editorHandle, setEditorHandle,
@@ -24,6 +25,14 @@ import { MarkdownPreview } from './components/markdown-preview.tsx';
 import { preparingDownload, startDownload, setBeforeDownload } from './download.ts';
 import { isImageFile, isBinaryImage } from './image.ts';
 import { ImagePreview } from './components/image-preview.tsx';
+import { FilePreview, type PreviewFile } from './components/file-preview.tsx';
+import { TablePreview } from './components/table-preview.tsx';
+import { isArchiveFile } from './archive.ts';
+import { archiveSession, archiveBusy, cancelArchive, ensureArchive, downloadArchiveEntry } from './archive-sessions.ts';
+import { loadArchiveFile, releaseArchiveFile, type ArchiveDocument } from './archive-file.ts';
+import { archiveLimits } from './archive-settings.ts';
+import { ArchiveFeedback } from './components/archive-feedback.tsx';
+import { ArchiveOptions } from './components/archive-options.tsx';
 
 const NARROW_QUERY = '(max-width: 599px)';
 
@@ -47,12 +56,21 @@ export function App() {
   const [loadedDoc, setLoadedDoc] = createSignal<{ path: string; content: string } | null>(null);
   const [markdownSource, setMarkdownSource] = createSignal(false);
   const [imageFile, setImageFile] = createSignal<{ path: string; url: string } | null>(null);
-  const showImagePreview = createMemo(() => isImageFile(currentFile()) && (isBinaryImage(currentFile()) || roMode()));
-  const canPreviewMarkdown = () => roMode() && isMarkdownFile(currentFile());
+  const [filePreview, setFilePreview] = createSignal<PreviewFile | null>(null);
+  const [archiveFile, setArchiveFile] = createSignal<ArchiveDocument | null>(null);
+  const browsingArchive = () => !!currentFile() && isArchiveFile(currentFile()!);
+  const documentPath = () => browsingArchive() ? archiveEntry() ?? archiveChain().at(-1) ?? currentFile() : currentFile();
+  const documentReadOnly = () => roMode() || browsingArchive();
+  const currentPreview = createMemo(() => filePreview()?.path === documentPath() ? filePreview() : null);
+  const showImagePreview = createMemo(() => isImageFile(documentPath()) && (isBinaryImage(documentPath()) || documentReadOnly()));
+  const canPreviewMarkdown = () => documentReadOnly() && isMarkdownFile(documentPath()) && !currentPreview();
   const showMarkdownPreview = () => canPreviewMarkdown() && !markdownSource();
+  const canPreviewTable = () => documentReadOnly() && /\.(csv|tsv)$/i.test(documentPath() ?? '') && !currentPreview();
+  const showTablePreview = () => canPreviewTable() && !markdownSource();
+  const showRenderedDocument = () => showMarkdownPreview() || showTablePreview();
 
   // 打开文件或重新进入只读时默认预览；手动切源码不改变只读状态。
-  createEffect(on([currentFile, roMode], () => setMarkdownSource(false)));
+  createEffect(on([currentFile, archiveEntry, archiveChain, roMode], () => setMarkdownSource(false)));
 
   const activeTabIsTerminal = () => activeTab()?.kind === 'terminal';
   // 主区域二选一：文件编辑器 ↔ 终端 / git / git-diff 标签视图
@@ -81,6 +99,11 @@ export function App() {
     if (tab.kind === 'terminal') return tab.name;
     if (tab.kind === 'git') return t('view.git');
     if (tab.kind === 'git-diff') return tab.path;
+    if (browsingArchive()) return <>
+      <button class="toolbar-path-link" onClick={() => void openArchiveEntry(currentFile()!, null)}>{currentFile()}</button>
+      <For each={archiveChain()}>{(name, index) => <><span> › </span><button class="toolbar-path-link" onClick={() => void openArchiveEntry(currentFile()!, null, archiveChain().slice(0, index() + 1))}>{name}</button></>}</For>
+      <Show when={archiveEntry()}> › {archiveEntry()}</Show>
+    </>;
     return currentFile() ?? <span class="toolbar-path-hint">{t('noFileOpen')}</span>;
   };
 
@@ -185,7 +208,13 @@ export function App() {
     const path = downloadPath();
     if (!path || preparingDownload()) return;
     try {
-      await startDownload(path);
+      if (browsingArchive()) {
+        const value = archiveFile(), name = archiveEntry(), chain = archiveChain();
+        if (value && name === value.name) await startDownload({ url: value.url, filename: value.name.split('/').pop()! });
+        else if (name) await downloadArchiveEntry(path, name, chain);
+        else if (chain.length) await downloadArchiveEntry(path, chain[chain.length - 1], chain.slice(0, -1));
+        else await startDownload(path);
+      } else await startDownload(path);
     } catch (e) {
       showToast(t('download.failed', { msg: (e as Error).message }), 'error');
     }
@@ -195,7 +224,7 @@ export function App() {
     // 只由用户编辑触发（适配层已过滤程序性 dispatch）；编辑必然发生在
     // 有当前文件的场景，此处为防御性 guard
     const path = currentFile();
-    if (!path) return;
+    if (!path || browsingArchive()) return;
     setLoadedDoc({ path, content: doc });
     if (roMode()) return; // 只读模式不自动保存（checkout 前切只读后，防抖内的后续编辑不落盘）
     scheduleSave(path, doc);
@@ -249,60 +278,91 @@ export function App() {
 
   let loadSeq = 0; // 递增序号：丢弃过期 readFile 响应（竞态 guard 的加强版）
 
-  async function loadDoc(path: string, imagePreview = false) {
+  const clearArchiveFile = () => {
+    const previous = archiveFile();
+    setArchiveFile(null);
+    if (previous) releaseArchiveFile(previous);
+  };
+  const clearEditor = () => {
+    editor?.destroy(); editor = undefined;
+    setEditorHandle(null); setLoadedDoc(null);
+  };
+  async function showText(el: HTMLDivElement, content: string, root: string, name: string, seq: number, virtual = false) {
+    const path = virtual ? null : root;
+    if (!editor) {
+      editor = createEditor(el, {
+        initialDoc: content, readOnly: documentReadOnly(), path,
+        onChange: handleEditorChange,
+        onReveal: () => setMarkdownSource(true),
+        onSelectionChange: (line) => { if (!browsingArchive()) updateFilePosition(line); },
+        onLspNotice: (msg, kind) => showToast(msg, kind),
+      });
+      setEditorHandle(editor);
+    } else {
+      // Clear the old language service before installing a virtual document.
+      editor.setReadOnly(true);
+      editor.setDoc(content, path);
+    }
+    editor.setReadOnly(documentReadOnly());
+    setLoadedDoc({ path: root, content });
+    setDocLoadedPath(root);
+    const desc = describeLanguage(name);
+    if (desc) {
+      const ext = await loadLanguage(desc);
+      if (root !== currentFile() || seq !== loadSeq) return;
+      editor?.setLanguage(ext);
+    }
+  }
+
+  async function loadDoc(path: string, imagePreview = false, password?: string) {
     const el = editorEl();
     if (!el) return;
-    const seq = ++loadSeq;
+    const seq = ++loadSeq, virtual = isArchiveFile(path);
+    const chain = [...archiveChain()], name = archiveEntry();
     setDocLoadedPath(null);
+    setLoadedDoc(null);
     setImageFile(null);
+    setFilePreview(null);
+    clearArchiveFile();
     try {
-      // 切文件/浏览器历史导航前先保存旧文档，返回旧文件时等保存完成再读取。
       await flushSave();
       if (path !== currentFile() || seq !== loadSeq) return;
+      if (virtual) {
+        clearEditor();
+        if (archiveBusy(path)) cancelArchive(path);
+        if (!name) { await ensureArchive(path, password, !!archiveSession(path, chain)?.error, chain); return; }
+        if (isArchiveFile(name)) { await openArchiveEntry(path, null, [...chain, name]); return; }
+        const file = await loadArchiveFile(path, chain, name, password);
+        if (path !== currentFile() || seq !== loadSeq) { releaseArchiveFile(file); return; }
+        setArchiveFile(file);
+        if (file.kind === 'image') { setImageFile({ path: name, url: file.url }); return; }
+        if (file.kind !== 'text') {
+          setFilePreview({ path: name, url: file.url, kind: file.kind, size: file.blob.size, mime: file.mime, modified: '' });
+          return;
+        }
+        await showText(el, file.content!, path, name, seq, true);
+        return;
+      }
       if (imagePreview) {
-        // 图片直接用原始响应流显示，不进行文本解码或送入编辑器/LSP。
-        editor?.destroy();
-        editor = undefined;
-        setEditorHandle(null);
-        setLoadedDoc(null);
-        // 同一文档内浏览器仍可能复用已解码的图片；源码保存后必须使用新地址。
+        clearEditor();
         setImageFile({ path, url: `${api.imageUrl(path)}&v=${Date.now()}-${seq}` });
         return;
       }
+      const info = await api.fileInfo(path);
+      if (path !== currentFile() || seq !== loadSeq) return;
+      const openPreview = (kind: PreviewFile['kind']) => {
+        clearEditor();
+        setFilePreview({ ...info, kind, path, url: `${api.previewUrl(path)}&v=${Date.now()}-${seq}` });
+      };
+      if (info.kind !== 'text') { openPreview(info.kind); return; }
       const { content, utf8 } = await api.readFile(path);
-      // 响应到达时当前文件已切换 / 已有更新的加载请求 → 丢弃过期响应
       if (path !== currentFile() || seq !== loadSeq) return;
-      // spec §5.3：非 UTF-8 文件仍可浏览，但保存仅支持 UTF-8 → Toast 提示
-      if (!utf8) showToast(t('toast.notUtf8'), 'error');
-      if (!editor) {
-        editor = createEditor(el, {
-          initialDoc: content,
-          readOnly: roMode(),
-          path,
-          onChange: handleEditorChange,
-          onReveal: () => setMarkdownSource(true),
-          onSelectionChange: updateFilePosition,
-          onLspNotice: (msg, kind) => showToast(msg, kind),
-        });
-        setEditorHandle(editor);
-      } else {
-        editor.setDoc(content, path);
-      }
-      editor.setReadOnly(roMode());
-      setLoadedDoc({ path, content });
-      setDocLoadedPath(path); // 搜索跳转消费 effect 的前提：文档确已加载
-      // 语法高亮：文档先显示纯文本，语言异步加载完成后补上（VS Code 同款体验）。
-      // 竞态守卫与 readFile 一致：响应到达时已切换文件/有更新加载请求 → 丢弃。
-      const desc = describeLanguage(path);
-      if (desc) {
-        const ext = await loadLanguage(desc);
-        if (path !== currentFile() || seq !== loadSeq) return;
-        editor?.setLanguage(ext);
-      }
+      if (!utf8 || content.includes('\0')) { openPreview('binary'); return; }
+      await showText(el, content, path, path, seq);
     } catch (e) {
-      // 过期请求的失败不打扰当前文件（竞态 guard 同规则）
       if (path !== currentFile() || seq !== loadSeq) return;
-      // spec §8：Toast + 降级到文件树（清空当前文件 → 编辑器清空，用户回到文件树）
+      // Archive failures/passwords remain inline, with the same selected document.
+      if (virtual) return;
       showToast(t('toast.openFail', { msg: (e as Error).message }), 'error');
       setCurrentTabId(null);
       pushState('replace');
@@ -310,32 +370,28 @@ export function App() {
     }
   }
 
-  // currentFile 变化 → 加载文档到编辑器；path 为 null（关闭当前标签）→ 清空编辑器
-  createEffect(() => {
+  let previousArchive: string | null = null;
+  createEffect(on([currentFile, showImagePreview, archiveEntry, archiveChain, archiveLimits, editorEl], () => {
     const path = currentFile();
-    const imagePreview = showImagePreview();
+    if (previousArchive) cancelArchive(previousArchive, previousArchive !== path);
+    previousArchive = path && isArchiveFile(path) ? path : null;
     if (!path) {
       loadSeq++;
       void flushSave();
       editor?.setDoc('');
-      setLoadedDoc(null);
-      setImageFile(null);
-      // 同步清 docLoadedPath：closeTab/popstate 置 null 时若滞留旧 path，
-      // 消费 effect 的信任前提「docLoadedPath() === g.path ⟹ editor 持有目标文档」被打破，
-      // 会在空文档上误 gotoLine 并消费掉 pendingGoto（真跳转随后丢失）
-      setDocLoadedPath(null);
+      setLoadedDoc(null); setImageFile(null); setFilePreview(null);
+      clearArchiveFile(); setDocLoadedPath(null);
       return;
     }
-    if (!editorEl()) return;
-    void loadDoc(path, imagePreview);
-  });
+    if (editorEl()) void loadDoc(path, showImagePreview());
+  }));
 
   // 只读切换 → Compartment reconfigure（effect 只读 roMode，无需重读文件）
   // 注意：必须先求值 roMode() 再调用——editor 由异步加载延迟创建，effect 首次运行时
   // 仍为 undefined，`editor?.setReadOnly(roMode())` 的可选链会短路并跳过参数求值，
   // 依赖永不建立，✎ 切换永不生效（2026-08-08 修复）。
   createEffect(() => {
-    const ro = roMode();
+    const ro = documentReadOnly();
     editor?.setReadOnly(ro);
   });
 
@@ -359,6 +415,9 @@ export function App() {
   });
 
   onCleanup(() => {
+    loadSeq++;
+    if (previousArchive) cancelArchive(previousArchive, true);
+    clearArchiveFile();
     setBeforeDownload(undefined);
     window.removeEventListener('keydown', onKeyDown);
     clearTimeout(saveTimer);
@@ -411,20 +470,20 @@ export function App() {
             </>
           }
         >
-          <button class="icon-btn" onClick={() => editorHandle()?.openSearch()} title={t('find')} disabled={!currentFile() || showImagePreview()}>
+          <button class="icon-btn" onClick={() => editorHandle()?.openSearch()} title={t('find')} disabled={!currentFile() || docLoadedPath() !== currentFile()}>
             🔍
           </button>
-          <span class="toolbar-path">{toolbarPathLabel()}</span>
-          <Show when={canPreviewMarkdown()}>
+          <span class="toolbar-path" title={browsingArchive() ? [currentFile(), ...archiveChain(), archiveEntry()].filter(Boolean).join(' › ') : undefined}>{toolbarPathLabel()}</span>
+          <Show when={canPreviewMarkdown() || canPreviewTable()}>
             <button
               class="icon-btn markdown-toggle"
               onClick={() => setMarkdownSource((source) => !source)}
-              title={showMarkdownPreview() ? t('markdown.showSource') : t('markdown.showPreview')}
-              aria-label={showMarkdownPreview() ? t('markdown.showSource') : t('markdown.showPreview')}
+              title={canPreviewTable() ? (showTablePreview() ? t('preview.showSource') : t('preview.showTable')) : (showMarkdownPreview() ? t('markdown.showSource') : t('markdown.showPreview'))}
+              aria-label={canPreviewTable() ? (showTablePreview() ? t('preview.showSource') : t('preview.showTable')) : (showMarkdownPreview() ? t('markdown.showSource') : t('markdown.showPreview'))}
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                 stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <Show when={showMarkdownPreview()} fallback={
+                <Show when={showRenderedDocument()} fallback={
                   <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></>
                 }>
                   <path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18" />
@@ -432,8 +491,9 @@ export function App() {
               </svg>
             </button>
           </Show>
+          <Show when={browsingArchive()}><ArchiveOptions /></Show>
           <button class="icon-btn file-download" onClick={() => void handleDownload()}
-            disabled={!downloadPath() || preparingDownload() || (!!currentFile() && !showImagePreview() && docLoadedPath() !== currentFile())}
+            disabled={!downloadPath() || preparingDownload() || (browsingArchive() ? !!(archiveEntry() || archiveChain().length) && archiveBusy(currentFile()!) : !!currentFile() && !showImagePreview() && !currentPreview() && docLoadedPath() !== currentFile())}
             title={t('download.file')} aria-label={t('download.file')} aria-busy={preparingDownload()}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -441,8 +501,8 @@ export function App() {
             </svg>
           </button>
           <button
-            class={`icon-btn ${!roMode() && !isBinaryImage(currentFile()) ? 'active' : ''}`}
-            disabled={isBinaryImage(currentFile())}
+            class={`icon-btn ${!documentReadOnly() && !isBinaryImage(documentPath()) && !currentPreview() ? 'active' : ''}`}
+            disabled={browsingArchive() || isBinaryImage(documentPath()) || (!!currentFile() && docLoadedPath() !== currentFile() && !showImagePreview())}
             onClick={() => {
               // 编辑→只读：先把防抖中的修改立即落盘（切换前保存，改动不丢）
               if (!roMode()) flushSave();
@@ -450,34 +510,51 @@ export function App() {
               setRoMode(next);
               pushState();
             }}
-            title={roMode() ? t('switchEdit') : t('switchReadonly')}
+            title={browsingArchive() ? t('archive.readonly') : roMode() ? t('switchEdit') : t('switchReadonly')}
           >
             ✎
           </button>
         </Show>
       </header>
 
-      <main class="editor-area">
+      <main class="editor-area" classList={{ 'archive-view': browsingArchive() }}>
+        <Show when={browsingArchive()}>
+          <ArchiveFeedback path={currentFile()!} chain={archiveChain()} retry={(password) => void loadDoc(currentFile()!, false, password)} />
+          <Show when={!archiveEntry()}><div class="binary-preview">{t('archive.choose')}</div></Show>
+          <Show when={archiveEntry() && !archiveFile() && !archiveSession(currentFile()!, archiveChain())?.busy && !archiveSession(currentFile()!, archiveChain())?.error}>
+            <div class="binary-preview"><button class="link-btn" onClick={() => void loadDoc(currentFile()!)}>{t('archive.retry')}</button></div>
+          </Show>
+          <Show when={archiveFile()?.truncated}><div class="archive-notice">{t('archive.textLimit')}</div></Show>
+        </Show>
         <div
           ref={setEditorEl}
           class="editor-container"
-          style={(activeKind() === 'file' || activeKind() === null) && !showMarkdownPreview() && !showImagePreview() ? undefined : 'display:none'}
+          style={(activeKind() === 'file' || activeKind() === null) && !showRenderedDocument() && !showImagePreview() && !currentPreview() && (!currentFile() || docLoadedPath() === currentFile()) ? undefined : 'display:none'}
         />
-        <Show when={showImagePreview()}>
-          <Show when={imageFile()?.path === currentFile()} fallback={<div class="view-placeholder" role="status">{t('loading')}</div>}>
+        <Show when={currentPreview()} keyed>{(file) => <FilePreview file={file} />}</Show>
+        <Show when={currentFile() && !browsingArchive() && !showImagePreview() && !currentPreview() && !showRenderedDocument() && docLoadedPath() !== currentFile()}>
+          <div class="view-placeholder" role="status">{t('loading')}</div>
+        </Show>
+        <Show when={showImagePreview() && (!browsingArchive() || archiveFile())}>
+          <Show when={imageFile()?.path === documentPath()} fallback={<div class="view-placeholder" role="status">{t('loading')}</div>}>
             <Show when={imageFile()} keyed>
               {(file) => <ImagePreview path={file.path} url={file.url} />}
             </Show>
           </Show>
         </Show>
-        <Show when={showMarkdownPreview()}>
+        <Show when={showMarkdownPreview() && (!browsingArchive() || archiveFile())}>
           <Show when={loadedDoc()?.path === currentFile()} fallback={<div class="view-placeholder" role="status">{t('loading')}</div>}>
-            <Show when={currentFile()} keyed>
-              {(path) => <MarkdownPreview content={loadedDoc()?.content ?? ''} path={path} />}
+            <Show when={documentPath()} keyed>
+              {(path) => <MarkdownPreview content={loadedDoc()?.content ?? ''} path={path} allowRelativeLinks={!browsingArchive()} />}
             </Show>
           </Show>
         </Show>
-        <Show when={currentFile() && !roMode() && !showImagePreview()}>
+        <Show when={showTablePreview() && (!browsingArchive() || archiveFile())}>
+          <Show when={loadedDoc()?.path === currentFile()} fallback={<div class="view-placeholder" role="status">{t('loading')}</div>}>
+            <Show when={documentPath()} keyed>{(path) => <TablePreview path={path} content={loadedDoc()?.content ?? ''} />}</Show>
+          </Show>
+        </Show>
+        <Show when={currentFile() && !documentReadOnly() && docLoadedPath() === currentFile()}>
           <button
             class="complete-btn"
             onClick={() => editorHandle()?.startCompletion()}

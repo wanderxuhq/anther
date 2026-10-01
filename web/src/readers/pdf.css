@@ -1,0 +1,2 @@
+/* PDF.js page dimensions include their own borders, unlike Anther's other views. */
+.document-reader .pdfViewer .page { box-sizing: content-box; }

@@ -6,7 +6,7 @@ import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { get } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
-import { fromBuffer } from 'yauzl';
+import { ZipReader, Uint8ArrayReader, Uint8ArrayWriter } from '@zip.js/zip.js';
 import { HttpServer } from './http.ts';
 import { FileStore } from './files.ts';
 import { registerFsRoutes } from './routes/fs.ts';
@@ -44,28 +44,18 @@ async function setup(t: TestContext, options: ArchiveOptions = {}) {
 }
 const bytes = async (res: Response) => Buffer.from(await res.arrayBuffer());
 
-function unzip(buffer: Buffer): Promise<Map<string, { data: Buffer; mode: number }>> {
-  return new Promise((resolve, reject) => {
-    fromBuffer(buffer, { lazyEntries: true }, (error, zip) => {
-      if (error) { reject(error); return; }
-      const entries = new Map<string, { data: Buffer; mode: number }>();
-      zip.on('error', reject);
-      zip.on('end', () => resolve(entries));
-      zip.on('entry', (entry) => {
-        zip.openReadStream(entry, (error, stream) => {
-          if (error) { reject(error); return; }
-          const chunks: Buffer[] = [];
-          stream.on('data', (chunk) => chunks.push(chunk));
-          stream.on('error', reject);
-          stream.on('end', () => {
-            entries.set(entry.fileName, { data: Buffer.concat(chunks), mode: entry.externalFileAttributes >>> 16 });
-            zip.readEntry();
-          });
-        });
-      });
-      zip.readEntry();
-    });
-  });
+async function unzip(buffer: Buffer): Promise<Map<string, { data: Buffer; mode: number }>> {
+  const reader = new ZipReader(new Uint8ArrayReader(new Uint8Array(buffer)));
+  try {
+    const entries = new Map<string, { data: Buffer; mode: number }>();
+    for (const entry of await reader.getEntries()) {
+      const data = entry.directory ? new Uint8Array() : await entry.getData(new Uint8ArrayWriter());
+      entries.set(entry.filename, { data: Buffer.from(data), mode: entry.externalFileAttributes >>> 16 });
+    }
+    return entries;
+  } finally {
+    await reader.close();
+  }
 }
 
 test('目录 ZIP 保留 Unicode、二进制、空目录、符号链接，单文件仍用原接口', async (t) => {

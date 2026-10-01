@@ -1,0 +1,38 @@
+.archive-feedback svg, .archive-readonly svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.75; }
+.archive-feedback:empty { display: none; }
+.archive-progress { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px; font-size: 13px; color: var(--muted); }
+.archive-password { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; }
+.archive-password label { min-width: 0; flex: 1; font-size: 13px; }
+.archive-password input { display: block; width: 100%; min-width: 0; margin-top: 4px; }
+.archive-empty, .archive-notice { color: var(--muted); padding: 8px; font-size: 13px; }
+.archive-readonly { color: var(--muted); display: inline-flex; }
+.archive-readonly svg { width: 13px; height: 13px; }
+
+.archive-options { width: min(440px, calc(100vw - 32px)); max-height: min(90dvh, 720px); overflow: auto; }
+.archive-options h3 { margin: 0; font-size: 16px; }
+.archive-options label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+.archive-options input {
+  width: 100%; min-height: 42px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: inherit; font: inherit;
+}
+.archive-options p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.archive-options .dialog-actions button {
+  min-width: 40px; min-height: 40px; padding: 6px 12px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: transparent; color: inherit; font: inherit; cursor: pointer;
+}
+.archive-options .dialog-actions button[type='submit'] {
+  border-color: var(--accent); background: var(--accent); color: #fff;
+}
+
+.editor-area.archive-view { display: flex; flex-direction: column; }
+.editor-area.archive-view > .editor-container,
+.editor-area.archive-view > .file-preview,
+.editor-area.archive-view > .image-preview,
+.editor-area.archive-view > .markdown-preview,
+.editor-area.archive-view > .table-preview {
+  flex: 1 1 0; min-width: 0; min-height: 0; height: auto;
+}
+.editor-area.archive-view > .archive-feedback,
+.editor-area.archive-view > .archive-notice { flex: 0 0 auto; }

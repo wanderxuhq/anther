@@ -5,16 +5,16 @@ export const [preparingDownload, setPreparingDownload] = createSignal(false);
 let beforeDownload: ((path: string, directory: boolean) => Promise<void>) | undefined;
 export function setBeforeDownload(handler?: typeof beforeDownload) { beforeDownload = handler; }
 
-/** 浏览器直接接收下载流；这里只轮询归档状态，不把文件读成内存 Blob。 */
-export async function startDownload(path: string, directory = false): Promise<void> {
+/** 工作区文件直接接收下载流；虚拟文件以已有的 Blob URL 复用同一下载入口。 */
+export async function startDownload(source: string | { url: string; filename: string }, directory = false): Promise<void> {
   if (preparingDownload()) return;
   setPreparingDownload(true);
   try {
-    await beforeDownload?.(path, directory);
-    let url = api.downloadUrl(path);
-    let filename = path.split('/').pop() ?? path;
-    if (directory) {
-      let result = await api.prepareDownload(path);
+    if (typeof source === 'string') await beforeDownload?.(source, directory);
+    let url = typeof source === 'string' ? api.downloadUrl(source) : source.url;
+    let filename = typeof source === 'string' ? source.split('/').pop() ?? source : source.filename;
+    if (directory && typeof source === 'string') {
+      let result = await api.prepareDownload(source);
       while (result.kind === 'archive' && result.status === 'preparing') {
         await new Promise((resolve) => setTimeout(resolve, 1000));
         result = await api.downloadStatus(result.id);

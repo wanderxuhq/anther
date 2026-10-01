@@ -146,6 +146,74 @@ test('diff 路由内的特殊字符和保留路径仅解码一次', () => {
   }
 });
 
+test('压缩包 entry 支持大小写扩展名、特殊路径往返，并优先于行号', () => {
+  for (const archive of ['a.zip', 'a.JAR', 'a.war', 'a.apk', 'a.xpi', 'a.cbz', 'a.7z', 'a.rar',
+    'a.tar', 'a.gz', 'a.tgz', 'a.bz2', 'a.tbz', 'a.tbz2', 'a.xz', 'a.txz']) {
+    const url = `http://host/${archive}?entry=${encodeURIComponent('目录/a #%.txt')}&line=8`;
+    const state = parseUrl(url);
+    assert.equal(state.entry, '目录/a #%.txt', archive);
+    assert.equal(state.line, null, archive);
+    const serialized = serializeUrl(state);
+    assert.match(serialized, /entry=/, archive);
+    assert.doesNotMatch(serialized, /line=/, archive);
+    assert.deepEqual(parseUrl(`http://host${serialized}`), state);
+  }
+});
+
+test('压缩包 entry 拒绝绝对路径、上级段和控制符', () => {
+  for (const entry of ['/etc/passwd', '\\\\server\\share', 'C:\\outside', '../secret', 'dir/../secret',
+    'dir\\..\\secret', 'bad\u0000name', 'bad\u001fname', 'bad\u007fname', 'bad\u0085name']) {
+    const state = parseUrl(`http://host/archive.zip?entry=${encodeURIComponent(entry)}&line=4`);
+    assert.equal(state.entry, null, JSON.stringify(entry));
+    assert.equal(state.line?.start, 4, JSON.stringify(entry));
+    assert.doesNotMatch(serializeUrl(state), /entry=/, JSON.stringify(entry));
+  }
+});
+
+test('非压缩包和非文件视图忽略 entry', () => {
+  const text = parseUrl('http://host/readme.txt?entry=folder%2Fitem.txt&line=2');
+  assert.equal(text.entry, null);
+  assert.equal(serializeUrl(text), '/readme.txt?line=2');
+  const git = parseUrl('http://host/-/git/history?entry=folder%2Fitem.txt');
+  assert.equal(git.entry, null);
+  assert.equal(serializeUrl(git), '/-/git/history');
+});
+
+test('嵌套压缩包 inside 多层往返，entry 可省略表示内层压缩包根目录', () => {
+  const source = 'http://host/bundles.zip?inside=inner.zip&inside=docs%2Fdeep.7z&entry=dir%2Fa.txt&line=4';
+  const state = parseUrl(source);
+  assert.deepEqual(state.inside, ['inner.zip', 'docs/deep.7z']);
+  assert.equal(state.entry, 'dir/a.txt');
+  assert.equal(state.line, null);
+  const serialized = serializeUrl(state);
+  assert.deepEqual(new URLSearchParams(serialized.split('?')[1]).getAll('inside'), state.inside);
+  assert.deepEqual(parseUrl(`http://host${serialized}`), state);
+
+  const innerRoot = parseUrl('http://host/bundles.zip?inside=inner.zip&inside=docs%2Fdeep.7z');
+  assert.deepEqual(innerRoot.inside, ['inner.zip', 'docs/deep.7z']);
+  assert.equal(innerRoot.entry, null);
+  assert.equal(serializeUrl(innerRoot), '/bundles.zip?inside=inner.zip&inside=docs%2Fdeep.7z');
+});
+
+test('非法 inside 链会整体清理，且普通文件和 Git 视图忽略 inside', () => {
+  for (const inside of ['readme.txt', '../inner.zip', '/absolute.zip', 'C:\\inner.zip', 'bad\u0000.zip']) {
+    const state = parseUrl(`http://host/bundles.zip?inside=${encodeURIComponent(inside)}&entry=ok.txt&line=9`);
+    assert.deepEqual(state.inside, [], inside);
+    assert.equal(state.entry, 'ok.txt'); // inside 与最外层 entry 独立
+    assert.equal(state.line, null);
+    assert.doesNotMatch(serializeUrl(state), /inside=/, inside);
+  }
+
+  const plain = parseUrl('http://host/readme.txt?inside=inner.zip&entry=item.txt&line=2');
+  assert.deepEqual(plain.inside, []);
+  assert.equal(plain.entry, null);
+  assert.equal(serializeUrl(plain), '/readme.txt?line=2');
+  const git = parseUrl('http://host/-/git/history?inside=inner.zip&entry=item.txt');
+  assert.deepEqual(git.inside, []);
+  assert.equal(git.entry, null);
+  assert.equal(serializeUrl(git), '/-/git/history');
+});
+
 test('不再解析旧 Git 查询参数；显式路由优先且清理无关参数', () => {
   assert.equal(serializeUrl(parseUrl('http://host/?view=history&branch=main')), '/');
   assert.equal(serializeUrl(parseUrl('http://host/a.ts?view=diff')), '/a.ts');

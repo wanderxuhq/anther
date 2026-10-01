@@ -1,0 +1,14 @@
+.reader-outline-popup { position: absolute; z-index: 5; top: calc(100% + 4px); left: 8px; width: min(360px, calc(100% - 16px)); max-height: min(65dvh, 480px); display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 24px #0003; }
+.reader-outline-header { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px 4px 12px; border-bottom: 1px solid var(--border); }
+.reader-outline-header h3 { margin: 0; font-size: 14px; }
+.reader-outline-popup .outline-view { overflow: auto; min-height: 0; overscroll-behavior: contain; }
+.outline-view { padding: 8px; font-size: 14px; }
+.outline-view p { padding: 8px 4px; color: var(--muted); }
+.outline-view ul { margin: 4px 0; padding: 0; list-style: none; }
+.outline-view ul ul { margin-left: 12px; padding-left: 6px; border-left: 1px solid var(--border); }
+.outline-row { display: flex; align-items: flex-start; border-radius: 5px; min-width: 0; }
+.outline-row:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.outline-arrow, .outline-title { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; min-height: 40px; }
+.outline-arrow { flex: 0 0 28px; padding: 8px 0; text-align: center; }
+.outline-title { flex: 1; min-width: 0; padding: 8px 4px; overflow-wrap: anywhere; text-align: left; }
+.outline-title:disabled { cursor: default; opacity: .65; }

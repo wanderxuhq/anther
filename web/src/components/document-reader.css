@@ -1,0 +1,13 @@
+.document-reader { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+.reader-toolbar { position: relative; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px; padding: 6px; border-bottom: 1px solid var(--border); }
+.reader-toolbar svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.75; }
+.reader-toolbar output { min-width: 46px; text-align: center; font-size: 13px; }
+.reader-page-number { width: 52px; min-width: 0; padding: 5px 2px; background: var(--bg); color: inherit; border: 1px solid var(--border); border-radius: 4px; text-align: center; }
+.reader-page-count { font-size: 13px; }
+.reader-reading-area { position: relative; flex: 1; min-height: 0; min-width: 0; }
+.reader-viewport { position: absolute; inset: 0; overflow: auto; scrollbar-gutter: stable; overscroll-behavior: contain; background: light-dark(#e8e8e8, #262626); }
+.reader-stage { min-height: 100%; }
+.reader-viewport.pinch-enabled { touch-action: pan-x pan-y; }
+.reader-status { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 2; padding: 6px 12px; border-radius: 6px; background: var(--bg); color: var(--muted); pointer-events: none; }
+.reader-password { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 16px; }
+.reader-password input { min-width: 0; max-width: 100%; }

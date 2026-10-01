@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import solid from 'vite-plugin-solid';
 import path from 'node:path';
 import os from 'node:os';
+import { pdfAssets } from './pdf-assets.ts';
 
 // 受限环境（容器/沙箱）os.networkInterfaces() 抛 EACCES，vite 在 host 为通配符
 // （host:true/0.0.0.0）时枚举网卡打印 URL → 启动即崩（uv_interface_addresses err 13）。
@@ -16,7 +17,9 @@ try {
 
 export default defineConfig({
   root: path.resolve(import.meta.dirname),
-  plugins: [solid()],
+  plugins: [solid(), pdfAssets()],
+  worker: { format: 'es' },
+  optimizeDeps: { include: ['@zip.js/zip.js', 'pdfjs-dist', 'pdfjs-dist/web/pdf_viewer.mjs'] },
   server: {
     host: true, // 监听所有网卡：手机/其他主机通过 IP 访问（vite 默认只绑 localhost）
     port: 5173,

@@ -1,0 +1,10 @@
+.file-preview { height: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+.media-preview, .binary-preview { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 16px; text-align: center; }
+.media-preview video { width: 100%; max-height: 100%; object-fit: contain; }
+.media-preview audio { width: min(100%, 600px); }
+.table-preview { height: 100%; overflow: auto; overscroll-behavior: contain; padding: 16px; }
+.table-preview table { border-collapse: collapse; font-size: 14px; }
+.table-preview td, .table-preview th { border: 1px solid var(--border); padding: 6px 10px; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; min-width: 60px; max-width: 480px; }
+.table-preview th { background: var(--bg); color: var(--muted); }
+.table-preview thead th { position: sticky; top: -16px; }
+.table-preview-notice { color: var(--muted); }

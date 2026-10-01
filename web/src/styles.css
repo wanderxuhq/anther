@@ -74,6 +74,11 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 .toast-error { background: var(--toast-error); }
 
 .toolbar-path-hint { color: var(--muted); }
+.toolbar-path-link {
+  display: inline; padding: 0; border: 0; background: transparent;
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.toolbar-path-link:hover { text-decoration: underline; }
 
 .drawer {
   position: fixed; top: 0; bottom: 0; left: 0; width: min(320px, 85vw);
@@ -443,3 +448,6 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   justify-content: center;
 }
 .complete-btn:active { opacity: 0.8; }
+
+.archive-toggle { border: 0; background: transparent; color: inherit; font: inherit; padding: 0; cursor: pointer; width: 100%; }
+.archive-icon { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; margin-right: 4px; flex-shrink: 0; }

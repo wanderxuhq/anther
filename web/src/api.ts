@@ -69,6 +69,7 @@ export type GitBranch = { name: string; current: boolean; tip: string };
 export type GitBranches = { isRepo: boolean; current: string | null; branches: GitBranch[] };
 export type GitLog = { isRepo: boolean; commits: GitCommit[] };
 export type GitShow = { commit: GitCommit; diff: string };
+export type FileInfo = { kind: 'text' | 'binary' | 'audio' | 'video' | 'pdf'; size: number; modified: string; mime: string };
 export type ArchiveDownload = {
   kind: 'archive'; id: string; status: 'preparing' | 'ready' | 'failed';
   phase: 'queued' | 'scanning' | 'packing'; filename: string; size?: number; url?: string; error?: string;
@@ -79,6 +80,8 @@ export const api = {
   readFile: (path: string) => request<{ content: string; utf8: boolean }>('GET', `/api/file?path=${encodeURIComponent(path)}`),
   downloadUrl: (path: string) => `/api/download?path=${encodeURIComponent(path)}`,
   imageUrl: (path: string) => `/api/image?path=${encodeURIComponent(path)}`,
+  previewUrl: (path: string) => `/api/preview?path=${encodeURIComponent(path)}`,
+  fileInfo: (path: string) => request<FileInfo>('GET', `/api/file-info?path=${encodeURIComponent(path)}`),
   prepareDownload: (path: string) => request<ArchiveDownload | { kind: 'file'; url: string; filename: string }>('POST', '/api/download/prepare', { path }),
   downloadStatus: (id: string) => request<ArchiveDownload>('GET', `/api/download/status?id=${encodeURIComponent(id)}`),
   writeFile: (path: string, content: string) =>
