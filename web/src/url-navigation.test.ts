@@ -15,17 +15,30 @@ before(async () => {
     // PDF rendering and workers require a real browser; this suite checks App routing only.
     plugins: [{ name: 'pdf-test-stub', enforce: 'pre',
       load: (id) => {
+        if (id.endsWith('/readers/pdf-source.ts')) return `export function acquirePdfSource(url) {
+          window.outlineLoads = (window.outlineLoads || 0) + 1;
+          let active = true;
+          return { subscribe(listener) {
+            listener({ outline: [], outlineStatus: 'loading', password: null });
+            queueMicrotask(() => { if (active) listener({ outlineStatus: 'ready', password: null, outline: [
+              { id: '0', title: 'Chapter <one>', navigable: false, children: [
+                { id: '0.0', title: 'Section two', navigable: true, children: [] }
+              ] }
+            ] }); });
+            return () => { active = false; };
+          }, release() { window.outlineReleases = (window.outlineReleases || 0) + 1; } };
+        }`;
         if (id.endsWith('/archive-client.ts')) return `export class ArchiveClient {
           async request(request) {
             const files = { 'docs/a.txt': 'archive A', 'docs/b.txt': 'archive B', 'deep.txt': 'nested text',
               'README.md': '# Inside\\n\\n**Archive**', 'data.csv': 'name,value\\na,1', 'code.ts': 'const value: number = 1;',
-              'image.svg': '<svg xmlns="http://www.w3.org/2000/svg"/>', 'manual.pdf': '%PDF-', 'song.mp3': 'audio', 'binary.bin': '\\0' };
+              'image.svg': '<svg xmlns="http://www.w3.org/2000/svg"/>', 'manual.pdf': '%PDF-', 'song.mp3': 'audio', 'binary.bin': '\\0', 'app.db': 'SQLite format 3\\0binary', 'inner.zip': 'nested-archive' };
             const entries = Object.keys(files).map((path, id) => ({ id, path, size: files[path].length, directory: false, encrypted: false, link: false }));
             return request.action === 'open' ? { entries } : { blob: new Blob([Object.values(files)[request.entry]]) };
           }
           close() {}
         }`;
-        return /\/(?:pdf-preview|archive-tree)\.tsx$/.test(id) ? `export default function PreviewStub(props) { const el = document.createElement('div'); el.className = '${id.endsWith('/pdf-preview.tsx') ? 'pdf-preview' : 'archive-tree'}'; el.dataset.url = props.url; return el; }` : null;
+        return /\/pdf-preview\.tsx$/.test(id) ? `export default function PreviewStub(props) { const el = document.createElement('div'); el.className = '${id.endsWith('/pdf-preview.tsx') ? 'pdf-preview' : 'archive-tree'}'; el.dataset.url = props.url; return el; }` : null;
       },
     }, { name: 'url-test-entry', resolveId: (id) => id === entry ? entry : null,
       load: (id) => id === entry ? `
@@ -34,8 +47,11 @@ before(async () => {
         import * as stores from '${path.join(import.meta.dirname, 'stores.ts')}';
         import { EditorView } from '@codemirror/view';
         import { createSignal } from 'solid-js';
+        import { fileTargetKey } from '${path.join(import.meta.dirname, 'file-target.ts')}';
+        import * as downloads from '${path.join(import.meta.dirname, 'download.ts')}';
+        import { registerReaderNavigation, cancelReaderNavigation } from '${path.join(import.meta.dirname, 'readers/navigation.ts')}';
         import { DocumentReader } from '${path.join(import.meta.dirname, 'components/document-reader.tsx')}';
-        window.harness = { stores, EditorView, mount: () => render(() => <App />, document.getElementById('root')),
+        window.harness = { stores, EditorView, downloads, fileTargetKey, registerReaderNavigation, cancelReaderNavigation, mount: () => render(() => <App />, document.getElementById('root')),
           mountReader: (factory, host = document.getElementById('root')) => {
             const [url, setUrl] = createSignal('first-document');
             const dispose = render(() => <DocumentReader url={url()} path="document" createReader={factory}/>, host);
@@ -925,4 +941,325 @@ test('阅读工具栏独立弹出目录，跳转及关闭不改变侧栏和 URL'
   assert.equal(w.document.querySelector('.reader-outline-popup'), null);
   assert.equal(s.activePanel(), 'tabs');
   assert.equal(w.location.href, initialUrl);
+});
+
+test('数据库表、结构使用独立标签，切换后保留分页排序，URL 后退恢复对象', async (test) => {
+  const { w, s, calls, history } = await setup(test, '/-/database/app.db?object=users&lang=zh', {
+    hook(url) {
+      if (url.pathname !== '/api/database') return;
+      const request = JSON.parse(url.searchParams.get('request')!);
+      if (request.action === 'objects') return json({ objects: [{ name: 'users', type: 'table' }, { name: 'orders', type: 'table' }], truncated: false });
+      if (request.action === 'describe') return json({ object: request.object, columns: [{ name: 'id', type: 'INTEGER', nullable: false, primaryKey: 1, defaultValue: null, generated: false }], indexes: [], foreignKeys: [], sql: 'CREATE TABLE users(id INTEGER PRIMARY KEY)' });
+      const input = request.request;
+      return json({ columns: [{ key: 'id', label: 'id' }], rows: [[{ type: 'integer', value: String((input.offset ?? 0) + 1) }]], offset: input.offset ?? 0, hasMore: !input.offset, nextCursor: '1', limited: false });
+    },
+  });
+  await until(() => !!w.document.querySelector('.database-data tbody tr'));
+  const usersId = s.currentTabId();
+  assert.equal(s.currentFile(), null);
+  w.document.querySelector('[aria-label="下一页数据"]')!.click();
+  await until(() => w.document.querySelector('.database-pagination span')?.textContent === '2–2');
+  w.document.querySelector('.toolbar [aria-label="结构"]')!.click();
+  await until(() => !!w.document.querySelector('.database-structure pre'));
+  const structureId = s.currentTabId();
+  assert.notEqual(structureId, usersId);
+  assert.match(w.location.search, /mode=structure/);
+  s.openDatabaseTab('app.db', { object: { name: 'orders', type: 'table' }, mode: 'data' });
+  await until(() => !!w.document.querySelector('.database-data tbody tr'));
+  assert.equal(s.tabs().filter((tab: any) => tab.kind === 'database').length, 3);
+  await s.switchTab(usersId);
+  await until(() => w.document.querySelector('.database-pagination span')?.textContent === '2–2');
+  w.document.querySelector('.data-grid-sort')!.click();
+  await until(() => w.document.querySelector('[aria-sort="ascending"]'));
+  assert.match(w.location.search, /sort=id/);
+  await s.switchTab(structureId);
+  await until(() => !!w.document.querySelector('.database-structure pre'));
+  await history('back');
+  await until(() => !!w.document.querySelector('[aria-sort="ascending"]'));
+  assert.equal(s.activeTab().object.name, 'users');
+  assert.equal(calls.some((call) => call.url.pathname === '/api/file'), false);
+  assert.equal(calls.some((call) => call.url.pathname === '/api/tabs/open'), false);
+  assert.equal(JSON.parse(w.localStorage.getItem('anther:databaseTabs')!).length, 3);
+  await s.closeAnyTab(usersId);
+  assert.equal(JSON.parse(w.localStorage.getItem('anther:databaseTabs')!).length, 2);
+});
+
+test('数据库树区分表和视图，同库不同表可同时打开，下载复用已有文件入口', async (test) => {
+  const { w, s } = await setup(test, '/?lang=zh', { hook(url) {
+    if (url.pathname === '/api/list') return json({ entries: [{ name: 'app.db', type: 'file', size: 4096, mtime: 0 }] });
+    if (url.pathname !== '/api/database') return;
+    const request = JSON.parse(url.searchParams.get('request')!);
+    if (request.action === 'objects') return json({ objects: [{ name: 'users', type: 'table' }, { name: 'names', type: 'view' }], truncated: false });
+    return json({ columns: [{ key: 'id', label: 'id' }], rows: [], offset: 0, hasMore: false, limited: false });
+  } });
+  await until(() => !!w.document.querySelector('[aria-label="展开或收起数据库"]'));
+  w.document.querySelector('[aria-label="展开或收起数据库"]')!.click();
+  await until(() => w.document.querySelectorAll('.database-group').length === 2);
+  const objects = w.document.querySelectorAll('.database-object');
+  objects[0].click(); await until(() => s.activeTab()?.object?.name === 'users');
+  objects[1].click(); await until(() => s.activeTab()?.object?.name === 'names');
+  assert.equal(s.tabs().length, 2);
+  assert.equal(s.activeTab().object.type, 'view');
+  assert.equal(w.document.querySelector('.file-download')!.disabled, false);
+  assert.equal(w.document.querySelector('[title="切换为编辑模式"]')!.disabled, true);
+});
+
+test('重命名和删除数据库时同步所有对象标签，不影响其他数据库', async (test) => {
+  const { s, w } = await setup(test, '/', { mount: false });
+  const target = { object: { name: 'users', type: 'table' }, mode: 'data' };
+  s.openDatabaseTab('folder/app.db', target);
+  s.openDatabaseTab('folder/app.db', { ...target, mode: 'structure' });
+  s.openDatabaseTab('other/app.db', target);
+  await s.switchTab(s.tabs()[0].id);
+  s.relocateDatabaseTabs('folder', 'renamed');
+  assert.equal(s.tabs().length, 3);
+  assert.equal(s.activeTab().path, 'renamed/app.db');
+  assert.equal(w.location.pathname, '/-/database/renamed/app.db');
+  s.relocateDatabaseTabs('renamed/app.db');
+  assert.equal(s.tabs().length, 1);
+  assert.equal(s.activeTab().path, 'other/app.db');
+});
+
+test('CSV 共用紧凑表格：字段浮层、复制、整行详情和展开均不改变文件或 URL', async (test) => {
+  const content = 'name,note\nA,"line 1\nline 2"\nB,';
+  const { w, s } = await setup(test, '/data.csv?lang=zh', { hook(url) {
+    if (url.pathname === '/api/file') return json({ content, utf8: true });
+  } });
+  let copied = '';
+  Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: async (text: string) => { copied = text; } } });
+  await until(() => !!w.document.querySelector('.data-grid-compact'));
+  const url = w.location.href;
+  const cells = () => w.document.querySelectorAll('.data-grid-cell');
+  cells()[3].click();
+  await until(() => w.document.querySelector('.table-cell-popover')?.style.visibility === 'visible');
+  assert.equal(w.document.querySelector('.table-cell-value pre')!.textContent, 'line 1\nline 2');
+  w.document.querySelector('[aria-label="复制值"]')!.click();
+  await until(() => copied === 'line 1\nline 2');
+  w.document.activeElement.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  assert.equal(w.document.querySelector('.table-cell-popover'), null);
+  assert.equal(w.document.activeElement, cells()[3]);
+  const rowButtons = () => w.document.querySelectorAll('.data-grid-row-button');
+  rowButtons()[1].click();
+  await until(() => !!w.document.querySelector('.table-row-detail'));
+  assert.match(w.document.querySelector('.table-row-detail')!.textContent, /line 1\nline 2/);
+  assert.equal(w.document.querySelector('.table-row-detail')!.getAttribute('aria-label'), '第 2 行');
+  cells()[4].click();
+  assert.equal(w.document.querySelector('.table-row-detail')!.getAttribute('aria-label'), '第 3 行');
+  assert.equal(w.document.querySelector('.table-cell-popover'), null);
+  assert.match(w.document.querySelector('.table-row-detail')!.textContent, /空字符串/);
+  w.document.querySelector('[aria-label="展开整行详情"]')!.click();
+  assert.equal(w.document.querySelector('.table-row-detail')!.classList.contains('expanded'), true);
+  w.document.querySelector('[aria-label="收起整行详情"]')!.click();
+  assert.equal(w.document.querySelector('.table-row-detail')!.classList.contains('expanded'), false);
+  w.document.querySelector('[aria-label="关闭整行详情"]')!.click();
+  assert.equal(w.document.querySelector('.table-row-detail'), null);
+  assert.equal(w.document.activeElement, rowButtons()[2]);
+  assert.equal(w.location.href, url);
+  assert.equal(s.currentFile(), 'data.csv');
+});
+
+test('字段浮层可点外部关闭，数据源变化或切换文件后清理详情', async (test) => {
+  const { w, s } = await setup(test, '/-/database/app.db?object=users&lang=zh', { hook(url) {
+    if (url.pathname !== '/api/database') return;
+    const request = JSON.parse(url.searchParams.get('request')!);
+    if (request.action === 'objects') return json({ objects: [], truncated: false });
+    return json({ columns: [{ key: 'body', label: 'body' }, { key: 'blob', label: 'blob' }], rows: [
+      [{ type: 'text', value: '<b>preview</b>', truncated: true }, { type: 'blob', value: '00FF', bytes: 1000, truncated: true }],
+    ], offset: 0, hasMore: false, limited: false });
+  } });
+  await until(() => !!w.document.querySelector('.data-grid-cell'));
+  w.document.querySelector('.data-grid-cell')!.click();
+  await until(() => !!w.document.querySelector('.table-cell-popover'));
+  assert.equal(w.document.querySelector('.table-cell-value b'), null);
+  assert.equal(w.document.querySelector('.table-cell-value pre')!.textContent, '<b>preview</b>');
+  assert.match(w.document.querySelector('.table-detail-notice')!.textContent, /不是完整值/);
+  assert.ok(w.document.querySelector('[aria-label="复制预览内容"]'));
+  w.document.body.dispatchEvent(new w.MouseEvent('pointerdown', { bubbles: true }));
+  assert.equal(w.document.querySelector('.table-cell-popover'), null);
+  w.document.querySelector('.data-grid-row-button')!.click();
+  assert.match(w.document.querySelector('.table-row-detail')!.textContent, /BLOB · 1000 B · HEX/);
+  assert.match(w.document.querySelector('.table-row-detail')!.textContent, /00FF/);
+  w.document.querySelector('.data-grid-sort')!.click();
+  await until(() => !!w.document.querySelector('[aria-sort="ascending"]'));
+  assert.equal(w.document.querySelector('.table-row-detail'), null);
+  w.document.querySelector('.data-grid-cell')!.click();
+  await s.openTab('a.txt');
+  await until(() => s.docLoadedPath() === 'a.txt');
+  assert.equal(w.document.querySelector('.table-cell-popover'), null);
+  assert.equal(w.document.querySelector('.table-row-detail'), null);
+});
+
+test('整行详情替换分页栏，逐条切换同步高亮并跨页，加载图标保留固定槽位', async (test) => {
+  let release: (() => void) | undefined;
+  const { w } = await setup(test, '/-/database/app.db?object=users&lang=zh', { async hook(url) {
+    if (url.pathname !== '/api/database') return;
+    const request = JSON.parse(url.searchParams.get('request')!);
+    if (request.action === 'objects') return json({ objects: [], truncated: false });
+    const offset = request.request.offset ?? 0;
+    if (offset) await new Promise<void>((resolve) => { release = resolve; });
+    return json({ columns: [{ key: 'id', label: 'id' }], rows: [1, 2].map((id) => [{ type: 'integer', value: String(offset + id) }]), offset, hasMore: !offset, limited: false });
+  } });
+  await until(() => !!w.document.querySelector('.data-grid-row-button'));
+  const spinnerSlot = w.document.querySelector('.database-loading-slot');
+  assert.ok(spinnerSlot);
+  assert.equal(w.document.querySelector('.database-loading.active'), null);
+  w.document.querySelector('.data-grid-row-button')!.click();
+  const detail = () => w.document.querySelector('.table-row-detail');
+  const selected = () => w.document.querySelector('.data-grid-row-button[aria-expanded="true"]')?.textContent;
+  assert.equal(w.document.querySelector('.database-pagination'), null);
+  assert.equal(w.document.querySelector('[aria-label="上一条"]')!.disabled, true);
+  w.document.querySelector('[aria-label="下一条"]')!.click();
+  assert.equal(detail()?.getAttribute('aria-label'), '第 2 行');
+  assert.equal(selected(), '2');
+  w.document.querySelector('[aria-label="下一条"]')!.click();
+  await until(() => !!release);
+  assert.equal(w.document.querySelector('.database-loading-slot'), spinnerSlot);
+  assert.ok(w.document.querySelector('.database-loading.active'));
+  assert.equal(w.document.querySelector('.database-status'), null);
+  assert.equal(detail()?.getAttribute('aria-label'), '第 2 行');
+  assert.equal(w.document.querySelector('[aria-label="下一条"]')!.disabled, true);
+  release!();
+  await until(() => detail()?.getAttribute('aria-label') === '第 3 行');
+  assert.equal(selected(), '3');
+  assert.equal(w.document.querySelector('.database-pagination'), null);
+  w.document.querySelector('[aria-label="展开整行详情"]')!.click();
+  w.document.querySelector('[aria-label="上一条"]')!.click();
+  await until(() => detail()?.getAttribute('aria-label') === '第 2 行');
+  assert.equal(selected(), '2');
+  assert.ok(detail()?.classList.contains('expanded'));
+  w.document.querySelector('[aria-label="上一条"]')!.click();
+  assert.equal(selected(), '1');
+  w.document.querySelector('[aria-label="关闭整行详情"]')!.click();
+  assert.equal(w.document.querySelector('.database-pagination span')?.textContent, '1–2');
+  assert.equal(w.document.querySelector('.table-record-nav'), null);
+});
+
+test('文件树按需展开文档大纲，章节打开对应文件并向阅读器传递跳转，不创建虚拟文件标签', async (test) => {
+  const { w, s, calls } = await setup(test, '/a.txt?lang=zh', { hook(url) {
+    if (url.pathname === '/api/list') return json({ entries: [
+      { name: 'a.txt', type: 'file' }, { name: 'manual.pdf', type: 'file' },
+    ] });
+    if (url.pathname === '/api/file-info' && url.searchParams.get('path') === 'manual.pdf') return json({ kind: 'pdf', size: 100, modified: 'v1', mime: 'application/pdf' });
+  } });
+  await until(() => !!w.document.querySelector('[aria-label="展开文档大纲"]'));
+  assert.equal(w.outlineLoads, undefined);
+  w.document.querySelector('[aria-label="展开文档大纲"]')!.click();
+  await until(() => !!w.document.querySelector('.document-outline-title'));
+  assert.equal(s.currentFile(), 'a.txt');
+  assert.equal(w.outlineLoads, 1);
+  assert.equal(w.outlineReleases, 1);
+  assert.equal(w.document.querySelector('.document-outline-tree one'), null);
+  assert.equal(w.document.querySelectorAll('.document-outline-title').length, 1);
+  w.document.querySelector('.document-outline-title')!.click();
+  assert.equal(w.document.querySelectorAll('.document-outline-title').length, 2);
+  w.document.querySelectorAll('.document-outline-title')[1].click();
+  await until(() => s.currentFile() === 'manual.pdf' && !!w.document.querySelector('.pdf-preview'));
+  await tick();
+  const jumps: string[] = [];
+  const release = w.harness.registerReaderNavigation('manual.pdf', { goToOutline(id: string) { jumps.push(id); } });
+  test.after(release);
+  await until(() => jumps.length === 1);
+  assert.deepEqual(jumps, ['0.0']);
+  assert.equal(s.tabs().filter((tab: any) => tab.path === 'manual.pdf').length, 1);
+  assert.equal(w.location.pathname, '/manual.pdf');
+  assert.equal(calls.some((call) => call.url.pathname === '/api/file' && call.url.searchParams.get('path') === 'Section two'), false);
+  assert.equal(w.document.querySelector('[aria-current="location"]')?.textContent, 'Section two');
+  w.document.querySelector('[aria-label="展开文档大纲"]')!.click();
+  assert.equal(w.document.querySelector('.document-outline-tree'), null);
+  assert.equal(s.currentFile(), 'manual.pdf');
+});
+
+test('Markdown 文件树标题复用渲染目标，只读源码可切回预览，编辑模式跳转源码且不改只读状态', async (test) => {
+  const content = '# First\n\ntext\n\n## Second\n\nlast';
+  const { w, s, editor } = await setup(test, '/a.txt?lang=zh', { hook(url) {
+    if (url.pathname === '/api/list') return json({ entries: [{ name: 'guide.md', type: 'file' }] });
+    if (url.pathname === '/api/file' && url.searchParams.get('path') === 'guide.md') return json({ content, utf8: true });
+  } });
+  w.document.querySelector('[aria-label="展开文档大纲"]')!.click();
+  await until(() => !!w.document.querySelector('.document-outline-title'));
+  assert.equal(w.outlineLoads, undefined, 'Markdown must not acquire a PDF parser');
+  assert.equal(s.currentFile(), 'a.txt');
+  w.document.querySelector('.document-outline-row [aria-expanded]')!.click();
+  w.document.querySelectorAll('.document-outline-title')[1].click();
+  await until(() => s.currentFile() === 'guide.md' && !!w.document.querySelector('[data-md-heading="1"]'));
+  await until(() => w.document.activeElement?.classList.contains('markdown-preview'));
+  assert.equal(s.roMode(), true);
+  w.document.querySelector('.markdown-toggle')!.click();
+  await until(() => w.document.querySelector('.markdown-preview') === null);
+  w.document.querySelectorAll('.document-outline-title')[1].click();
+  await until(() => w.document.activeElement?.classList.contains('markdown-preview'));
+  s.setRoMode(false);
+  await until(() => !!w.document.querySelector('.cm-editor') && !w.document.querySelector('.markdown-preview'));
+  w.document.querySelectorAll('.document-outline-title')[1].click();
+  await until(() => editor().state.doc.lineAt(editor().state.selection.main.from).number === 5);
+  assert.equal(s.roMode(), false);
+  assert.equal(w.document.querySelector('.markdown-preview'), null);
+  assert.equal(s.tabs().filter((tab: any) => tab.path === 'guide.md').length, 1);
+});
+
+test('目录下载展示压缩与校验进度，状态请求超时后解除等待且重试能下载已有 ZIP', async (test) => {
+  let stall = false, statusCalls = 0, retried = false;
+  const { w } = await setup(test, '/a.txt?lang=zh', { hook(url, init) {
+    const job = { kind: 'archive', id: 'job', filename: 'example.zip', status: 'preparing', phase: 'packing',
+      progress: { entries: 5, totalBytes: 10485760, readBytes: 2097152, writtenBytes: 1048576, checkedEntries: 0 } };
+    if (url.pathname === '/api/download/prepare') return json(retried ? { ...job, status: 'ready', url: '/api/download/archive?id=job' } : job);
+    if (url.pathname === '/api/download/status') {
+      statusCalls++;
+      if (stall) return new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
+      stall = true;
+      return json({ ...job, phase: 'verifying', progress: { ...job.progress, checkedEntries: 3 } });
+    }
+  } });
+  const originalTimeout = w.setTimeout.bind(w);
+  w.setTimeout = ((handler: TimerHandler, delay?: number, ...args: any[]) => originalTimeout(handler, delay === 30_000 ? 100 : delay, ...args)) as any;
+  const downloads: string[] = [];
+  w.HTMLAnchorElement.prototype.click = function () { downloads.push(this.href); };
+  const result = w.harness.downloads.startDownload('example', true).then(() => null, (error: Error) => error);
+  await until(() => w.harness.downloads.downloadProgressText().includes('2.0 / 10.0 MiB'));
+  await until(() => w.harness.downloads.downloadProgressText().includes('3 / 5'));
+  const error = await result;
+  assert.match(error.message, /状态查询超时/);
+  assert.equal(statusCalls, 2);
+  assert.equal(w.harness.downloads.preparingDownload(), false);
+  assert.equal(downloads.length, 0);
+  retried = true;
+  await w.harness.downloads.startDownload('example', true);
+  assert.equal(downloads.length, 1);
+  assert.equal(new URL(downloads[0]).searchParams.get('id'), 'job');
+  assert.equal(w.harness.downloads.preparingDownload(), false);
+});
+
+test('压缩包内的 PDF 和 Markdown 复用文件树大纲，跳转包含嵌套路径，SQLite 明确提示且不上传', async (test) => {
+  const { w, s, calls } = await setup(test, '/bundle.zip?inside=inner.zip&lang=zh', { hook(url) {
+    if (url.pathname === '/api/list') return json({ entries: [{ name: 'bundle.zip', type: 'file' }] });
+  } });
+  await until(() => w.document.querySelectorAll('.archive-node .tree-row[title="bundle.zip › manual.pdf"]').length === 2);
+  const nested = () => w.document.querySelector('.tree-row[title="bundle.zip › inner.zip"]')!.parentElement!.querySelector(':scope > .archive-tree')!;
+  const target = (name: string) => nested().querySelectorAll(`.archive-node .tree-row[title="bundle.zip › ${name}"]`);
+  const row = () => [...target('manual.pdf')].at(-1) as any;
+  row().querySelector('[aria-label="展开文档大纲"]').click();
+  await until(() => !!row().parentElement.querySelector('.document-outline-title'));
+  const tree = () => row().parentElement.querySelector('.document-outline-tree');
+  tree().querySelector('.document-outline-title').click();
+  tree().querySelectorAll('.document-outline-title')[1].click();
+  await until(() => s.archiveEntry() === 'manual.pdf' && !!w.document.querySelector('.pdf-preview'));
+  const jumps: string[] = [];
+  const key = w.harness.fileTargetKey({ path: 'bundle.zip', archive: { entry: 'manual.pdf', chain: ['inner.zip'] } });
+  const disconnect = w.harness.registerReaderNavigation(key, { goToOutline: (id: string) => { jumps.push(id); } });
+  test.after(disconnect);
+  await until(() => jumps.length === 1);
+  assert.deepEqual(jumps, ['0.0']);
+  assert.deepEqual(Array.from(s.archiveChain()), ['inner.zip']);
+  const markdown = [...target('README.md')].at(-1) as any;
+  markdown.querySelector('[aria-label="展开文档大纲"]').click();
+  await until(() => !!markdown.parentElement.querySelector('.document-outline-title'));
+  markdown.parentElement.querySelector('.document-outline-title').click();
+  await until(() => s.archiveEntry() === 'README.md' && w.document.activeElement?.classList.contains('markdown-preview'));
+  assert.match(w.location.search, /inside=inner.zip/);
+  assert.equal(w.document.querySelectorAll('.toolbar').length, 1);
+  await s.openArchiveEntry('bundle.zip', 'app.db', ['inner.zip']);
+  await until(() => !!w.document.querySelector('.binary-preview'));
+  assert.match(w.document.querySelector('.binary-preview').textContent, /暂不支持预览压缩包内的 SQLite/);
+  assert.equal(w.document.querySelector('.file-download').disabled, false);
+  assert.equal(calls.some((call) => call.url.pathname.startsWith('/api/database') || call.url.pathname === '/api/upload'), false);
 });

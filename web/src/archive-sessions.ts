@@ -1,4 +1,4 @@
-import { createStore } from 'solid-js/store';
+import { createStore, reconcile } from 'solid-js/store';
 import { api } from './api.ts';
 import { ArchiveClient } from './archive-client.ts';
 import { archiveKey, type ArchiveEntry } from './archive.ts';
@@ -60,7 +60,7 @@ async function run<T>(root: string, chain: string[], stage: 'scanning' | 'extrac
     if (loadedKey !== key) {
       const reply = await client.request({ action: 'open', url: new URL(api.downloadUrl(root), location.href).href, path: root, chain,
         passwords: Array.from({ length: chain.length + 1 }, (_, depth) => passwords.get(archiveKey(root, chain.slice(0, depth)))), limits: archiveLimits(), heldBytes });
-      setArchiveSession(key, { entries: reply.entries }); loadedKey = key;
+      setArchiveSession(key, 'entries', reconcile(reply.entries ?? [], { key: 'path' })); loadedKey = key;
     }
     setArchiveSession(key, { busy: stage });
     return action(client);

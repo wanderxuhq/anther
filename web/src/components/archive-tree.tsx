@@ -1,9 +1,11 @@
-import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, lazy, Suspense, ErrorBoundary, on, onCleanup, Show } from 'solid-js';
 import { archiveChildren, isArchiveFile, type ArchiveEntry } from '../archive.ts';
 import { archiveSession, cancelArchive, downloadArchiveEntry, ensureArchive } from '../archive-sessions.ts';
 import { archiveChain, archiveEntry, currentFile, openArchiveEntry } from '../stores.ts';
 import { archiveLimits } from '../archive-settings.ts';
 import { t } from '../i18n.ts';
+import { hasDocumentOutline } from '../readers/document-file.ts';
+const DocumentTree = lazy(() => import('./document-tree.tsx'));
 import { ArchiveFeedback } from './archive-feedback.tsx';
 
 function Branch(props: { archive: string; directory: string; chain: string[] }) {
@@ -15,12 +17,14 @@ function Branch(props: { archive: string; directory: string; chain: string[] }) 
 }
 
 function Entry(props: { archive: string; entry: ArchiveEntry; chain: string[] }) {
+  const document = () => !props.entry.directory && !props.entry.link && hasDocumentOutline(props.entry.path);
   const nested = () => !props.entry.directory && !props.entry.link && isArchiveFile(props.entry.path);
   const atChain = () => props.chain.every((name, index) => archiveChain()[index] === name);
   const selected = () => currentFile() === props.archive && atChain() && (nested()
     ? archiveChain().length === props.chain.length + 1 && archiveChain()[props.chain.length] === props.entry.path && !archiveEntry()
     : archiveChain().length === props.chain.length && archiveEntry() === props.entry.path);
   const [expanded, setExpanded] = createSignal(false), [menu, setMenu] = createSignal(false);
+  const [documentRevision, setDocumentRevision] = createSignal(0);
   const [downloadPending, setDownloadPending] = createSignal(false);
   const state = () => archiveSession(props.archive, props.chain);
   createEffect(() => {
@@ -39,11 +43,13 @@ function Entry(props: { archive: string; entry: ArchiveEntry; chain: string[] })
       setMenu(false);
       if (props.entry.directory) setExpanded((value) => !value);
       else {
-        if (state()?.busy) cancelArchive(props.archive);
         void openArchiveEntry(props.archive, nested() ? null : props.entry.path, nested() ? [...props.chain, props.entry.path] : props.chain).catch(() => {});
       }
     }}>
-      <span class="tree-arrow" onClick={(event) => { if (nested()) { event.stopPropagation(); setExpanded((value) => !value); } }}>{props.entry.directory || nested() ? expanded() ? '▾' : '▸' : ''}</span>
+      <span class="tree-arrow"><Show when={nested() || document()} fallback={props.entry.directory ? expanded() ? '▾' : '▸' : ''}>
+        <button class="archive-toggle" title={t(document() ? 'reader.expandOutline' : 'archive.expand')} aria-label={t(document() ? 'reader.expandOutline' : 'archive.expand')}
+          aria-expanded={expanded()} onClick={(event) => { event.stopPropagation(); setExpanded(!expanded()); }}>{expanded() ? '▾' : '▸'}</button>
+      </Show></span>
       <span class="tree-name">{props.entry.path.split('/').pop()}</span>
       <span class="archive-readonly" title={t('archive.readonly')} aria-label={t('archive.readonly')}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="10" width="12" height="10" rx="2"/><path d="M9 10V7a3 3 0 0 1 6 0v3"/></svg>
@@ -56,6 +62,14 @@ function Entry(props: { archive: string; entry: ArchiveEntry; chain: string[] })
     </div>
     <Show when={downloadPending() && state()?.passwordRequired}><ArchiveFeedback path={props.archive} chain={props.chain} retry={(password) => void download(password)} /></Show>
     <Show when={props.entry.directory && expanded()}><div class="tree-children"><Branch archive={props.archive} chain={props.chain} directory={props.entry.path} /></div></Show>
+    <Show when={document() && expanded()}>
+      <ArchiveFeedback path={props.archive} chain={props.chain} retry={(password) => {
+        void ensureArchive(props.archive, password, true, props.chain).then(() => setDocumentRevision(documentRevision() + 1)).catch(() => {});
+      }}/>
+      <ErrorBoundary fallback={<div class="error-banner">{t('reader.outlineFailed')}</div>}>
+        <Suspense fallback={<div role="status">{t('loading')}</div>}><DocumentTree path={props.archive} reload={documentRevision()} archive={{ entry: props.entry.path, chain: props.chain }}/></Suspense>
+      </ErrorBoundary>
+    </Show>
     <Show when={nested() && expanded()}><ArchiveTree path={props.archive} chain={[...props.chain, props.entry.path]} /></Show>
   </div>;
 }

@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 
 const dom = new JSDOM('');
 Object.assign(globalThis, { window: dom.window });
-const { isMarkdownFile, renderMarkdown } = await import('./markdown.ts');
+const { isMarkdownFile, renderMarkdown, parseMarkdownDocument } = await import('./markdown.ts');
 after(() => { dom.window.close(); delete (globalThis as Record<string, unknown>).window; });
 
 test('Markdown 文件识别支持常见扩展名和大小写，不误判普通文件', () => {
@@ -67,4 +67,20 @@ test('虚拟文件复用 Markdown 渲染，但相对地址不会访问工作区�
   assert.equal(doc.querySelector('a')?.hasAttribute('href'), false);
   assert.equal(doc.querySelectorAll('a[href]').length, 2);
   assert.equal(doc.querySelector('[src^="/api/"]'), null);
+});
+
+
+test('Markdown outline follows heading depth, ignores fenced code and assigns distinct destinations to duplicate titles', () => {
+  const source = '# **Title**\r\n\r\n```md\r\n# Hidden\r\n```\r\n\r\n### [Same](https://example.com)\r\n\r\n## Same\r\n\r\nLast\r\n====\r\n';
+  const parsed = parseMarkdownDocument(source);
+  assert.deepEqual(parsed.outline, [
+    { id: '0', title: 'Title', navigable: true, children: [
+      { id: '1', title: 'Same', navigable: true, children: [] },
+      { id: '2', title: 'Same', navigable: true, children: [] },
+    ] },
+    { id: '3', title: 'Last', navigable: true, children: [] },
+  ]);
+  assert.deepEqual([...parsed.lines], [['0', 0], ['1', 6], ['2', 8], ['3', 10]]);
+  const doc = new dom.window.DOMParser().parseFromString(parsed.html, 'text/html');
+  assert.deepEqual([...doc.querySelectorAll('[data-md-heading]')].map((node) => node.getAttribute('data-md-heading')), ['0', '1', '2', '3']);
 });

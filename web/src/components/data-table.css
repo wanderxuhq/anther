@@ -1,0 +1,24 @@
+.data-table { position: relative; display: flex; flex-direction: column; flex: 1; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
+.data-table-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.table-row-slot { flex: 0 0 auto; height: min(34dvh, 280px); max-height: 50%; min-height: 0; }
+.table-row-detail { height: 100%; display: flex; flex-direction: column; min-height: 0; background: var(--bg); border-top: 1px solid var(--border); box-shadow: 0 -3px 12px #0001; }
+.table-row-detail.expanded { position: absolute; inset: 0; z-index: 6; }
+.table-record-nav { display: flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 8px; padding: 6px 12px; border-top: 1px solid var(--border); }
+.table-detail-header { display: flex; flex-shrink: 0; align-items: center; gap: 4px; padding: 4px 8px 4px 12px; border-bottom: 1px solid var(--border); }
+.table-detail-header strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.table-record-fields { margin: 0; padding: 0 12px env(safe-area-inset-bottom); overflow: auto; overscroll-behavior: contain; min-height: 0; flex: 1; }
+.table-record-field { border-bottom: 1px solid var(--border); padding: 6px 0 12px; }
+.table-record-field:last-child { border-bottom: 0; }
+.table-record-field dt { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; font-weight: 600; }
+.table-record-field dt > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.table-record-field dd { margin: 0; }
+.table-detail-value { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.5; user-select: text; }
+.table-detail-empty, .table-value-type, .table-detail-notice { color: var(--muted); }
+.table-detail-empty { font-style: italic; }
+.table-value-type { display: block; font-size: 12px; }
+.table-detail-notice { font-size: 12px; margin: 6px 0 0; }
+.table-cell-popover { position: fixed; z-index: 80; display: flex; flex-direction: column; width: min(360px, calc(100vw - 16px)); max-height: min(34dvh, 300px); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 5px 24px #0003; background: var(--bg); color: inherit; overflow: hidden; }
+.table-cell-value { padding: 8px 12px 12px; overflow: auto; overscroll-behavior: contain; min-height: 0; }
+.table-copy { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.table-copy-status { color: var(--muted); font-size: 12px; max-width: 130px; }
+.table-cell-popover:focus, .table-row-detail:focus { outline: none; }

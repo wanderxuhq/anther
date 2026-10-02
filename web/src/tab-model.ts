@@ -1,7 +1,12 @@
+import type { DatabaseObject, DatabaseSort } from '../../server/database-types.ts';
+export type DatabaseTarget = { object: DatabaseObject | null; mode: 'data' | 'structure'; sort?: DatabaseSort };
+export type DatabaseTab = DatabaseTarget & { kind: 'database'; id: string; path: string };
+
 // web/src/tab-model.ts
-// 通用标签模型（spec §5.2）：文件标签 id=path，终端标签 id=terminalId。
+// Content-specific identities are created here; tab presentation and lifecycle use only ids.
 // 纯函数，node --test 可测；stores/视图层共用。
 export type TabItem =
+  | DatabaseTab
   | { kind: 'file'; id: string; path: string }
   | { kind: 'terminal'; id: string; name: string }
   | { kind: 'git'; id: '/-/git' }
@@ -78,4 +83,15 @@ export function addGitCommitTab(tabs: TabItem[], hash: string): TabItem[] {
   const id = gitCommitTabId(hash);
   if (tabs.some((t) => t.id === id)) return tabs;
   return [...tabs, { kind: 'git-commit', id, commit: hash }];
+}
+
+/** Content identity is independent of a backing file. Sort/page are view state, not identity. */
+export function databaseTabId(path: string, target: DatabaseTarget): string {
+  return '/-/database/' + encodeURIComponent(JSON.stringify([path, target.object?.type ?? null, target.object?.name ?? null, target.mode]));
+}
+export function addDatabaseTab(tabs: TabItem[], path: string, target: DatabaseTarget): TabItem[] {
+  const id = databaseTabId(path, target);
+  const existing = tabs.find((tab) => tab.id === id);
+  if (existing) return tabs.map((tab) => tab.id === id ? { ...tab, ...target } as DatabaseTab : tab);
+  return [...tabs, { kind: 'database', id, path, ...target }];
 }

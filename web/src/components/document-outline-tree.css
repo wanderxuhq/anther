@@ -1,0 +1,4 @@
+.document-outline-row { padding-right: 6px; }
+.document-outline-title { flex: 1; min-width: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; padding: 8px 0; }
+.document-outline-title:disabled { cursor: default; opacity: .65; }
+.document-outline-message { padding: 8px; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }

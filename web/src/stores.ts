@@ -9,6 +9,9 @@ import {
   addGitHistoryTab, addGitBranchTab, addGitCommitTab, gitCommitTabId,
   GIT_HISTORY_TAB_ID, GIT_BRANCH_TAB_ID,
 } from './tab-model.ts';
+import { databaseTabId, addDatabaseTab, type DatabaseTarget, type DatabaseTab } from './tab-model.ts';
+import { isDatabaseFile } from './database/source.ts';
+import { forgetDatabaseSnapshot } from './database/controller.ts';
 import { t, applyLanguage } from './i18n.ts';
 
 export const [tabs, setTabs] = createSignal<TabItem[]>([]);
@@ -78,6 +81,8 @@ export function pushState(mode: 'push' | 'replace' = 'push'): void {
     state.inside = archiveChain();
     const position = filePosition();
     state.line = position?.path === tab.path ? position.line : null;
+  } else if (tab?.kind === 'database') {
+    state.view = 'database'; state.path = tab.path; state.database = { object: tab.object, mode: tab.mode, sort: tab.sort };
   } else if (tab?.kind === 'terminal') state.term = tab.id;
   else if (tab?.kind === 'git') state.view = 'git';
   else if (tab?.kind === 'git-diff') { state.view = 'diff'; state.path = tab.path; }
@@ -85,6 +90,7 @@ export function pushState(mode: 'push' | 'replace' = 'push'): void {
   else if (tab?.kind === 'git-branch') state.view = 'branches';
   else if (tab?.kind === 'git-commit') { state.view = 'commit'; state.commit = tab.commit; }
   else if (!tab) state.term = pendingTerminal();
+  saveDatabaseTabs();
   const url = serializeUrl(state);
   if (window.location.pathname + window.location.search !== url) {
     if (mode === 'replace') window.history.replaceState(null, '', url);
@@ -151,6 +157,9 @@ export function restoreUrl(state: UrlState, syncServer = true): void {
     setPendingTerminal(!terminalsLoaded ? state.term : null);
     if (state.term) {
       setCurrentTabId(terminalExists(tabs(), state.term) ? state.term : null);
+    } else if (state.view === 'database' && state.path && state.database) {
+      setTabs((prev) => addDatabaseTab(prev, state.path!, { ...state.database!, sort: state.database!.sort }));
+      setCurrentTabId(databaseTabId(state.path, state.database));
     } else if (state.view === 'git') {
       setTabs(addGitTab); setCurrentTabId(GIT_TAB_ID);
     } else if (state.view === 'history') {
@@ -179,6 +188,7 @@ export async function startSync(): Promise<void> {
   if (started) return;
   started = true;
 
+  restoreDatabaseTabs();
   const s = parseUrl(window.location.href);
   restoreUrl(s, false);
 
@@ -250,6 +260,7 @@ export function applyTheme(t: 'auto' | 'light' | 'dark'): void {
 
 /** 打开/前台一个文件标签 */
 export async function openTab(path: string, line: LineRange | null = null, entry: string | null = null, chain: string[] = []): Promise<void> {
+  if (isDatabaseFile(path)) { openDatabaseTab(path); return; }
   batch(() => {
     if (currentFile() !== path || entry !== null || chain.length > 0) setFilePosition(null);
     setArchiveLocation(entry !== null || chain.length > 0 ? { path, entry, chain: [...chain] } : null);
@@ -381,4 +392,57 @@ export async function createBranch(name: string): Promise<void> {
   const { current } = await api.git.createBranch(name);
   setCurrentBranch(current);
   setGitRefreshTick((x) => x + 1);
+}
+
+
+const DATABASE_TABS_KEY = 'anther:databaseTabs';
+function saveDatabaseTabs() {
+  try { localStorage.setItem(DATABASE_TABS_KEY, JSON.stringify(tabs().filter((tab) => tab.kind === 'database'))); } catch { /* Private mode or storage full. */ }
+}
+function restoreDatabaseTabs() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(DATABASE_TABS_KEY) ?? '[]');
+    if (!Array.isArray(saved)) return;
+    for (const value of saved.slice(0, 100)) {
+      if (!value || typeof value.path !== 'string' || !value.path || !['data', 'structure'].includes(value.mode)) continue;
+      if (value.object !== null && (!value.object || typeof value.object.name !== 'string' || !['table', 'view'].includes(value.object.type))) continue;
+      const target: DatabaseTarget = { object: value.object, mode: value.mode };
+      if (value.sort && typeof value.sort.column === 'string' && ['asc', 'desc'].includes(value.sort.direction)) target.sort = value.sort;
+      setTabs((prev) => addDatabaseTab(prev, value.path, target));
+    }
+  } catch { /* Invalid or unavailable local snapshot. */ }
+}
+export function openDatabaseTab(path: string, target: DatabaseTarget = { object: null, mode: 'data' }) {
+  batch(() => { setTabs((prev) => addDatabaseTab(prev, path, target)); setCurrentTabId(databaseTabId(path, target)); });
+  pushState();
+}
+export function updateDatabaseSort(id: string, sort: DatabaseTab['sort']) {
+  setTabs((prev) => prev.map((tab) => tab.kind === 'database' && tab.id === id ? { ...tab, sort } : tab));
+  pushState('replace');
+}
+/** Content-specific disposal stays here; the tab list only knows an id. */
+export async function closeAnyTab(id: string): Promise<void> {
+  const tab = tabs().find((item) => item.id === id);
+  if (!tab) return;
+  if (tab.kind === 'file') { await closeTab(tab.path); return; }
+  if (tab.kind === 'terminal') { await closeTerminal(id); return; }
+  if (tab.kind === 'database') forgetDatabaseSnapshot(id);
+  closeGitTab(id);
+}
+
+/** File operations update every object tab backed by that file or directory. */
+export function relocateDatabaseTabs(from: string, to?: string) {
+  if (!tabs().some((tab) => tab.kind === 'database' && (tab.path === from || tab.path.startsWith(from + '/')))) return;
+  const active = currentTabId();
+  let nextActive = active;
+  setTabs((all) => all.flatMap((tab) => {
+    if (tab.kind !== 'database' || (tab.path !== from && !tab.path.startsWith(from + '/'))) return [tab];
+    forgetDatabaseSnapshot(tab.id);
+    if (!to) { if (tab.id === active) nextActive = null; return []; }
+    const path = to + tab.path.slice(from.length), id = databaseTabId(path, tab);
+    if (tab.id === active) nextActive = id;
+    return [{ ...tab, path, id }];
+  }));
+  setCurrentTabId(nextActive ?? tabs()[0]?.id ?? null);
+  pushState('replace');
 }

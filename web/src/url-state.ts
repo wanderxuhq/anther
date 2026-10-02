@@ -1,10 +1,12 @@
-export type MainView = 'file' | 'git' | 'diff' | 'history' | 'branches' | 'commit';
+import type { DatabaseTarget } from './tab-model.ts';
+export type MainView = 'file' | 'git' | 'diff' | 'history' | 'branches' | 'commit' | 'database';
 export type Panel = 'files' | 'tabs' | 'search';
 /** URL 使用从 1 开始的行号，end 包含在选区内。 */
 export type LineRange = { start: number; end: number };
 export const DEFAULT_EXCLUDE = '.git,node_modules,dist';
 
 export type UrlState = {
+  database: DatabaseTarget | null;
   path: string | null;
   term: string | null;
   ro: boolean;
@@ -24,7 +26,7 @@ export type UrlState = {
 };
 
 export const DEFAULT_STATE: UrlState = {
-  path: null, term: null, ro: true, theme: 'auto', fs: 100,
+  database: null, path: null, term: null, ro: true, theme: 'auto', fs: 100,
   view: 'file', line: null, entry: null, inside: [], branch: null, commit: null,
   panel: 'files', query: '', caseSensitive: false, exclude: DEFAULT_EXCLUDE, lang: null,
 };
@@ -71,6 +73,14 @@ export function parseUrl(href: string): UrlState {
   if (s.path?.startsWith(FILE_ROUTE)) {
     // 显式文件路由只解包一次，连名为 -/file/... 的文件也能无歧义表示。
     s.path = s.path.slice(FILE_ROUTE.length) || null;
+  } else if (s.path?.startsWith('-/database/')) {
+    s.path = s.path.slice('-/database/'.length) || null;
+    s.view = 'database';
+    const name = q.get('object');
+    const column = q.get('sort');
+    s.database = { object: name ? { name, type: q.get('type') === 'view' ? 'view' : 'table' } : null,
+      mode: name && q.get('mode') === 'structure' ? 'structure' : 'data',
+      ...(name && column ? { sort: { column, direction: q.get('order') === 'desc' ? 'desc' : 'asc' } } : {}) };
   } else if (s.path === GIT_ROUTE || s.path?.startsWith(`${GIT_ROUTE}/`)) {
     const route = s.path.slice(GIT_ROUTE.length + 1);
     s.path = null;
@@ -94,9 +104,10 @@ export function parseUrl(href: string): UrlState {
     s.view = 'file';
     s.path = null;
     s.commit = null;
-  } else if (s.view !== 'file' && s.view !== 'diff') {
+  } else if (s.view !== 'file' && s.view !== 'diff' && s.view !== 'database') {
     s.path = null;
   }
+  if (s.view !== 'database' || !s.path) { s.database = null; if (s.view === 'database') s.view = 'file'; }
   if (s.view === 'file' && s.path && ARCHIVE_EXT.test(s.path)) {
     const inside = q.getAll('inside');
     if (inside.length && inside.every((item) => ARCHIVE_EXT.test(item) && isValidArchiveEntry(item))) {
@@ -133,7 +144,7 @@ export function serializeUrl(state: UrlState): string {
   if (state.theme !== 'auto') params.set('theme', state.theme);
   if (state.fs !== 100) params.set('fs', String(state.fs));
   if (state.lang) params.set('lang', state.lang);
-  const path = !state.term && (view === 'file' || view === 'diff') ? state.path : null;
+  const path = !state.term && (view === 'file' || view === 'diff' || view === 'database') ? state.path : null;
   const validInside = view === 'file' && path && ARCHIVE_EXT.test(path)
     && state.inside.length > 0
     && state.inside.every((item) => ARCHIVE_EXT.test(item) && isValidArchiveEntry(item));
@@ -144,6 +155,15 @@ export function serializeUrl(state: UrlState): string {
   if (view === 'file' && path && !entry && !validInside && state.line) {
     const { start, end } = state.line;
     params.set('line', start === end ? String(start) : `${start}-${end}`);
+  }
+  if (view === 'database' && path && state.database?.object) {
+    params.set('object', state.database.object.name);
+    if (state.database.object.type === 'view') params.set('type', 'view');
+    if (state.database.mode === 'structure') params.set('mode', 'structure');
+    if (state.database.sort && state.database.mode === 'data') {
+      params.set('sort', state.database.sort.column);
+      if (state.database.sort.direction === 'desc') params.set('order', 'desc');
+    }
   }
   if (view === 'history' && state.branch) params.set('branch', state.branch);
   if (state.panel !== 'files') params.set('panel', state.panel);
@@ -156,6 +176,8 @@ export function serializeUrl(state: UrlState): string {
   if (view === 'file' && path) {
     // 普通文件保持原有路径；保留命名空间中的文件使用显式文件路由。
     pathname = `/${path.startsWith('-/') ? FILE_ROUTE : ''}${encodePath(path)}`;
+  } else if (view === 'database' && path) {
+    pathname = `/-/database/${encodePath(path)}`;
   } else if (view !== 'file') {
     pathname = `/${GIT_ROUTE}`;
     if (view === 'history' || view === 'branches') pathname += `/${view}`;

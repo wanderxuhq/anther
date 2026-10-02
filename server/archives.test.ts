@@ -240,3 +240,23 @@ test('清理已退出进程的归档缓存，保留无关目录，关闭时删�
   await f.manager.dispose();
   assert.deepEqual(await fs.readdir(f.cache), [path.basename(unrelated)]);
 });
+
+test('速度优先：所有文件仅打包不压缩，准备进度与最终 ZIP 一致', async (t) => {
+  const f = await setup(t);
+  const pdf = Buffer.concat([Buffer.from('%PDF-1.7\n'), randomBytes(256 * 1024)]);
+  await fs.writeFile(path.join(f.root, '目录', 'large.PDF'), pdf);
+  const status = await f.ready();
+  assert.equal(status.progress.readBytes, status.progress.totalBytes);
+  assert.equal(status.progress.writtenBytes, status.size);
+  assert.equal(status.progress.checkedEntries, status.progress.entries);
+  const reader = new ZipReader(new Uint8ArrayReader(new Uint8Array(await bytes(await fetch(f.base + status.url)))));
+  try {
+    const entries = await reader.getEntries();
+    assert.equal(status.progress.entries, entries.length);
+    const stored = entries.find((entry) => entry.filename.endsWith('large.PDF'))!;
+    assert.equal(stored.compressionMethod, 0);
+    assert.equal(entries.find((entry) => entry.filename.endsWith('.md'))!.compressionMethod, 0);
+    assert.equal(stored.directory, false);
+    if (!stored.directory) assert.deepEqual(Buffer.from(await stored.getData(new Uint8ArrayWriter())), pdf);
+  } finally { await reader.close(); }
+});

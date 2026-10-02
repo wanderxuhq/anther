@@ -1,3 +1,6 @@
+import { fileTargetKey } from './file-target.ts';
+import { documentPreviewUrl } from './readers/document-file.ts';
+import { cancelReaderNavigation, registerReaderNavigation } from './readers/navigation.ts';
 import { createSignal, createMemo, createEffect, For, Show, on, onCleanup } from 'solid-js';
 import { views } from './views/registry.tsx';
 import { TerminalView } from './views/terminal.tsx';
@@ -9,7 +12,7 @@ import { CommitView } from './views/commit.tsx';
 import { api } from './api.ts';
 import {
   activeTab, currentTabId, setCurrentTabId, openTerminal,
-  openGit,
+  openGit, openDatabaseTab, closeTab,
   archiveChain, archiveEntry, openArchiveEntry,
   currentFile, roMode, setRoMode, pushState, fontScale,
   pendingGoto, setPendingGoto, docLoadedPath, setDocLoadedPath,
@@ -20,7 +23,7 @@ import {
 import { createEditor, type EditorHandle } from './editor/index.ts';
 import { describeLanguage, loadLanguage } from './editor/language.ts';
 import { t } from './i18n.ts';
-import { isMarkdownFile } from './markdown.ts';
+import { isMarkdownFile, parseMarkdownDocument } from './markdown.ts';
 import { MarkdownPreview } from './components/markdown-preview.tsx';
 import { preparingDownload, startDownload, setBeforeDownload } from './download.ts';
 import { isImageFile, isBinaryImage } from './image.ts';
@@ -29,9 +32,12 @@ import { FilePreview, type PreviewFile } from './components/file-preview.tsx';
 import { TablePreview } from './components/table-preview.tsx';
 import { isArchiveFile } from './archive.ts';
 import { archiveSession, archiveBusy, cancelArchive, ensureArchive, downloadArchiveEntry } from './archive-sessions.ts';
-import { loadArchiveFile, releaseArchiveFile, type ArchiveDocument } from './archive-file.ts';
+import { loadArchiveFile, hasArchiveDocument, releaseArchiveFile, type ArchiveDocument } from './archive-file.ts';
 import { archiveLimits } from './archive-settings.ts';
 import { ArchiveFeedback } from './components/archive-feedback.tsx';
+import { DatabasePane } from './views/database.tsx';
+import { DatabaseIcon } from './components/database-icon.tsx';
+import type { DatabaseController } from './database/controller.ts';
 import { ArchiveOptions } from './components/archive-options.tsx';
 
 const NARROW_QUERY = '(max-width: 599px)';
@@ -56,10 +62,12 @@ export function App() {
   const [loadedDoc, setLoadedDoc] = createSignal<{ path: string; content: string } | null>(null);
   const [markdownSource, setMarkdownSource] = createSignal(false);
   const [imageFile, setImageFile] = createSignal<{ path: string; url: string } | null>(null);
+  createEffect(on([currentFile, archiveEntry, archiveChain], () => cancelReaderNavigation(), { defer: true }));
   const [filePreview, setFilePreview] = createSignal<PreviewFile | null>(null);
   const [archiveFile, setArchiveFile] = createSignal<ArchiveDocument | null>(null);
   const browsingArchive = () => !!currentFile() && isArchiveFile(currentFile()!);
   const documentPath = () => browsingArchive() ? archiveEntry() ?? archiveChain().at(-1) ?? currentFile() : currentFile();
+  const documentKey = () => currentFile() ? fileTargetKey({ path: currentFile()!, archive: browsingArchive() && archiveEntry() ? { entry: archiveEntry()!, chain: archiveChain() } : undefined }) : '';
   const documentReadOnly = () => roMode() || browsingArchive();
   const currentPreview = createMemo(() => filePreview()?.path === documentPath() ? filePreview() : null);
   const showImagePreview = createMemo(() => isImageFile(documentPath()) && (isBinaryImage(documentPath()) || documentReadOnly()));
@@ -72,8 +80,31 @@ export function App() {
   // 打开文件或重新进入只读时默认预览；手动切源码不改变只读状态。
   createEffect(on([currentFile, archiveEntry, archiveChain, roMode], () => setMarkdownSource(false)));
 
+  let navigateMarkdown: ((id: string) => void) | null = null;
+  createEffect(() => {
+    const document = loadedDoc();
+    if (!document || document.path !== currentFile() || !isMarkdownFile(documentPath())) return;
+    const key = documentKey();
+    const disconnect = registerReaderNavigation(key, { async goToOutline(id) {
+      if (documentReadOnly()) {
+        setMarkdownSource(false);
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        if (documentKey() !== key) return;
+        if (!navigateMarkdown) throw new Error('Markdown preview unavailable');
+        navigateMarkdown(id);
+      } else {
+        const line = parseMarkdownDocument(document.content).lines.get(id);
+        if (line === undefined) throw new Error('Heading unavailable');
+        editor?.gotoLine(line);
+      }
+    } });
+    onCleanup(disconnect);
+  });
+
   const activeTabIsTerminal = () => activeTab()?.kind === 'terminal';
   // 主区域二选一：文件编辑器 ↔ 终端 / git / git-diff 标签视图
+  const activeDatabase = createMemo(() => { const tab = activeTab(); return tab?.kind === 'database' ? tab : null; });
+  const [databaseController, setDatabaseController] = createSignal<DatabaseController | null>(null);
   const activeKind = () => activeTab()?.kind ?? null;
   // git-diff 前台时其 diff 文件路径（TS 收窄：单次读 activeTab() 再分支）
   const activeGitDiffPath = (): string | null => {
@@ -96,6 +127,7 @@ export function App() {
   const toolbarPathLabel = () => {
     const tab = activeTab();
     if (!tab) return <span class="toolbar-path-hint">{t('noFileOpen')}</span>;
+    if (tab.kind === 'database') return `${tab.path}${tab.object ? ` › ${tab.object.name} · ${t(`database.${tab.mode}`)}` : ''}`;
     if (tab.kind === 'terminal') return tab.name;
     if (tab.kind === 'git') return t('view.git');
     if (tab.kind === 'git-diff') return tab.path;
@@ -203,7 +235,7 @@ export function App() {
       throw new Error(t('download.saveFirst'));
     }
   });
-  const downloadPath = () => currentFile() ?? activeGitDiffPath();
+  const downloadPath = () => currentFile() ?? activeDatabase()?.path ?? activeGitDiffPath();
   async function handleDownload() {
     const path = downloadPath();
     if (!path || preparingDownload()) return;
@@ -329,7 +361,7 @@ export function App() {
       if (path !== currentFile() || seq !== loadSeq) return;
       if (virtual) {
         clearEditor();
-        if (archiveBusy(path)) cancelArchive(path);
+        if (archiveBusy(path) && (!name || !hasArchiveDocument(path, chain, name))) cancelArchive(path);
         if (!name) { await ensureArchive(path, password, !!archiveSession(path, chain)?.error, chain); return; }
         if (isArchiveFile(name)) { await openArchiveEntry(path, null, [...chain, name]); return; }
         const file = await loadArchiveFile(path, chain, name, password);
@@ -352,8 +384,9 @@ export function App() {
       if (path !== currentFile() || seq !== loadSeq) return;
       const openPreview = (kind: PreviewFile['kind']) => {
         clearEditor();
-        setFilePreview({ ...info, kind, path, url: `${api.previewUrl(path)}&v=${Date.now()}-${seq}` });
+        setFilePreview({ ...info, kind, path, url: kind === 'pdf' ? documentPreviewUrl(path, info) : `${api.previewUrl(path)}&v=${Date.now()}-${seq}` });
       };
+      if (info.kind === 'sqlite') { clearEditor(); openDatabaseTab(path); void closeTab(path).catch(() => {}); return; }
       if (info.kind !== 'text') { openPreview(info.kind); return; }
       const { content, utf8 } = await api.readFile(path);
       if (path !== currentFile() || seq !== loadSeq) return;
@@ -373,7 +406,7 @@ export function App() {
   let previousArchive: string | null = null;
   createEffect(on([currentFile, showImagePreview, archiveEntry, archiveChain, archiveLimits, editorEl], () => {
     const path = currentFile();
-    if (previousArchive) cancelArchive(previousArchive, previousArchive !== path);
+    if (previousArchive && !(previousArchive === path && archiveEntry() && hasArchiveDocument(path!, archiveChain(), archiveEntry()!))) cancelArchive(previousArchive, previousArchive !== path);
     previousArchive = path && isArchiveFile(path) ? path : null;
     if (!path) {
       loadSeq++;
@@ -415,6 +448,7 @@ export function App() {
   });
 
   onCleanup(() => {
+    cancelReaderNavigation();
     loadSeq++;
     if (previousArchive) cancelArchive(previousArchive, true);
     clearArchiveFile();
@@ -492,6 +526,16 @@ export function App() {
             </button>
           </Show>
           <Show when={browsingArchive()}><ArchiveOptions /></Show>
+          <Show when={activeDatabase()}>{(tab) => <>
+            <Show when={tab().object}>
+              <For each={['data', 'structure'] as const}>{(mode) => <button class={`icon-btn ${tab().mode === mode ? 'active' : ''}`}
+                aria-label={t(`database.${mode}`)} title={t(`database.${mode}`)} aria-pressed={tab().mode === mode}
+                onClick={() => openDatabaseTab(tab().path, { object: tab().object, mode })}>
+                <DatabaseIcon kind={mode === 'data' ? 'table' : 'structure'}/>
+              </button>}</For>
+            </Show>
+            <button class="icon-btn" onClick={() => databaseController()?.refresh()} aria-label={t('database.refresh')} title={t('database.refresh')}><DatabaseIcon kind="refresh"/></button>
+          </>}</Show>
           <button class="icon-btn file-download" onClick={() => void handleDownload()}
             disabled={!downloadPath() || preparingDownload() || (browsingArchive() ? !!(archiveEntry() || archiveChain().length) && archiveBusy(currentFile()!) : !!currentFile() && !showImagePreview() && !currentPreview() && docLoadedPath() !== currentFile())}
             title={t('download.file')} aria-label={t('download.file')} aria-busy={preparingDownload()}>
@@ -501,8 +545,8 @@ export function App() {
             </svg>
           </button>
           <button
-            class={`icon-btn ${!documentReadOnly() && !isBinaryImage(documentPath()) && !currentPreview() ? 'active' : ''}`}
-            disabled={browsingArchive() || isBinaryImage(documentPath()) || (!!currentFile() && docLoadedPath() !== currentFile() && !showImagePreview())}
+            class={`icon-btn ${!activeDatabase() && !documentReadOnly() && !isBinaryImage(documentPath()) && !currentPreview() ? 'active' : ''}`}
+            disabled={!!activeDatabase() || browsingArchive() || isBinaryImage(documentPath()) || (!!currentFile() && docLoadedPath() !== currentFile() && !showImagePreview())}
             onClick={() => {
               // 编辑→只读：先把防抖中的修改立即落盘（切换前保存，改动不丢）
               if (!roMode()) flushSave();
@@ -518,6 +562,7 @@ export function App() {
       </header>
 
       <main class="editor-area" classList={{ 'archive-view': browsingArchive() }}>
+        <Show when={activeDatabase()?.id} keyed>{(_id) => <DatabasePane tab={activeDatabase()!} onController={setDatabaseController}/>}</Show>
         <Show when={browsingArchive()}>
           <ArchiveFeedback path={currentFile()!} chain={archiveChain()} retry={(password) => void loadDoc(currentFile()!, false, password)} />
           <Show when={!archiveEntry()}><div class="binary-preview">{t('archive.choose')}</div></Show>
@@ -531,7 +576,7 @@ export function App() {
           class="editor-container"
           style={(activeKind() === 'file' || activeKind() === null) && !showRenderedDocument() && !showImagePreview() && !currentPreview() && (!currentFile() || docLoadedPath() === currentFile()) ? undefined : 'display:none'}
         />
-        <Show when={currentPreview()} keyed>{(file) => <FilePreview file={file} />}</Show>
+        <Show when={currentPreview()} keyed>{(file) => <FilePreview file={file} navigationKey={documentKey()} />}</Show>
         <Show when={currentFile() && !browsingArchive() && !showImagePreview() && !currentPreview() && !showRenderedDocument() && docLoadedPath() !== currentFile()}>
           <div class="view-placeholder" role="status">{t('loading')}</div>
         </Show>
@@ -545,7 +590,7 @@ export function App() {
         <Show when={showMarkdownPreview() && (!browsingArchive() || archiveFile())}>
           <Show when={loadedDoc()?.path === currentFile()} fallback={<div class="view-placeholder" role="status">{t('loading')}</div>}>
             <Show when={documentPath()} keyed>
-              {(path) => <MarkdownPreview content={loadedDoc()?.content ?? ''} path={path} allowRelativeLinks={!browsingArchive()} />}
+              {(path) => <MarkdownPreview content={loadedDoc()?.content ?? ''} path={path} allowRelativeLinks={!browsingArchive()} onNavigator={(navigate) => { navigateMarkdown = navigate; }} />}
             </Show>
           </Show>
         </Show>

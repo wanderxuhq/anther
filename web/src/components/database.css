@@ -1,0 +1,29 @@
+.database-icon { flex-shrink: 0; vertical-align: middle; }
+.database-group, .database-object { width: 100%; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.database-object { padding-left: 18px; }
+.database-view { position: relative; height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.database-structure, .database-object-list { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 12px; }
+.database-object-list .menu-item { display: block; width: 100%; text-align: left; }
+.database-filter, .database-pagination { display: flex; flex-shrink: 0; align-items: center; gap: 8px; padding: 6px 12px; }
+.database-filter { border-bottom: 1px solid var(--border); }
+.database-filter input, .database-filter select { min-width: 0; padding: 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: inherit; font: inherit; }
+.database-filter input { flex: 1; }
+.database-filter select { max-width: 35%; }
+.database-pagination { justify-content: center; border-top: 1px solid var(--border); }
+.database-structure h3 { margin: 16px 0 8px; font-size: 14px; }
+.database-structure h3:first-child { margin-top: 0; }
+.database-structure pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.database-notice { color: var(--muted); padding: 6px 12px; font-size: 12px; }
+.database-tree .tree-row { gap: 5px; }
+
+.database-structure .data-grid td, .database-structure .data-grid th { min-width: 90px; }
+
+.database-data { flex: 1; display: flex; min-width: 0; min-height: 0; overflow: hidden; }
+
+.database-loading-slot { display: inline-flex; flex: 0 0 28px; width: 28px; height: 28px; align-items: center; justify-content: center; }
+.database-loading { visibility: hidden; }
+.database-loading.active { visibility: visible; }
+.database-loading [role="status"] { display: block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: currentColor; border-radius: 50%; animation: database-spin .8s linear infinite; }
+.database-loading-corner { position: absolute; top: 6px; right: 12px; z-index: 2; }
+@keyframes database-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .database-loading [role="status"] { animation-duration: 2s; } }

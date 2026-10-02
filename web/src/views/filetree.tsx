@@ -12,12 +12,18 @@
 import { createEffect, createSignal, ErrorBoundary, For, lazy, Show, Suspense, onCleanup } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { api, ApiError, type DirEntry } from '../api.ts';
-import { archiveChain, archiveEntry, currentFile, openTab, closeTab, tabs } from '../stores.ts';
+import { archiveChain, archiveEntry, currentFile, activeTab, openDatabaseTab, relocateDatabaseTabs, openTab, closeTab, tabs } from '../stores.ts';
 import { parentOf } from '../paths.ts';
 import { NameDialog, type DialogState } from '../components/name-dialog.tsx';
 import { t } from '../i18n.ts';
-import { preparingDownload, startDownload } from '../download.ts';
+import { preparingDownload, downloadProgressText, startDownload } from '../download.ts';
 import { isArchiveFile } from '../archive.ts';
+import { hasDocumentOutline } from '../readers/document-file.ts';
+const DocumentTree = lazy(() => import('../components/document-tree.tsx'));
+
+import { isDatabaseFile } from '../database/source.ts';
+import { DatabaseIcon } from '../components/database-icon.tsx';
+const DatabaseTree = lazy(() => import('../components/database-tree.tsx'));
 
 const ArchiveTree = lazy(() => import('../components/archive-tree.tsx'));
 
@@ -146,6 +152,7 @@ async function doRename(target: MenuTarget, name: string) {
   if (to === target.path) return; // 同名重命名 = 取消，静默关闭
   try {
     await api.rename(target.path, to);
+    relocateDatabaseTabs(target.path, to);
     await refreshParent(parentOf(target.path));
     if (tabs().some((t) => t.kind === 'file' && t.path === target.path)) {
       // 级联走 stores 的 closeTab/openTab：封装了服务器调用 + 本地信号 + 快照 + pushState，
@@ -168,6 +175,7 @@ function onDeleteTap(target: MenuTarget) {
   void (async () => {
     try {
       await api.del(target.path);
+      relocateDatabaseTabs(target.path);
       await refreshParent(parentOf(target.path));
       if (tabs().some((t) => t.kind === 'file' && t.path === target.path)) await closeTab(target.path); // closeTab 含本地移除 + 快照 + pushState
       setError(null);
@@ -181,6 +189,11 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
   // props 对当前实例固定不变；所有可变状态都从 store 响应式读取
   const state = () => nodes[props.path];
   const isDir = props.entry.type === 'dir';
+  const database = () => !isDir && (isDatabaseFile(props.path) || tabs().some((tab) => tab.kind === 'database' && tab.path === props.path));
+  const [databaseExpanded, setDatabaseExpanded] = createSignal(false);
+  createEffect(() => { const tab = activeTab(); if (tab?.kind === 'database' && tab.path === props.path) setDatabaseExpanded(true); });
+  const document = !isDir && hasDocumentOutline(props.path);
+  const [documentExpanded, setDocumentExpanded] = createSignal(false);
   const archive = !isDir && isArchiveFile(props.path);
   const [archiveExpanded, setArchiveExpanded] = createSignal(false);
   createEffect(() => { if (archive && currentFile() === props.path) setArchiveExpanded(true); });
@@ -214,6 +227,7 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
     setMenu(null); // 点击行任意位置关闭操作菜单（点 ⋯ 按钮会 stopPropagation，不走到这里）
     if (isDir) void onToggle();
     // 文件与 link 条目同待遇：点击走 openTab（服务器对损坏链接会 400，MVP 可接受）
+    else if (database()) { setDatabaseExpanded(true); openDatabaseTab(props.path); }
     else void openTab(props.path).catch((e) => setError((e as Error).message));
   };
 
@@ -224,10 +238,11 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
         onClick={onRowClick}
         title={props.path}
       >
-        <span class="tree-arrow"><Show when={archive} fallback={isDir ? (expanded() ? '▾' : '▸') : ''}>
-          <button class="archive-toggle" title={t('archive.expand')} aria-label={t('archive.expand')} aria-expanded={archiveExpanded()} onClick={(e) => { e.stopPropagation(); setArchiveExpanded((value) => !value); }}>{archiveExpanded() ? '▾' : '▸'}</button>
+        <span class="tree-arrow"><Show when={archive || database() || document} fallback={isDir ? (expanded() ? '▾' : '▸') : ''}>
+          <button class="archive-toggle" title={t(database() ? 'database.expand' : document ? 'reader.expandOutline' : 'archive.expand')} aria-label={t(database() ? 'database.expand' : document ? 'reader.expandOutline' : 'archive.expand')} aria-expanded={database() ? databaseExpanded() : document ? documentExpanded() : archiveExpanded()} onClick={(e) => { e.stopPropagation(); if (database()) setDatabaseExpanded((value) => !value); else if (document) setDocumentExpanded((value) => !value); else setArchiveExpanded((value) => !value); }}>{(database() ? databaseExpanded() : document ? documentExpanded() : archiveExpanded()) ? '▾' : '▸'}</button>
         </Show></span>
         <Show when={archive}><svg class="archive-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h10l4 4v14H5zM11 3v3h2v3h-2v3h2v3h-2v3h2"/></svg></Show>
+        <Show when={database()}><DatabaseIcon/></Show>
         <span class="tree-name">{props.entry.name}</span>
         <div class="tree-row-actions">
           <button
@@ -264,6 +279,16 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
           </For>
         </div>
       </Show>
+      <Show when={document && documentExpanded()}>
+        <ErrorBoundary fallback={<div class="error-banner">{t('reader.outlineFailed')}</div>}>
+          <Suspense fallback={<div class="tree-children" role="status">{t('loading')}</div>}><DocumentTree path={props.path}/></Suspense>
+        </ErrorBoundary>
+      </Show>
+      <Show when={database() && databaseExpanded()}>
+        <ErrorBoundary fallback={<div class="error-banner">{t('database.failed')}</div>}>
+          <Suspense fallback={<div role="status">{t('loading')}</div>}><DatabaseTree path={props.path}/></Suspense>
+        </ErrorBoundary>
+      </Show>
       <Show when={archive && archiveExpanded()}>
         <ErrorBoundary fallback={<div class="error-banner">{t('archive.failed')}</div>}>
           <Suspense fallback={<div role="status">{t('archive.scanning')}</div>}><ArchiveTree path={props.path}/></Suspense>
@@ -285,7 +310,7 @@ export function FileTreeView() {
         <div role="status">{t('filetree.uploading')}</div>
       </Show>
       <Show when={preparingDownload()}>
-        <div role="status">{t('download.preparing')}</div>
+        <div role="status">{downloadProgressText()}</div>
       </Show>
       <div class="filetree-toolbar">
         <button class="icon-btn" onClick={() => showMenu({ path: '.', kind: 'root' })}>＋ {t('filetree.new')}</button>

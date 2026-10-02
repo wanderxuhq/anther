@@ -21,12 +21,14 @@ export type ArchiveOptions = {
 };
 export type ArchiveStatus = {
   kind: 'archive'; id: string; status: 'preparing' | 'ready' | 'failed';
-  phase: 'queued' | 'scanning' | 'packing'; filename: string; size?: number; error?: string; url?: string;
+  phase: 'queued' | 'scanning' | 'packing' | 'verifying'; filename: string; size?: number; error?: string; url?: string;
+  progress: { entries: number; totalBytes: number; readBytes: number; writtenBytes: number; checkedEntries: number };
 };
 type Entry = { rel: string; name: string; stat: BigIntStats; root?: boolean; link?: string };
 type Job = {
   id: string; rel: string; filename: string; state: 'preparing' | 'ready' | 'failed';
-  phase: 'queued' | 'scanning' | 'packing'; size?: number; error?: string;
+  phase: ArchiveStatus['phase']; size?: number; error?: string;
+  progress: ArchiveStatus['progress'];
   path?: string; controller: AbortController; task?: Promise<void>;
   active: number; touched: number; completeAt?: number; sent: ByteRange[];
   key: string; entries?: Entry[]; reused?: Job;
@@ -93,6 +95,7 @@ export class ArchiveManager {
       filename: `${path.basename(this.files.resolve(rel)) || 'workspace'}.zip`,
       state: 'preparing', phase: 'queued', controller: new AbortController(),
       active: 0, touched: Date.now(), sent: [],
+      progress: { entries: 0, totalBytes: 0, readBytes: 0, writtenBytes: 0, checkedEntries: 0 },
     };
     this.jobs.set(job.id, job);
     this.pending.set(key, job);
@@ -107,6 +110,7 @@ export class ArchiveManager {
     return {
       kind: 'archive' as const, id: job.id, status: job.state, phase: job.phase,
       filename: job.filename, size: job.size, error: job.error,
+      progress: { ...job.progress },
       url: job.state === 'ready' ? `/api/download/archive?id=${job.id}` : undefined,
     };
   }
@@ -169,6 +173,8 @@ export class ArchiveManager {
         if (owner?.app === 'anther-archives' && owner.pid === Number(cachedName[1])) return;
       }
       const st = await fs.lstat(abs, { bigint: true });
+      job.progress.entries++;
+      if (st.isFile()) job.progress.totalBytes += Number(st.size);
       if (root && !st.isDirectory()) throw new HttpError(409, 'directory changed during preparation; retry');
       if (name.includes('\\')) throw new HttpError(400, `unsupported archive filename: ${name}`);
       if (st.isSymbolicLink()) {
@@ -232,6 +238,7 @@ export class ArchiveManager {
     let checkedBytes = 0;
     const manager = this;
     const spaceGuard = new Transform({ transform(chunk: Buffer, _encoding, callback) {
+      job.progress.writtenBytes += chunk.length;
       checkedBytes += chunk.length;
       if (checkedBytes < 8 * 1024 * 1024) { callback(null, chunk); return; }
       checkedBytes = 0;
@@ -246,12 +253,16 @@ export class ArchiveManager {
         const options = { mtime: entry.stat.mtime, mode: Number(entry.stat.mode) };
         if (entry.stat.isDirectory()) zip.addEmptyDirectory(entry.name, options);
         else if (entry.link !== undefined) zip.addBuffer(Buffer.from(entry.link), entry.name, { ...options, compress: false });
-        else zip.addReadStreamLazy(entry.name, { ...options, size: Number(entry.stat.size), compressionLevel: 6 }, (callback) => {
+        // Download preparation prioritizes speed: ZIP STORE preserves bytes without deflate work.
+        else zip.addReadStreamLazy(entry.name, { ...options, size: Number(entry.stat.size), compress: false }, (callback) => {
           async function* source() {
             const opened = await manager.files.openDownload(entry.rel);
             try {
               if (version(await opened.file.stat({ bigint: true })) !== version(entry.stat)) throw new HttpError(409, `file changed during preparation: ${entry.rel}`);
-              if (opened.size) yield* opened.file.createReadStream({ end: opened.size - 1, autoClose: false });
+              if (opened.size) for await (const chunk of opened.file.createReadStream({ end: opened.size - 1, autoClose: false })) {
+                job.progress.readBytes += chunk.length;
+                yield chunk;
+              }
             } finally { await opened.file.close(); }
           }
           active = Readable.from(source());
@@ -262,11 +273,13 @@ export class ArchiveManager {
       zip.end({ forceZip64Format: this.options.forceZip64 ?? false, comment: '' });
       await writing;
       // 发布前重新校验，发生增删或修改则失败，不提供悄悄缺文件的归档。
+      job.phase = 'verifying';
       for (const entry of entries) {
         job.controller.signal.throwIfAborted();
         if (version(await fs.lstat(await this.entryPath(entry.rel, entry.root), { bigint: true })) !== version(entry.stat)) {
           throw new HttpError(409, `directory changed during preparation; retry: ${job.rel}`);
         }
+        job.progress.checkedEntries++;
       }
       await fs.rename(partial, job.path);
       job.size = (await fs.stat(job.path)).size;

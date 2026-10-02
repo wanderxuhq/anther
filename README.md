@@ -25,7 +25,7 @@ Open `http://localhost:3000` by default. The startup log also shows a LAN addres
 - Files open read-only. Click the pencil icon in the toolbar to edit.
 - Upload files from **New** or a file-list ⋯ menu. There are no added size or type restrictions, and existing files are not overwritten.
 - Use the Git toolbar to switch between pending changes, history, and branch management.
-- Files and terminals share a tab bar, with support for multiple terminals. Refreshing reconnects terminals; closing a terminal tab ends its process.
+- Files, database objects, and terminals share a tab bar, with independent tabs for each. Refreshing reconnects terminals; closing a terminal tab ends its process.
 - On desktop, the file list and editor scroll independently.
 
 ## File previews
@@ -33,20 +33,23 @@ Open `http://localhost:3000` by default. The startup log also shows a LAN addres
 | Type | Features |
 | --- | --- |
 | Text and code | Syntax highlighting, search, editing |
-| Markdown | Rendered by default in read-only mode; source toggle and relative image paths |
+| Markdown | Rendered by default in read-only mode; source toggle and relative image paths; heading outline in the file tree |
 | Images | Common browser image formats; zoom, pan, wheel and pinch gestures; SVG source editing |
-| PDF | Continuous scrolling, page jumps, zoom, pinch gestures, text selection; toolbar button for embedded outlines |
+| PDF | Continuous scrolling, page jumps, zoom, pinch gestures, text selection; embedded outlines in the file tree and reader toolbar |
 | Audio and video | Playback and seeking; format support depends on the browser |
 | CSV / TSV | Table preview, source toggle, editing; preview limited to 1,000 rows and 100 columns |
+| SQLite | Expand tables and views in the file tree; separate data and structure tabs; read-only pagination, sorting, and filtering |
 | ZIP / 7z / RAR / TAR / GZ / BZ2 / XZ | Expand in the file tree, preview or download entries, open nested archives |
 
 Binary files without a supported preview can be downloaded.
 
-Archives are processed in the browser, with files extracted when selected. The defaults are 3 levels of nesting including the outer archive and a 128 MiB budget for cached archives and extracted output, adjustable in archive settings. This budget is not a limit on total browser memory; large files may exceed available memory. Text previews inside archives read up to 1 MiB; downloads contain the full file.
+SQLite preview requires Node.js 24+ and supports workspace files. Encrypted databases and databases inside archives are not supported. Tables show up to 200 columns, with shortened previews for long text and BLOBs; slow queries can be cancelled or time out. Downloads return the original file, not a consistent snapshot of a live WAL database.
+
+Archives are processed in the browser, with files extracted when opened or their outlines expanded. PDF and Markdown entries also provide file-tree outlines and chapter navigation, including inside nested archives; PDF reader outlines remain available. The defaults are 3 levels of nesting including the outer archive and a 128 MiB budget for cached archives and extracted output, adjustable in archive settings. This budget is not a limit on total browser memory; large files may exceed available memory. Text previews inside archives read up to 1 MiB; downloads contain the full file.
 
 ## Downloads
 
-Click the download icon beside the pencil or choose **Download** from a file-list ⋯ menu. Files download directly; folders download as ZIPs.
+Click the download icon beside the pencil or choose **Download** from a file-list ⋯ menu. Files download directly; folders download as ZIPs using store-only mode for faster preparation. Preparation shows scanning, packing, and verification progress.
 
 - Workspace files and folder ZIPs support resuming and parallel range downloads. File URLs use `/api/download?path=<URL-encoded relative path>` and work with download managers supporting HTTP Range.
 - Folder ZIPs are stored temporarily on the server, support archives over 4 GiB, and require enough temporary disk space. An unchanged folder reuses its ZIP while the cache remains available.
@@ -66,6 +69,7 @@ Links preserve the current file, Git view, and display settings across refresh a
 | History / commit | `/-/git/history?branch=main`, `/-/git/commit/abc1234` |
 | Sidebar / search | `/?panel=tabs`, `/?panel=search&q=TODO&case=1&exclude=dist` |
 | Archive entry / nested archive | `/books.zip?entry=readme.md`, `/books.zip?inside=inner.zip&entry=readme.md` |
+| Database table / structure | `/-/database/app.db?object=users`, `/-/database/app.db?object=users&mode=structure` |
 | Terminal | `/?term=t_…` |
 | Language | `?lang=zh`, `?lang=en` |
 

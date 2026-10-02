@@ -5,9 +5,11 @@ import { HttpError } from '../http-error.ts';
 import { sendDownload } from '../download.ts';
 import { sendImage } from '../images.ts';
 import { inspectFile, sendPreview } from '../preview.ts';
+import { registerDatabaseRoutes } from './database.ts';
 import { ArchiveManager, type ArchiveOptions } from '../archives.ts';
 
 export function registerFsRoutes(http: HttpServer, files: FileStore, archiveOptions?: ArchiveOptions): ArchiveManager {
+  registerDatabaseRoutes(http, files);
   const archives = new ArchiveManager(files, archiveOptions);
   http.onClose(() => archives.dispose());
   // spec §5.1 API 表：服务器运行模式（只读/可写）等状态

@@ -1,17 +1,14 @@
-import { AnnotationMode, AnnotationEditorType, getDocument, GlobalWorkerOptions, PasswordResponses, version, type PDFDocumentProxy } from 'pdfjs-dist';
+import { AnnotationMode, AnnotationEditorType, type PDFDocumentProxy } from 'pdfjs-dist';
 import { EventBus, PDFViewer, PDFLinkService, LinkTarget } from 'pdfjs-dist/web/pdf_viewer.mjs';
-import type { ReaderFactory, ReaderOutlineItem } from './types.ts';
+import type { ReaderFactory } from './types.ts';
+import { acquirePdfSource, pdfAssets as assets } from './pdf-source.ts';
 import 'pdfjs-dist/web/pdf_viewer.css';
 import './pdf.css';
-
-const assets = `/pdfjs/${version}/`;
-GlobalWorkerOptions.workerSrc = `${assets}pdf.worker.mjs`;
 
 /** PDF.js owns continuous page layout, text/links, render scheduling and page eviction. */
 export const createPdfReader: ReaderFactory = ({ url, viewport, content, onState }) => {
   let disposed = false, pdf: PDFDocumentProxy | undefined;
-  let unlock: ((password: string) => void) | undefined;
-  const destinations = new Map<string, string | unknown[]>();
+  const source = acquirePdfSource(url);
   let navigation = 0, resolveReady!: () => void;
   const ready = new Promise<void>((resolve) => { resolveReady = resolve; });
   const lifetime = new AbortController(), events = new EventBus();
@@ -41,30 +38,11 @@ export const createPdfReader: ReaderFactory = ({ url, viewport, content, onState
   });
   observer.observe(viewport);
 
-  const loading = getDocument({
-    url, cMapUrl: `${assets}cmaps/`, standardFontDataUrl: `${assets}standard_fonts/`,
-    wasmUrl: `${assets}wasm/`, iccUrl: `${assets}iccs/`,
-    disableStream: true, disableAutoFetch: true,
-  });
-  loading.onPassword = (callback: (password: string) => void, reason: number) => {
-    unlock = callback;
-    update({ busy: false, password: reason === PasswordResponses.INCORRECT_PASSWORD ? 'incorrect' : 'required' });
-  };
-  void loading.promise.then((document) => {
+  const unsubscribe = source.subscribe((state) => update({ ...state, ...(state.password ? { busy: false } : {}) }));
+  void source.document.then((document) => {
     if (disposed) return;
     pdf = document; update({ total: document.numPages });
     links.setDocument(document); viewer.setDocument(document);
-    void document.getOutline().then((outline) => {
-      if (disposed) return;
-      const convert = (items: NonNullable<typeof outline>, prefix = ''): ReaderOutlineItem[] => items.map((item, index) => {
-        const id = `${prefix}${index}`;
-        const destination = item.dest;
-        const navigable = typeof destination === 'string' || Array.isArray(destination);
-        if (navigable) destinations.set(id, destination);
-        return { id, title: item.title, navigable, children: convert(item.items, `${id}.`) };
-      });
-      update({ outline: convert(outline ?? []), outlineStatus: 'ready' });
-    }).catch(() => update({ outlineStatus: 'error' }));
   }).catch(() => update({ error: 'loadFailed', busy: false, outlineStatus: 'error' }));
 
   return {
@@ -72,9 +50,11 @@ export const createPdfReader: ReaderFactory = ({ url, viewport, content, onState
       if (pdf && Number.isFinite(position)) viewer.currentPageNumber = Math.max(1, Math.min(pdf.numPages, Math.trunc(position)));
     },
     async goToOutline(id) {
-      if (disposed || !pdf) return;
-      const request = ++navigation, document = pdf;
-      const target = destinations.get(id);
+      const request = ++navigation;
+      const document = await source.document;
+      await source.outlineReady;
+      if (disposed || request !== navigation) return;
+      const target = source.destinations.get(id);
       const destination = typeof target === 'string' ? await document.getDestination(target) : target;
       if (disposed) return;
       if (!Array.isArray(destination)) throw new Error('Outline destination unavailable');
@@ -107,7 +87,7 @@ export const createPdfReader: ReaderFactory = ({ url, viewport, content, onState
       }
     },
     fitWidth() { if (pdf) viewer.currentScaleValue = 'page-width'; },
-    unlock(password) { update({ password: null, busy: true }); unlock?.(password); },
+    unlock(password) { update({ password: null, busy: true }); source.unlock(password); },
     destroy() {
       if (disposed) return;
       disposed = true; resolveReady(); lifetime.abort(); observer.disconnect(); cancelAnimationFrame(resizeFrame);
@@ -115,8 +95,7 @@ export const createPdfReader: ReaderFactory = ({ url, viewport, content, onState
       // @ts-expect-error Supported by PDFViewer.setDocument at runtime.
       viewer.setDocument(null);
       links.setDocument(null); content.classList.remove('pdfViewer');
-      destinations.clear();
-      void loading.destroy().catch(() => {});
+      unsubscribe(); source.release();
     },
   };
 };

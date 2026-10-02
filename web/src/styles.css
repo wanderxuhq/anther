@@ -451,3 +451,5 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 
 .archive-toggle { border: 0; background: transparent; color: inherit; font: inherit; padding: 0; cursor: pointer; width: 100%; }
 .archive-icon { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; margin-right: 4px; flex-shrink: 0; }
+
+.tab-select { border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; padding: 0; }

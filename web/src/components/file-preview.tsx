@@ -7,7 +7,7 @@ const PdfPreview = lazy(() => import('./pdf-preview.tsx'));
 
 export type PreviewFile = FileInfo & { path: string; url: string };
 
-export function FilePreview(props: { file: PreviewFile }) {
+export function FilePreview(props: { file: PreviewFile; navigationKey?: string }) {
   let media: HTMLMediaElement | undefined;
   const [error, setError] = createSignal('');
   const failed = () => setError(t('preview.mediaError'));
@@ -22,7 +22,7 @@ export function FilePreview(props: { file: PreviewFile }) {
         <Match when={props.file.kind === 'pdf'}>
           <ErrorBoundary fallback={<div class="error-banner" role="alert">{t('reader.loadFailed')}</div>}>
             <Suspense fallback={<div class="binary-preview" role="status">{t('loading')}</div>}>
-              <PdfPreview url={props.file.url} path={props.file.path} />
+              <PdfPreview url={props.file.url} path={props.file.path} navigationKey={props.navigationKey} />
             </Suspense>
           </ErrorBoundary>
         </Match>
@@ -35,9 +35,9 @@ export function FilePreview(props: { file: PreviewFile }) {
             </Show>
           </div>
         </Match>
-        <Match when={props.file.kind === 'binary'}>
+        <Match when={props.file.kind === 'binary' || props.file.kind === 'sqlite'}>
           <div class="binary-preview">
-            <p>{t('preview.unavailable')}</p>
+            <p>{t(props.file.kind === 'sqlite' ? 'database.archiveUnavailable' : 'preview.unavailable')}</p>
 
           </div>
         </Match>
