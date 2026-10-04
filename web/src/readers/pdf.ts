@@ -4,9 +4,10 @@ import type { ReaderFactory } from './types.ts';
 import { acquirePdfSource, pdfAssets as assets } from './pdf-source.ts';
 import 'pdfjs-dist/web/pdf_viewer.css';
 import './pdf.css';
+import type { ReadingLocation } from './location.ts';
 
 /** PDF.js owns continuous page layout, text/links, render scheduling and page eviction. */
-export const createPdfReader: ReaderFactory = ({ url, viewport, content, onState }) => {
+export const createPdfReader: ReaderFactory = ({ url, viewport, content, onState, initialLocation, onLocation }) => {
   let disposed = false, pdf: PDFDocumentProxy | undefined;
   const source = acquirePdfSource(url);
   let navigation = 0, resolveReady!: () => void;
@@ -23,6 +24,15 @@ export const createPdfReader: ReaderFactory = ({ url, viewport, content, onState
   links.setViewer(viewer);
   onState({ canZoom: true, canFitWidth: true, outlineStatus: 'loading' });
   const update: typeof onState = (state) => { if (!disposed) onState(state); };
+  let restoring = true, positionTimer: ReturnType<typeof setTimeout> | undefined;
+  events.on('updateviewarea', ({ location }: { location: { pageNumber: number; left: number; top: number } }) => {
+    clearTimeout(positionTimer);
+    if (restoring || disposed) return;
+    positionTimer = setTimeout(() => {
+      if (!disposed && !restoring) onLocation?.({ kind: 'pdf', page: location.pageNumber, x: Math.round(location.left * 100) / 100, y: Math.round(location.top * 100) / 100,
+        ...(viewer.currentScaleValue === 'page-width' ? {} : { zoom: viewer.currentScale }) });
+    }, 180);
+  });
   events.on('pagesinit', () => { viewer.currentScaleValue = 'page-width'; resolveReady(); });
   events.on('pagechanging', ({ pageNumber }: { pageNumber: number }) => update({ position: pageNumber }));
   events.on('scalechanging', ({ scale, presetValue }: { scale: number; presetValue?: string }) => update({ scale, fitWidth: presetValue === 'page-width' }));
@@ -45,26 +55,45 @@ export const createPdfReader: ReaderFactory = ({ url, viewport, content, onState
     links.setDocument(document); viewer.setDocument(document);
   }).catch(() => update({ error: 'loadFailed', busy: false, outlineStatus: 'error' }));
 
+  const restoreLocation = async (location: ReadingLocation | null) => {
+    const request = ++navigation;
+    restoring = true; clearTimeout(positionTimer);
+    await ready;
+    if (disposed || request !== navigation) return;
+    const target = location?.kind === 'pdf' ? location : null;
+    viewer.currentScaleValue = target?.zoom ? String(target.zoom) : 'page-width';
+    viewer.scrollPageIntoView({ pageNumber: Math.max(1, Math.min(pdf!.numPages, target?.page ?? 1)),
+      destArray: [null, { name: 'XYZ' }, target?.x ?? null, target?.y ?? null, null], allowNegativeOffset: true });
+    restoring = false; viewer.update();
+  };
+  void restoreLocation(initialLocation ?? null);
   return {
+    restoreLocation,
     goTo(position) {
-      if (pdf && Number.isFinite(position)) viewer.currentPageNumber = Math.max(1, Math.min(pdf.numPages, Math.trunc(position)));
+      if (pdf && Number.isFinite(position)) void restoreLocation({ kind: 'pdf', page: Math.trunc(position),
+        ...(viewer.currentScaleValue === 'page-width' ? {} : { zoom: viewer.currentScale }) });
     },
     async goToOutline(id) {
       const request = ++navigation;
-      const document = await source.document;
-      await source.outlineReady;
-      if (disposed || request !== navigation) return;
-      const target = source.destinations.get(id);
-      const destination = typeof target === 'string' ? await document.getDestination(target) : target;
-      if (disposed) return;
-      if (!Array.isArray(destination)) throw new Error('Outline destination unavailable');
-      const reference = destination[0];
-      const index = reference && typeof reference === 'object' ? await document.getPageIndex(reference) : reference;
-      if (!Number.isInteger(index) || index < 0 || index >= document.numPages) throw new Error('Outline page unavailable');
-      await ready;
-      if (disposed || request !== navigation) return;
-      // Resolve references before navigating so a slower earlier click cannot win.
-      await links.goToDestination([index, ...destination.slice(1)]);
+      restoring = true; clearTimeout(positionTimer);
+      try {
+        const document = await source.document;
+        await source.outlineReady;
+        if (disposed || request !== navigation) return;
+        const target = source.destinations.get(id);
+        const destination = typeof target === 'string' ? await document.getDestination(target) : target;
+        if (disposed || request !== navigation) return;
+        if (!Array.isArray(destination)) throw new Error('Outline destination unavailable');
+        const reference = destination[0];
+        const index = reference && typeof reference === 'object' ? await document.getPageIndex(reference) : reference;
+        if (!Number.isInteger(index) || index < 0 || index >= document.numPages) throw new Error('Outline page unavailable');
+        await ready;
+        if (disposed || request !== navigation) return;
+        // Resolve references before navigating so a slower earlier click cannot win.
+        await links.goToDestination([index, ...destination.slice(1)]);
+      } finally {
+        if (!disposed && request === navigation) { restoring = false; viewer.update(); }
+      }
     },
     zoomTo(scale, options) {
       if (!pdf || !Number.isFinite(scale)) return;
@@ -90,7 +119,7 @@ export const createPdfReader: ReaderFactory = ({ url, viewport, content, onState
     unlock(password) { update({ password: null, busy: true }); source.unlock(password); },
     destroy() {
       if (disposed) return;
-      disposed = true; resolveReady(); lifetime.abort(); observer.disconnect(); cancelAnimationFrame(resizeFrame);
+      disposed = true; clearTimeout(positionTimer); resolveReady(); lifetime.abort(); observer.disconnect(); cancelAnimationFrame(resizeFrame);
       // PDF.js accepts null to release pages/listeners; its declaration omits this cleanup case.
       // @ts-expect-error Supported by PDFViewer.setDocument at runtime.
       viewer.setDocument(null);

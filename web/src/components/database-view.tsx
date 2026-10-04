@@ -1,4 +1,5 @@
-import { createMemo, createSignal, For, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, Show } from 'solid-js';
+import type { TablePosition } from '../preview-state.ts';
 import type { DatabaseController, DatabaseState } from '../database/controller.ts';
 import type { DatabaseObject, DatabaseCell } from '../database/source.ts';
 import { DataTable } from './data-table.tsx';
@@ -17,11 +18,15 @@ export function DatabaseView(props: {
   state: DatabaseState;
   mode: 'data' | 'structure';
   object: DatabaseObject | null;
-  controller: Pick<DatabaseController, 'cancel' | 'sort' | 'filter' | 'previous' | 'next'>;
+  controller: Pick<DatabaseController, 'cancel' | 'sort' | 'filter' | 'previous' | 'next'> & { readonly hasPrevious?: boolean };
+  position?: TablePosition;
+  onPosition?(value: TablePosition): void;
   onOpen(object: DatabaseObject): void;
 }) {
   const [filterColumn, setFilterColumn] = createSignal(props.state.filter?.column ?? '');
   const [filterValue, setFilterValue] = createSignal(props.state.filter?.value ?? '');
+  createEffect(() => { setFilterColumn(props.state.filter?.column ?? ''); setFilterValue(props.state.filter?.value ?? ''); });
+  const hasPrevious = () => { props.state; return props.controller.hasPrevious ?? props.state.pages.length > 1; };
   const sourceRows = createMemo(() => props.state.rows?.rows);
   const rows = createMemo(() => sourceRows()?.map((row) => row.map(displayCell)) ?? []);
   const filterColumns = createMemo<{ key: string; label: string }[]>((previous) => props.state.rows?.columns ?? previous ?? [], [] as { key: string; label: string }[]);
@@ -51,19 +56,19 @@ export function DatabaseView(props: {
     </Show>
     <Show when={props.mode === 'data' && props.state.rows}>
       <div class="database-data" tabIndex={0}>
-        <DataTable columns={props.state.rows!.columns} rows={rows()} rowOffset={props.state.rows!.offset} sort={props.state.sort}
+        <DataTable columns={props.state.rows!.columns} rows={rows()} rowOffset={props.state.rows!.offset} sort={props.state.sort} position={props.position} onPosition={props.onPosition}
           cellDetail={(row, column) => {
             const cell = props.state.rows!.rows[row][column];
             return { value: cell.value, type: cell.type === 'blob' ? `BLOB · ${cell.bytes} B · HEX` : cell.type.toUpperCase(),
               truncated: (cell.type === 'text' || cell.type === 'blob') && cell.truncated };
           }}
-          pagination={{ busy: props.state.busy, hasPrevious: props.state.pages.length > 1,
+          pagination={{ busy: props.state.busy, hasPrevious: hasPrevious(),
             hasNext: !props.state.error && !!props.state.rows?.hasMore,
             previous: () => props.controller.previous(), next: () => props.controller.next() }}
           footer={<>
             <Show when={previewLimited()}><div class="database-notice">{t('database.previewLimit')}</div></Show>
             <footer class="database-pagination">
-              <button class="icon-btn" disabled={props.state.busy || props.state.pages.length < 2} onClick={() => props.controller.previous()} aria-label={t('database.previous')} title={t('database.previous')}>‹</button>
+              <button class="icon-btn" disabled={props.state.busy || !hasPrevious()} onClick={() => props.controller.previous()} aria-label={t('database.previous')} title={t('database.previous')}>‹</button>
               <span>{rows().length ? `${props.state.rows!.offset + 1}–${props.state.rows!.offset + rows().length}` : '0'}</span>
               <button class="icon-btn" disabled={props.state.busy || !!props.state.error || !props.state.rows?.hasMore} onClick={() => props.controller.next()} aria-label={t('database.next')} title={t('database.next')}>›</button>
             </footer>

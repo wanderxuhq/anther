@@ -1,10 +1,11 @@
 /** Shared format detection; no server or DOM dependencies. */
-export type MediaKind = 'audio' | 'video' | 'pdf';
+export type MediaKind = 'audio' | 'video' | 'pdf' | 'epub';
 export const PREVIEW_FORMATS: Partial<Record<string, { kind: MediaKind; mime: string }>> = {};
 for (const [kind, types] of Object.entries({
   audio: { mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg', flac: 'audio/flac', m4a: 'audio/mp4', aac: 'audio/aac', weba: 'audio/webm', aiff: 'audio/aiff' },
   video: { mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', ogv: 'video/ogg', mov: 'video/quicktime', mkv: 'video/x-matroska', avi: 'video/x-msvideo', mpeg: 'video/mpeg', mpg: 'video/mpeg', '3gp': 'video/3gpp' },
 })) for (const [extension, mime] of Object.entries(types)) PREVIEW_FORMATS[`.${extension}`] = { kind: kind as MediaKind, mime };
+PREVIEW_FORMATS['.epub'] = { kind: 'epub', mime: 'application/epub+zip' };
 PREVIEW_FORMATS['.pdf'] = { kind: 'pdf', mime: 'application/pdf' };
 
 export function looksLikeText(sample: Uint8Array, more: boolean): boolean {

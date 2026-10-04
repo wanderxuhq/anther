@@ -1,4 +1,5 @@
-import { batch, createEffect, createMemo, createSignal, onCleanup, onMount, Show } from 'solid-js';
+import { batch, createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from 'solid-js';
+import type { ImagePosition } from '../preview-state.ts';
 import { t } from '../i18n.ts';
 import './image-preview.css';
 
@@ -6,8 +7,9 @@ type Point = { x: number; y: number };
 const MAX_SCALE = 8;
 const STEP = 1.25;
 
-export function ImagePreview(props: { path: string; url: string }) {
+export function ImagePreview(props: { path: string; url: string; position?: ImagePosition | null; onPosition?(position: ImagePosition): void }) {
   let viewport!: HTMLDivElement;
+  let restoring = false, restoreFrame = 0, timer: ReturnType<typeof setTimeout> | undefined;
   const [status, setStatus] = createSignal<'loading' | 'loaded' | 'error'>('loading');
   const [natural, setNatural] = createSignal({ width: 0, height: 0 });
   const [size, setSize] = createSignal({ width: 0, height: 0 });
@@ -31,10 +33,34 @@ export function ImagePreview(props: { path: string; url: string }) {
     const rect = viewport.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   };
+  const publish = () => {
+    if (restoring || status() !== 'loaded') return;
+    if (fit()) { props.onPosition?.({ kind: 'image' }); return; }
+    const point = center(), image = natural(), value = scale();
+    const round = (value: number) => Math.round(Math.max(0, Math.min(1, value)) * 1e6) / 1e6;
+    props.onPosition?.({ kind: 'image', zoom: value,
+      x: round((viewport.scrollLeft + point.x - Math.max(0, (viewport.clientWidth - image.width * value) / 2)) / (image.width * value)),
+      y: round((viewport.scrollTop + point.y - Math.max(0, (viewport.clientHeight - image.height * value) / 2)) / (image.height * value)) });
+  };
+  const schedule = () => { clearTimeout(timer); if (!restoring) timer = setTimeout(publish, 180); };
+  const restore = (position: ImagePosition | null | undefined) => {
+    if (status() !== 'loaded') return;
+    restoring = true; clearTimeout(timer); cancelAnimationFrame(restoreFrame);
+    batch(() => { setFit(position?.zoom === undefined); setManualScale(Math.max(minScale(), Math.min(MAX_SCALE, position?.zoom ?? 1))); });
+    restoreFrame = requestAnimationFrame(() => {
+      const image = natural(), value = scale();
+      viewport.scrollLeft = (position?.x ?? .5) * image.width * value - viewport.clientWidth / 2;
+      viewport.scrollTop = (position?.y ?? .5) * image.height * value - viewport.clientHeight / 2;
+      restoring = false;
+    });
+  };
+  createEffect(on([() => props.position, status], () => restore(props.position)));
+  onCleanup(() => { clearTimeout(timer); cancelAnimationFrame(restoreFrame); });
 
   // 保持光标/双指中心指向同一图片像素；按钮缩放以可视区域中心为基准。
   function zoomTo(value: number, from = center(), to = from) {
     if (status() !== 'loaded') return;
+    cancelAnimationFrame(restoreFrame); restoring = false;
     const next = Math.max(minScale(), Math.min(MAX_SCALE, value));
     const old = scale(), image = natural();
     const width = viewport.clientWidth, height = viewport.clientHeight;
@@ -43,11 +69,14 @@ export function ImagePreview(props: { path: string; url: string }) {
     batch(() => { setManualScale(next); setFit(false); });
     viewport.scrollLeft = x * next + Math.max(0, (viewport.clientWidth - image.width * next) / 2) - to.x;
     viewport.scrollTop = y * next + Math.max(0, (viewport.clientHeight - image.height * next) / 2) - to.y;
+    schedule();
   }
 
   function fitWindow() {
+    cancelAnimationFrame(restoreFrame); restoring = false;
     setFit(true);
     viewport.scrollLeft = viewport.scrollTop = 0;
+    schedule();
   }
 
   const measure = () => setSize({ width: viewport.clientWidth, height: viewport.clientHeight });
@@ -126,6 +155,7 @@ export function ImagePreview(props: { path: string; url: string }) {
         </button>
       </div>
       <div class="image-preview-viewport" ref={viewport} tabIndex={0} aria-label={t('image.preview')}
+        onScroll={schedule}
         classList={{ 'image-preview-dragging': dragging(), 'image-preview-pannable': imageWidth() > size().width || imageHeight() > size().height }}
         onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerEnd} onPointerCancel={pointerEnd} onLostPointerCapture={pointerEnd}
         onKeyDown={(e) => {

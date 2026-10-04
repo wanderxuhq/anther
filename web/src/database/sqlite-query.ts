@@ -1,20 +1,21 @@
-import { DatabaseSync } from 'node:sqlite';
-import type { SQLInputValue } from 'node:sqlite';
-import type { DatabaseRequest, DatabaseDescription, DatabaseObject, DatabaseRows, DatabaseCell } from './database-types.ts';
+import type { Database as DB, BindableValue } from '@sqlite.org/sqlite-wasm';
+import { QueryDatabase } from './sqlite-adapter.ts';
+type SQLInputValue = BindableValue;
+import type { DatabaseRequest, DatabaseDescription, DatabaseObject, DatabaseRows, DatabaseCell } from './types.ts';
 
 const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const MAX_OFFSET = 100_000;
 const MAX_COLUMNS = 200;
 const MAX_BYTES = 1_048_576;
 
-function object(db: DatabaseSync, target: DatabaseObject) {
+function object(db: QueryDatabase, target: DatabaseObject) {
   if (!target || typeof target.name !== 'string' || !['table', 'view'].includes(target.type)) throw new Error('Invalid database object');
   const row = db.prepare("SELECT name,type,sql FROM sqlite_schema WHERE name=? AND type=? AND name NOT GLOB 'sqlite_*'").get(target.name, target.type);
   if (!row) throw new Error('Database object no longer exists');
   return row;
 }
 
-function describe(db: DatabaseSync, target: DatabaseObject): DatabaseDescription {
+function describe(db: QueryDatabase, target: DatabaseObject): DatabaseDescription {
   const row = object(db, target);
   const columns = db.prepare('SELECT * FROM pragma_table_xinfo(?)').all(target.name);
   const indexes = db.prepare('SELECT * FROM pragma_index_list(?)').all(target.name);
@@ -33,7 +34,7 @@ function describe(db: DatabaseSync, target: DatabaseObject): DatabaseDescription
   };
 }
 
-function readRows(db: DatabaseSync, input: Extract<DatabaseRequest, { action: 'rows' }>['request']): DatabaseRows {
+function readRows(db: QueryDatabase, input: Extract<DatabaseRequest, { action: 'rows' }>['request']): DatabaseRows {
   object(db, input.object);
   const schema = { columns: db.prepare('SELECT name,pk FROM pragma_table_xinfo(?)').all(input.object.name)
     .map((column) => ({ name: String(column.name), primaryKey: Number(column.pk) })) };
@@ -68,12 +69,10 @@ function readRows(db: DatabaseSync, input: Extract<DatabaseRequest, { action: 'r
   const order = input.sort ? `${quote(input.sort.column)} ${input.sort.direction}${rowid ? `, ${quote(rowid)}` : ''}`
     : seek ?? (schema.columns.filter((c) => c.primaryKey).sort((a, b) => a.primaryKey - b.primaryKey).map((c) => quote(c.name)).join(',') || columns.map((c) => quote(c.name)).join(','));
   const statement = db.prepare(`SELECT ${select.join(',')} FROM ${quote(input.object.name)}${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY ${order} LIMIT ? OFFSET ?`);
-  statement.setReadBigInts(true);
-  statement.setReturnArrays(true);
   args.push(limit + 1, input.cursor !== undefined ? 0 : offset);
   const rows: DatabaseCell[][] = [];
   let nextCursor: string | undefined, hasMore = false, bytes = 0;
-  for (const record of statement.iterate(...args)) {
+  for (const record of statement.arrays(...args)) {
     const values = record as unknown as (string | number | bigint | null)[];
     const cells: DatabaseCell[] = columns.map((_, i) => {
       const type = values[i * 3], value = values[i * 3 + 1], length = Number(values[i * 3 + 2]);
@@ -83,7 +82,7 @@ function readRows(db: DatabaseSync, input: Extract<DatabaseRequest, { action: 'r
       if (type === 'blob') return { type, value: String(value), bytes: length, truncated: length > 64 };
       return { type: 'text', value: String(value), truncated: length > 4096 };
     });
-    const size = Buffer.byteLength(JSON.stringify(cells));
+    const size = new TextEncoder().encode(JSON.stringify(cells)).byteLength;
     if (rows.length >= limit || (rows.length > 0 && bytes + size > MAX_BYTES)) { hasMore = true; break; }
     // A single wide row can exceed the response budget. Clip its previews further.
     if (size > MAX_BYTES) for (const cell of cells) if (cell.type === 'text' && cell.value.length > 256) { cell.value = cell.value.slice(0, 256); cell.truncated = true; }
@@ -94,14 +93,10 @@ function readRows(db: DatabaseSync, input: Extract<DatabaseRequest, { action: 'r
     ...(hasMore && nextCursor !== undefined ? { nextCursor } : {}), limited: schema.columns.length > MAX_COLUMNS };
 }
 
-export function queryDatabase(filename: string, request: DatabaseRequest): unknown {
-  const db = new DatabaseSync(filename, { readOnly: true, allowExtension: false, timeout: 1000 });
+export function queryDatabase(connection: DB, request: DatabaseRequest): unknown {
+  const db = new QueryDatabase(connection);
+  db.exec('BEGIN');
   try {
-    // Newer Node releases expose per-connection limits. Older 24.x releases still
-    // use bounded result previews and process cancellation; V8's cap is not a native heap cap.
-    const limits = (db as DatabaseSync & { limits?: { length: number } }).limits;
-    if (limits) limits.length = 64 * 1024 * 1024;
-    db.exec('PRAGMA cache_size=-8192; PRAGMA query_only=ON; PRAGMA trusted_schema=OFF; PRAGMA temp_store=MEMORY; BEGIN');
     if (request.action === 'objects') {
       const objects = db.prepare("SELECT name,type FROM sqlite_schema WHERE type IN ('table','view') AND name NOT GLOB 'sqlite_*' ORDER BY type,name LIMIT 5001").all();
       return { objects: objects.slice(0, 5000).map((row) => ({ name: row.name, type: row.type })), truncated: objects.length > 5000 };
@@ -109,5 +104,5 @@ export function queryDatabase(filename: string, request: DatabaseRequest): unkno
     if (request.action === 'describe') return describe(db, request.object);
     if (request.action === 'rows') return readRows(db, request.request);
     throw new Error('Invalid database operation');
-  } finally { db.close(); }
+  } finally { db.exec('ROLLBACK'); }
 }

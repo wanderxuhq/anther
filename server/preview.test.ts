@@ -28,6 +28,8 @@ test('文件信息区分原生预览、UTF-8 文本和二进制，保留准确�
     ['empty', '', 'text'], ['fake.txt', Buffer.from([0, 10, 50]), 'binary'],
     ['raw.bin', Buffer.from([255, 254]), 'binary'], ['archive.zip', Buffer.from('PK\x03\x04\x00\x00'), 'binary'],
     ['doc.docx', Buffer.from('PK\x03\x04\x00\x00'), 'binary'],
+    ['app.db', Buffer.from('SQLite format 3\0'), 'sqlite'],
+    ['book.EPUB', Buffer.from('PK\x03\x04\x00\x00'), 'epub'],
   ] as const) {
     await write(name, body);
     const res = await fetch(endpoint('file-info', name));
@@ -53,7 +55,7 @@ test('采样 UTF-8 字符被边界截断时仍识别为文本，不读取整个�
 
 test('音视频与 PDF 提供内联流及 HEAD / Range，可读取文件后段', async () => {
   const data = Buffer.from(Array.from({ length: 256 }, (_, i) => i));
-  for (const [name, mime] of [['a.mp3', 'audio/mpeg'], ['a.wav', 'audio/wav'], ['a.mp4', 'video/mp4'], ['a.webm', 'video/webm'], ['manual.PDF', 'application/pdf']] as const) {
+  for (const [name, mime] of [['a.mp3', 'audio/mpeg'], ['a.wav', 'audio/wav'], ['a.mp4', 'video/mp4'], ['a.webm', 'video/webm'], ['manual.PDF', 'application/pdf'], ['book.epub', 'application/epub+zip']] as const) {
     await write(name, data);
     const url = endpoint('preview', name);
     const head = await fetch(url, { method: 'HEAD' });

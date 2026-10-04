@@ -86,3 +86,12 @@ test('failed page navigation preserves the current page and can retry without sk
   assert.deepEqual(offsets, [0, 1, 0, 1]);
   controller.dispose();
 });
+
+test('same-named databases in different archive levels have independent tab identities', async () => {
+  const { databaseTabId } = await import('./tab-model.ts');
+  const target = { object: { name: 'users', type: 'table' as const }, mode: 'data' as const };
+  const ids = [databaseTabId('app.db', target), databaseTabId('bundle.zip', { ...target, archive: { entry: 'app.db', chain: [] } }),
+    databaseTabId('bundle.zip', { ...target, archive: { entry: 'app.db', chain: ['inner.zip'] } }),
+    databaseTabId('other.zip', { ...target, archive: { entry: 'app.db', chain: ['inner.zip'] } })];
+  assert.equal(new Set(ids).size, ids.length);
+});

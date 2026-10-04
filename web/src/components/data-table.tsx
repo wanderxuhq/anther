@@ -4,9 +4,12 @@ import { DataGrid, type DataGridColumn, type DataGridSort } from './data-grid.ts
 import { CopyCell, DetailIcon, DetailValue, RowDetail, type TableCellDetail } from './table-detail.tsx';
 import { t } from '../i18n.ts';
 import './data-table.css';
+import type { TablePosition } from '../preview-state.ts';
 
 /** Shared table interaction; data loading and format-specific cell metadata stay outside. */
 export function DataTable(props: {
+  position?: TablePosition | null;
+  onPosition?(value: TablePosition): void;
   columns: DataGridColumn[];
   rows: (string | number | null)[][];
   rowOffset?: number;
@@ -22,6 +25,9 @@ export function DataTable(props: {
 }) {
   let root!: HTMLDivElement, viewport!: HTMLDivElement, panel: HTMLElement | undefined, popup: HTMLDivElement | undefined;
   let rowAnchor: HTMLButtonElement | undefined, frame = 0;
+  let restoring = false, restoreFrame = 0, positionTimer: ReturnType<typeof setTimeout> | undefined;
+  const signature = (value: TablePosition) => JSON.stringify([value.at ?? 1, value.across ?? 1, value.row ?? null, value.column ?? null, !!value.expanded]);
+  let lastPublished = signature({});
   const [row, setRow] = createSignal<number | null>(null);
   const [expanded, setExpanded] = createSignal(false);
   const [navigating, setNavigating] = createSignal(false);
@@ -29,6 +35,19 @@ export function DataTable(props: {
   const [cell, setCell] = createSignal<{ row: number; column: number; anchor: HTMLButtonElement } | null>(null);
   const [position, setPosition] = createSignal<{ left: string; top: string; visibility: 'hidden' | 'visible' }>({ left: '12px', top: '12px', visibility: 'hidden' });
   const detail = (row: number, column: number) => props.cellDetail?.(row, column) ?? { value: props.rows[row]?.[column] };
+  const publish = () => {
+    if (restoring || !viewport || props.pagination?.busy) return;
+    const rect = viewport.getBoundingClientRect(), header = viewport.querySelector('thead')?.getBoundingClientRect().height ?? 0;
+    const trs = [...viewport.querySelectorAll('tbody tr')], ths = [...viewport.querySelectorAll('thead th')].slice(1);
+    const at = Math.max(0, trs.findIndex((el) => el.getBoundingClientRect().bottom > rect.top + header)) + (props.rowOffset ?? 0) + 1;
+    const across = Math.max(0, ths.findIndex((el) => el.getBoundingClientRect().right > rect.left + (viewport.querySelector('thead th')?.getBoundingClientRect().width ?? 0))) + 1;
+    const selected = row() ?? cell()?.row;
+    const value: TablePosition = { ...(at > 1 ? { at } : {}), ...(across > 1 ? { across } : {}),
+      ...(selected === undefined || selected === null ? {} : { row: selected + (props.rowOffset ?? 0) + 1,
+        ...(row() === null && cell() ? { column: cell()!.column + 1 } : expanded() ? { expanded: true } : {}) }) };
+    lastPublished = signature(value); props.onPosition?.(value);
+  };
+  const schedulePosition = () => { clearTimeout(positionTimer); if (!restoring) positionTimer = setTimeout(publish, 100); };
   const closeCell = (focus = true) => { const anchor = cell()?.anchor; setCell(null); if (focus && anchor?.isConnected) anchor.focus({ preventScroll: true }); };
   const closeRow = (focus = true) => { pendingRow = undefined; setRow(null); setExpanded(false); if (focus && rowAnchor?.isConnected) rowAnchor.focus({ preventScroll: true }); };
   const reset = () => { closeCell(false); closeRow(false); };
@@ -119,12 +138,48 @@ export function DataTable(props: {
     else if (row() !== null) { event.preventDefault(); closeRow(); }
   };
   const reposition = () => closeCell(false);
+  createEffect(on([row, expanded, cell], publish, { defer: true }));
+  createEffect(on(() => props.pagination?.busy, (busy) => { if (!busy) schedulePosition(); }, { defer: true }));
+  createEffect(on([() => props.position, tableRows, tableColumns, tableOffset], () => {
+    if (props.position === undefined && !props.onPosition) return;
+    const value = props.position ?? {};
+    if (!restoring && signature(value) === lastPublished) return;
+    restoring = true; clearTimeout(positionTimer); cancelAnimationFrame(restoreFrame);
+    reset();
+    restoreFrame = requestAnimationFrame(() => {
+      const index = Math.max(0, Math.min(props.rows.length - 1, (value.at ?? (props.rowOffset ?? 0) + 1) - (props.rowOffset ?? 0) - 1));
+      const tr = viewport.querySelectorAll<HTMLElement>('tbody tr')[index];
+      const th = viewport.querySelectorAll<HTMLElement>('thead th')[Math.min(props.columns.length, value.across ?? 1)];
+      viewport.scrollTop = 0; viewport.scrollLeft = 0;
+      if (tr) viewport.scrollTop = tr.offsetTop - (viewport.querySelector('thead')?.getBoundingClientRect().height ?? 0);
+      if (th && value.across) viewport.scrollLeft = th.offsetLeft - (viewport.querySelector('thead th')?.getBoundingClientRect().width ?? 0);
+      const selected = (value.row ?? 0) - (props.rowOffset ?? 0) - 1;
+      if (selected >= 0 && selected < props.rows.length) {
+        const buttons = viewport.querySelectorAll<HTMLButtonElement>('.data-grid-row-button');
+        if (value.column && value.column <= props.columns.length) {
+          const anchor = viewport.querySelectorAll('tbody tr')[selected]?.querySelectorAll<HTMLButtonElement>('.data-grid-cell')[value.column - 1];
+          if (anchor) {
+            const bounds = anchor.getBoundingClientRect(), area = viewport.getBoundingClientRect();
+            const header = viewport.querySelector('thead')?.getBoundingClientRect().height ?? 0;
+            const rowHeader = viewport.querySelector('thead th')?.getBoundingClientRect().width ?? 0;
+            if (bounds.top < area.top + header) viewport.scrollTop += bounds.top - area.top - header;
+            else if (bounds.bottom > area.bottom) viewport.scrollTop += bounds.bottom - area.bottom;
+            if (bounds.left < area.left + rowHeader) viewport.scrollLeft += bounds.left - area.left - rowHeader;
+            else if (bounds.right > area.right) viewport.scrollLeft += bounds.right - area.right;
+            openCell(selected, value.column - 1, anchor);
+          }
+        } else { selectRow(selected); setExpanded(!!value.expanded); rowAnchor = buttons[selected]; }
+      }
+      restoreFrame = requestAnimationFrame(() => { restoring = false; publish(); });
+    });
+  }));
   document.addEventListener('pointerdown', outside);
   document.addEventListener('keydown', escape);
   window.addEventListener('resize', reposition);
   window.visualViewport?.addEventListener('resize', reposition);
   onCleanup(() => {
     pendingRow = undefined;
+    clearTimeout(positionTimer); cancelAnimationFrame(restoreFrame);
     cancelAnimationFrame(frame);
     document.removeEventListener('pointerdown', outside);
     document.removeEventListener('keydown', escape);
@@ -132,7 +187,7 @@ export function DataTable(props: {
     window.visualViewport?.removeEventListener('resize', reposition);
   });
   return <div class="data-table" ref={root}>
-    <div class="data-table-scroll" ref={viewport} tabIndex={0} inert={expanded()} onScroll={() => closeCell(false)}>
+    <div class="data-table-scroll" ref={viewport} tabIndex={0} inert={expanded()} onScroll={() => { if (!restoring) { closeCell(false); schedulePosition(); } }}>
       <DataGrid columns={props.columns} rows={props.rows} rowOffset={props.rowOffset} ariaLabel={props.ariaLabel}
         compact sort={props.sort} onSort={props.onSort} onRow={openRow} onCell={openCell} selectedRow={row()}/>
       <Show when={!props.rows.length}><p class="view-placeholder">{t('preview.emptyTable')}</p></Show>

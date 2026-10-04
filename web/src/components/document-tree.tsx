@@ -1,7 +1,9 @@
-import { createEffect, createSignal, onCleanup } from 'solid-js';
+import { archiveLimits } from '../archive-settings.ts';
+import { archiveSession } from '../archive-sessions.ts';
+import { createEffect, createSignal, onCleanup, Show } from 'solid-js';
 import { api } from '../api.ts';
 import { currentFile, openTab, openArchiveEntry, archiveEntry, archiveChain } from '../stores.ts';
-import { documentPreviewUrl } from '../readers/document-file.ts';
+import { documentPreviewUrl, documentOutlineSource } from '../readers/document-file.ts';
 import { createMarkdownOutlineSource } from '../readers/markdown-source.ts';
 import { loadArchiveFile, releaseArchiveFile, type ArchiveDocument } from '../archive-file.ts';
 import { fileTargetKey, fileTargetName, type ArchiveLocation } from '../file-target.ts';
@@ -18,15 +20,17 @@ export default function DocumentTree(props: { path: string; archive?: ArchiveLoc
   const [state, setState] = createSignal<OutlineState>({ outline: [], outlineStatus: 'loading', password: null });
   const [revision, setRevision] = createSignal(0), [error, setError] = createSignal(false);
   const [selected, setSelected] = createSignal<string>();
+  const [archiveFailure, setArchiveFailure] = createSignal(false);
   let active = true, navigation = 0;
   onCleanup(() => { active = false; });
   createEffect(() => {
+    if (props.archive) archiveLimits();
     revision(); props.reload;
     const path = props.path, location = props.archive, customSource = props.source;
     let document: ArchiveDocument | undefined;
     let disposed = false, source: OutlineSource | undefined, unsubscribe: (() => void) | undefined;
     const release = () => { unsubscribe?.(); unsubscribe = undefined; source?.release(); source = undefined; if (document) releaseArchiveFile(document); document = undefined; };
-    setState({ outline: [], outlineStatus: 'loading', password: null }); setError(false); setSelected(undefined);
+    setState({ outline: [], outlineStatus: 'loading', password: null }); setArchiveFailure(false); setError(false); setSelected(undefined);
     void (async () => {
       if (location) {
         document = await loadArchiveFile(path, location.chain, location.entry);
@@ -35,24 +39,30 @@ export default function DocumentTree(props: { path: string; archive?: ArchiveLoc
           setState({ outline: parseMarkdownDocument(document.content ?? '').outline, outlineStatus: 'ready', password: null });
           release(); return;
         }
-        const acquire = customSource ?? (await import('../readers/pdf-source.ts')).acquirePdfSource;
+        const acquire = customSource ?? (await documentOutlineSource(fileTargetName(props)));
         if (disposed) { release(); return; }
         source = acquire(document.url);
       } else if (isMarkdownFile(path) && !customSource) {
         source = createMarkdownOutlineSource(path);
       } else {
         const info = await api.fileInfo(path);
-        const acquire = customSource ?? (await import('../readers/pdf-source.ts')).acquirePdfSource;
+        const acquire = customSource ?? (await documentOutlineSource(fileTargetName(props)));
         if (disposed) return;
         source = acquire(documentPreviewUrl(path, info));
       }
       unsubscribe = source.subscribe((state) => {
         if (disposed) return;
         setState(state);
-        // Keep only lightweight outline data after scanning; no idle PDF worker/pages.
+        // Keep only lightweight outline data after scanning; no idle document workers or rendered chapters.
         if (state.outlineStatus === 'ready' || state.outlineStatus === 'error') queueMicrotask(release);
       });
-    })().catch(() => { release(); if (!disposed) setState({ outline: [], outlineStatus: 'error', password: null }); });
+    })().catch((error) => {
+      release();
+      if (!disposed) {
+        setArchiveFailure(!!location && !!error?.message && archiveSession(path, location.chain)?.error === error.message);
+        setState({ outline: [], outlineStatus: 'error', password: null });
+      }
+    });
     onCleanup(() => { disposed = true; release(); });
   });
   const open = async (id?: string) => {
@@ -68,6 +78,6 @@ export default function DocumentTree(props: { path: string; archive?: ArchiveLoc
       }
     } catch { if (active) setError(true); }
   };
-  return <DocumentOutlineTree state={state()} selected={selectedFile() ? selected() : undefined}
-    navigate={(id) => void open(id)} open={() => void open()} retry={() => setRevision(revision() + 1)} error={error()}/>;
+  return <Show when={!archiveFailure()}><DocumentOutlineTree state={state()} selected={selectedFile() ? selected() : undefined}
+    navigate={(id) => void open(id)} open={() => void open()} retry={() => setRevision(revision() + 1)} error={error()}/></Show>;
 }

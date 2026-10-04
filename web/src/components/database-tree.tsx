@@ -1,27 +1,33 @@
-import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
-import { createSqliteSource } from '../database/sqlite-source.ts';
+import { archiveLimits } from '../archive-settings.ts';
+import { archiveSession } from '../archive-sessions.ts';
+import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from 'solid-js';
+import { createDatabaseSource } from '../database/file-source.ts';
+import { fileTargetKey, type FileTarget } from '../file-target.ts';
 import type { DatabaseObject } from '../database/source.ts';
 import { activeTab, openDatabaseTab } from '../stores.ts';
 import { DatabaseIcon } from './database-icon.tsx';
 import { t } from '../i18n.ts';
 import './database.css';
 
-export default function DatabaseTree(props: { path: string }) {
+export default function DatabaseTree(props: FileTarget & { reload?: number }) {
   const [objects, setObjects] = createSignal<DatabaseObject[]>([]);
   const [busy, setBusy] = createSignal(false), [error, setError] = createSignal(''), [truncated, setTruncated] = createSignal(false);
   const [tick, setTick] = createSignal(0);
   createEffect(() => {
-    tick();
-    const source = createSqliteSource(props.path);
+    if (props.archive) archiveLimits();
+    const refresh = tick(); props.reload;
+    const source = createDatabaseSource({ path: props.path, archive: props.archive });
+    if (refresh) source.refresh?.();
     let active = true;
     setBusy(true); setError('');
     source.listObjects().then((result) => { if (active) { setObjects(result.objects); setTruncated(result.truncated); } })
-      .catch((e) => { if (active) setError(e.message); }).finally(() => { if (active) setBusy(false); });
+      .catch((e) => { if (active) setError(e.message); }).finally(() => { source.dispose(); if (active) setBusy(false); });
     onCleanup(() => { active = false; source.dispose(); });
   });
+  const archiveFailure = createMemo(on(error, (message) => !!props.archive && !!message && archiveSession(props.path, props.archive.chain)?.error === message));
   return <div class="tree-children database-tree">
     <Show when={busy()}><div class="view-placeholder" role="status">{t('loading')}</div></Show>
-    <Show when={error()}><div class="error-banner" role="alert">{error()}</div></Show>
+    <Show when={error() && !archiveFailure()}><div class="error-banner" role="alert">{error()}</div></Show>
     <Show when={!busy()}>
       <For each={['table', 'view'] as const}>{(kind) => {
         const [expanded, setExpanded] = createSignal(true), [limit, setLimit] = createSignal(100);
@@ -31,9 +37,9 @@ export default function DatabaseTree(props: { path: string }) {
             <span class="tree-arrow">{expanded() ? '▾' : '▸'}</span><DatabaseIcon kind={kind}/><span>{t(`database.${kind}s`)}</span>
           </button>
           <Show when={expanded()}><div class="tree-children"><For each={group().slice(0, limit())}>{(object) => {
-            const selected = () => { const tab = activeTab(); return tab?.kind === 'database' && tab.path === props.path && tab.object?.name === object.name && tab.object.type === kind; };
+            const selected = () => { const tab = activeTab(); return tab?.kind === 'database' && fileTargetKey(tab) === fileTargetKey(props) && tab.object?.name === object.name && tab.object.type === kind; };
             return <button class={`tree-row database-object ${selected() ? 'active' : ''}`} title={object.name}
-              onClick={() => openDatabaseTab(props.path, { object, mode: 'data' })}>
+              onClick={() => openDatabaseTab(props.path, { object, mode: 'data', archive: props.archive })}>
               <DatabaseIcon kind={kind}/><span class="tree-name">{object.name}</span>
             </button>;
           }}</For>

@@ -36,6 +36,7 @@ anther /path/to/project
 | Markdown | 只读时默认渲染，可切换源码；支持相对路径图片；文件树标题大纲 |
 | 图片 | 常见浏览器图片格式；缩放、拖动、滚轮和双指缩放；SVG 可编辑源码 |
 | PDF | 连续滚动、页码跳转、缩放、双指缩放、文本选择；文件树和阅读器工具栏均可打开内置大纲 |
+| EPUB | 按章节连续滚动、章节跳转、缩放和双指缩放；文件树和阅读器工具栏均可打开目录 |
 | 音频和视频 | 播放、进度跳转，格式支持取决于浏览器 |
 | CSV / TSV | 表格预览，可切换源码和编辑；预览最多 1000 行、100 列 |
 | SQLite | 文件树中展开表和视图，数据与结构分别打开标签；只读分页、排序、筛选 |
@@ -43,9 +44,11 @@ anther /path/to/project
 
 不支持预览的二进制文件可直接下载。
 
-SQLite 预览需要 Node.js 24+，目前支持工作区文件，不支持加密数据库和压缩包内数据库。表格最多预览 200 列，长文本和 BLOB 显示摘要；慢查询可取消或自动超时。下载仍为原文件，不包含正在使用的 WAL 数据库的一致性快照。
+EPUB 2/3 流式排版书籍沿用现有 ZIP 库在浏览器中读取，也支持压缩包内的书籍。章节及本地图片、样式按需加载。暂不支持 DRM 和固定版式，混淆字体使用替代字体；不运行书内脚本，不加载远程资源。
 
-压缩包在浏览器中处理，打开文件或展开大纲时才解压。包内 PDF 和 Markdown 同样支持文件树大纲与章节跳转，适用于嵌套压缩包；PDF 阅读器内的目录也保留。默认最多展开 3 层（含最外层），缓存和解压输出预算为 128 MiB；可在压缩包设置中调整。该预算不代表浏览器总内存上限，大文件可能超出可用内存。包内文本预览最多读取 1 MiB，下载保留完整内容。
+SQLite 预览使用官方 SQLite WASM 在浏览器 Worker 中计算，服务端仅传输文件。打开时将数据库下载到浏览器内存，刷新时重新读取；大数据库受浏览器可用内存限制。工作区和压缩包内的数据库（包括嵌套压缩包）共用表和视图树、标签页及预览。暂不支持加密数据库和 WAL 模式文件；请导出 DELETE 日志模式的独立快照用于预览。表格最多预览 200 列，长文本和 BLOB 显示摘要；慢查询可取消或自动超时。下载仍为原文件，不包含正在使用的 WAL 数据库的一致性快照。
+
+压缩包在浏览器中处理，打开文件或展开大纲时才解压。包内 PDF、EPUB 和 Markdown 同样支持文件树大纲与章节跳转，适用于嵌套压缩包；阅读器内的目录也保留。默认最多展开 3 层（含最外层），缓存和解压输出预算为 128 MiB；可在压缩包设置中调整。该预算不代表浏览器总内存上限，大文件可能超出可用内存。包内文本预览最多读取 1 MiB，下载保留完整内容。
 
 ## 下载
 
@@ -60,22 +63,36 @@ SQLite 预览需要 Node.js 24+，目前支持工作区文件，不支持加密�
 
 链接可保存当前文件、Git 界面和显示设置，支持刷新恢复及浏览器前进/后退。
 
+所有文件的位置与预览状态统一使用 `#字段:值;字段:值`。字段顺序无关，重复字段取最后一个，未知或非法字段忽略；默认设置省略。值中的分隔符和特殊字符使用百分号编码。文件身份、数据库筛选和全局设置仍使用查询参数。
+
 | 状态 | 示例 |
 | --- | --- |
-| 文件、行号或选区 | `/src/main.ts?line=42`、`/src/main.ts?line=42-50` |
+| 文件、行号或选区 | `/src/main.ts#line:42`、`/src/main.ts#line:42-50` |
+| EPUB 阅读位置 / 缩放 | `/book.epub#lbp:2@1/3%2342;zoom:125` |
+| PDF 页码 / 页内坐标 | `/manual.pdf#page:7;x:0;y:600` |
+| Markdown 标题 | `/README.md#heading:3` |
+| 图片缩放 / 中心点 | `/image.png#zoom:200;x:0.7;y:0.3` |
+| 音视频时间 / 倍速 | `/movie.mp4#time:90.5;rate:1.5` |
+| CSV/TSV 位置 / 详情 | `/data.csv#at:30;across:4;row:35;expanded:1`、`/data.csv#row:20;column:3` |
 | 编辑模式、主题、字号 | `/src/main.ts?ro=0&theme=dark&fs=110` |
 | Git 改动 / 分支 | `/-/git`、`/-/git/branches` |
 | 文件 diff | `/-/git/diff/src/main.ts` |
 | 提交历史 / 某次提交 | `/-/git/history?branch=main`、`/-/git/commit/abc1234` |
 | 侧栏 / 搜索 | `/?panel=tabs`、`/?panel=search&q=TODO&case=1&exclude=dist` |
 | 压缩包内文件 / 嵌套压缩包 | `/books.zip?entry=readme.md`、`/books.zip?inside=inner.zip&entry=readme.md` |
+| 包内数据库 | `/-/database/data.zip?inside=inner.zip&entry=app.db&object=users` |
 | 数据库表 / 结构 | `/-/database/app.db?object=users`、`/-/database/app.db?object=users&mode=structure` |
+| 数据库筛选 / 排序 / 分页 | `/-/database/app.db?object=users&filter=name&value=Alice&sort=id&order=desc#offset:100` |
 | 终端 | `/?term=t_…` |
 | 界面语言 | `?lang=zh`、`?lang=en` |
 
 参数可组合。默认只读、跟随系统主题和浏览器语言、字号 100%。搜索默认忽略大小写，排除 `.git,node_modules,dist`。`panel` 保存侧栏选中项，刷新不会自动展开移动端侧栏。
 
+阅读位置随滚动更新当前地址，不为连续滚动新增历史记录；支持刷新、分享与前进/后退，也适用于压缩包内文档。EPUB 复用 [Leaf Reader](https://github.com/wanderxuhq/leaf-reader) 的 LBP 定位：`章节索引@正文元素路径#UTF-16 字符偏移`，索引从 0 开始；文件身份由 URL 路径和压缩包参数提供。位置不依赖屏幕像素，改变宽度后仍定位到对应文字；正文修改后可能回退到上级元素或章节开头。`zoom` 是阅读器缩放百分比，省略时 PDF 适应宽度、EPUB 为 100%。Markdown 保存当前标题，不保存源码/渲染切换状态。
+
 Git 使用 `/-/git` 路由；路径以 `-/` 开头的文件使用 `/-/file/` 前缀，例如 `/-/file/-/git/history`。
+
+图片的 `x/y` 为原图中心点比例（0–1），省略 `zoom` 时适应窗口。音视频的 `time` 以秒计，恢复位置后保持暂停。表格的 `at/across` 是可视区域起始行列，`row/column` 指定详情，均从 1 开始；`expanded:1` 展开整行详情。SQLite 也使用这些表格参数，`offset` 为查询结果偏移，顺序分页时可附带 `cursor`。这些状态及文本的 `line` 参数同样支持压缩包内文件。
 
 ## 平台说明
 

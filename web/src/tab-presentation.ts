@@ -1,3 +1,4 @@
+import { fileTargetName, fileTargetLabel } from './file-target.ts';
 import type { TabItem } from './tab-model.ts';
 import { t } from './i18n.ts';
 
@@ -13,7 +14,7 @@ export function tabIcon(tab: TabItem): string {
 }
 
 export function tabName(tab: TabItem): string {
-  if (tab.kind === 'database') return tab.object ? `${tab.object.name} · ${t(`database.${tab.mode}`)}` : tab.path.split('/').pop()!;
+  if (tab.kind === 'database') return tab.object ? `${tab.object.name} · ${t(`database.${tab.mode}`)}` : fileTargetName(tab).split('/').pop()!;
   if (tab.kind === 'file' || tab.kind === 'git-diff') return tab.path.split('/').pop() ?? tab.path;
   if (tab.kind === 'terminal') return tab.name;
   if (tab.kind === 'git-history') return t('git.history');
@@ -23,7 +24,7 @@ export function tabName(tab: TabItem): string {
 }
 
 export function tabTitle(tab: TabItem): string {
-  if (tab.kind === 'database') return `${tab.path}${tab.object ? ` › ${tabName(tab)}` : ''}`;
+  if (tab.kind === 'database') return `${fileTargetLabel(tab)}${tab.object ? ` › ${tabName(tab)}` : ''}`;
   if (tab.kind === 'file' || tab.kind === 'git-diff') return tab.path;
   if (tab.kind === 'git-history') return t('git.history');
   if (tab.kind === 'git-branch') return t('git.branch');

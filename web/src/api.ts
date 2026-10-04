@@ -69,7 +69,7 @@ export type GitBranch = { name: string; current: boolean; tip: string };
 export type GitBranches = { isRepo: boolean; current: string | null; branches: GitBranch[] };
 export type GitLog = { isRepo: boolean; commits: GitCommit[] };
 export type GitShow = { commit: GitCommit; diff: string };
-export type FileInfo = { kind: 'text' | 'binary' | 'audio' | 'video' | 'pdf' | 'sqlite'; size: number; modified: string; mime: string };
+export type FileInfo = { kind: 'text' | 'binary' | 'audio' | 'video' | 'pdf' | 'epub' | 'sqlite'; size: number; modified: string; mime: string };
 export type ArchiveDownload = {
   kind: 'archive'; id: string; status: 'preparing' | 'ready' | 'failed';
   phase: 'queued' | 'scanning' | 'packing' | 'verifying'; filename: string; size?: number; url?: string; error?: string;

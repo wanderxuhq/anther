@@ -1,4 +1,7 @@
+import { parseFragment, serializeFragment } from './url-fragment.ts';
 import type { DatabaseTarget } from './tab-model.ts';
+import { parseReadingLocation, writeReadingLocation, type ReadingLocation } from './readers/location.ts';
+import { parseTablePosition, writeTablePosition, finiteNumber } from './preview-state.ts';
 export type MainView = 'file' | 'git' | 'diff' | 'history' | 'branches' | 'commit' | 'database';
 export type Panel = 'files' | 'tabs' | 'search';
 /** URL 使用从 1 开始的行号，end 包含在选区内。 */
@@ -6,6 +9,7 @@ export type LineRange = { start: number; end: number };
 export const DEFAULT_EXCLUDE = '.git,node_modules,dist';
 
 export type UrlState = {
+  reader: ReadingLocation | null;
   database: DatabaseTarget | null;
   path: string | null;
   term: string | null;
@@ -26,6 +30,7 @@ export type UrlState = {
 };
 
 export const DEFAULT_STATE: UrlState = {
+  reader: null,
   database: null, path: null, term: null, ro: true, theme: 'auto', fs: 100,
   view: 'file', line: null, entry: null, inside: [], branch: null, commit: null,
   panel: 'files', query: '', caseSensitive: false, exclude: DEFAULT_EXCLUDE, lang: null,
@@ -63,6 +68,7 @@ function parseLine(value: string | null): LineRange | null {
 export function parseUrl(href: string): UrlState {
   const url = new URL(href);
   const q = url.searchParams;
+  const position = parseFragment(url.hash);
   const s = { ...DEFAULT_STATE };
   try {
     s.path = decodeURIComponent(url.pathname).slice(1) || null;
@@ -81,6 +87,13 @@ export function parseUrl(href: string): UrlState {
     s.database = { object: name ? { name, type: q.get('type') === 'view' ? 'view' : 'table' } : null,
       mode: name && q.get('mode') === 'structure' ? 'structure' : 'data',
       ...(name && column ? { sort: { column, direction: q.get('order') === 'desc' ? 'desc' : 'asc' } } : {}) };
+    if (name && s.database.mode === 'data') {
+      const filterColumn = q.get('filter'), value = q.get('value'), offset = finiteNumber(position.get('offset')), cursor = position.get('cursor');
+      if (filterColumn && value && value.length <= 1024) s.database.filter = { column: filterColumn, value };
+      if (offset !== undefined && Number.isSafeInteger(offset) && offset > 0) s.database.offset = offset;
+      if (s.database.offset && cursor && /^-?\d{1,19}$/.test(cursor) && BigInt(cursor) >= -(2n ** 63n) && BigInt(cursor) < 2n ** 63n) s.database.cursor = cursor;
+      const table = parseTablePosition(position); if (table) s.database.table = table;
+    }
   } else if (s.path === GIT_ROUTE || s.path?.startsWith(`${GIT_ROUTE}/`)) {
     const route = s.path.slice(GIT_ROUTE.length + 1);
     s.path = null;
@@ -108,7 +121,7 @@ export function parseUrl(href: string): UrlState {
     s.path = null;
   }
   if (s.view !== 'database' || !s.path) { s.database = null; if (s.view === 'database') s.view = 'file'; }
-  if (s.view === 'file' && s.path && ARCHIVE_EXT.test(s.path)) {
+  if ((s.view === 'file' || s.view === 'database') && s.path && ARCHIVE_EXT.test(s.path)) {
     const inside = q.getAll('inside');
     if (inside.length && inside.every((item) => ARCHIVE_EXT.test(item) && isValidArchiveEntry(item))) {
       s.inside = inside;
@@ -116,7 +129,9 @@ export function parseUrl(href: string): UrlState {
     const entry = q.get('entry');
     if (entry && isValidArchiveEntry(entry)) s.entry = entry;
   }
-  if (s.view === 'file' && s.path && !s.entry && s.inside.length === 0) s.line = parseLine(q.get('line'));
+  if (s.database && s.entry) s.database.archive = { entry: s.entry, chain: s.inside };
+  if (s.view === 'file' && s.path) s.reader = parseReadingLocation(s.entry ?? (s.inside.length ? '' : s.path), position);
+  if (s.view === 'file' && s.path && (s.entry || s.inside.length === 0)) s.line = parseLine(position.get('line'));
   if (s.view === 'history') s.branch = q.get('branch') || null;
 
   s.ro = q.get('ro') !== '0';
@@ -137,7 +152,7 @@ export function parseUrl(href: string): UrlState {
 }
 
 export function serializeUrl(state: UrlState): string {
-  const params = new URLSearchParams();
+  const params = new URLSearchParams(), position = new URLSearchParams();
   const view = state.term ? 'file' : state.view;
   if (state.term) params.set('term', state.term);
   if (!state.ro) params.set('ro', '0');
@@ -145,16 +160,19 @@ export function serializeUrl(state: UrlState): string {
   if (state.fs !== 100) params.set('fs', String(state.fs));
   if (state.lang) params.set('lang', state.lang);
   const path = !state.term && (view === 'file' || view === 'diff' || view === 'database') ? state.path : null;
-  const validInside = view === 'file' && path && ARCHIVE_EXT.test(path)
-    && state.inside.length > 0
-    && state.inside.every((item) => ARCHIVE_EXT.test(item) && isValidArchiveEntry(item));
-  if (validInside) for (const item of state.inside) params.append('inside', item);
-  const entry = view === 'file' && path && ARCHIVE_EXT.test(path) && state.entry && isValidArchiveEntry(state.entry)
-    ? state.entry : null;
+  const inside = view === 'database' ? state.database?.archive?.chain ?? [] : state.inside;
+  const archiveEntry = view === 'database' ? state.database?.archive?.entry : state.entry;
+  const validInside = (view === 'file' || view === 'database') && path && ARCHIVE_EXT.test(path)
+    && inside.length > 0
+    && inside.every((item) => ARCHIVE_EXT.test(item) && isValidArchiveEntry(item));
+  if (validInside) for (const item of inside) params.append('inside', item);
+  const entry = (view === 'file' || view === 'database') && path && ARCHIVE_EXT.test(path) && archiveEntry && isValidArchiveEntry(archiveEntry)
+    ? archiveEntry : null;
   if (entry) params.set('entry', entry);
-  if (view === 'file' && path && !entry && !validInside && state.line) {
+  if (view === 'file' && path) writeReadingLocation(position, entry ?? (validInside ? '' : path), state.reader);
+  if (view === 'file' && path && (entry || !validInside) && state.line) {
     const { start, end } = state.line;
-    params.set('line', start === end ? String(start) : `${start}-${end}`);
+    position.set('line', start === end ? String(start) : `${start}-${end}`);
   }
   if (view === 'database' && path && state.database?.object) {
     params.set('object', state.database.object.name);
@@ -163,6 +181,12 @@ export function serializeUrl(state: UrlState): string {
     if (state.database.sort && state.database.mode === 'data') {
       params.set('sort', state.database.sort.column);
       if (state.database.sort.direction === 'desc') params.set('order', 'desc');
+    }
+    if (state.database.mode === 'data') {
+      const { filter, offset, cursor, table } = state.database;
+      if (filter?.column && filter.value && filter.value.length <= 1024) { params.set('filter', filter.column); params.set('value', filter.value); }
+      if (offset && Number.isSafeInteger(offset) && offset > 0) { position.set('offset', String(offset)); if (cursor && /^-?\d{1,19}$/.test(cursor)) position.set('cursor', cursor); }
+      writeTablePosition(position, table);
     }
   }
   if (view === 'history' && state.branch) params.set('branch', state.branch);
@@ -185,5 +209,5 @@ export function serializeUrl(state: UrlState): string {
     else if (view === 'commit' && state.commit && COMMIT_RE.test(state.commit)) pathname += `/commit/${state.commit}`;
   }
   const qs = params.toString();
-  return `${pathname}${qs ? `?${qs}` : ''}`;
+  return `${pathname}${qs ? `?${qs}` : ''}${serializeFragment(position)}`;
 }

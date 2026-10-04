@@ -5,7 +5,7 @@ import { archiveKey, type ArchiveEntry } from './archive.ts';
 import { archiveLimits } from './archive-settings.ts';
 import { startDownload } from './download.ts';
 
-type Session = { entries?: ArchiveEntry[]; busy?: 'queued' | 'scanning' | 'extracting'; progress?: number; error?: string; passwordRequired?: boolean; passwordDepth?: number; limit?: 'depth' | 'budget' };
+type Session = { entry?: string; entries?: ArchiveEntry[]; busy?: 'queued' | 'scanning' | 'extracting'; progress?: number; error?: string; passwordRequired?: boolean; passwordDepth?: number; limit?: 'depth' | 'budget' };
 export const [archiveSessions, setArchiveSession] = createStore<Record<string, Session>>({});
 export const archiveSession = (root: string, chain: string[] = []) => archiveSessions[archiveKey(root, chain)];
 let client: ArchiveClient | undefined, clientRoot = '', loadedKey = '', activeKey = '';
@@ -39,14 +39,14 @@ function checkDepth(root: string, chain: string[]) {
   setArchiveSession(archiveKey(root, chain), { error: error.message, limit: error.limit, busy: undefined });
   throw error;
 }
-async function run<T>(root: string, chain: string[], stage: 'scanning' | 'extracting', action: (client: ArchiveClient) => Promise<T>, password?: string): Promise<T> {
+async function run<T>(root: string, chain: string[], stage: 'scanning' | 'extracting', action: (client: ArchiveClient) => Promise<T>, password?: string, entry?: string): Promise<T> {
   checkDepth(root, chain);
   const key = archiveKey(root, chain), generation = generations.get(key) ?? 0;
   if (password !== undefined) {
     const depth = archiveSessions[key]?.passwordDepth ?? chain.length;
     passwords.set(archiveKey(root, chain.slice(0, depth)), password);
   }
-  setArchiveSession(key, { busy: 'queued', error: undefined, passwordRequired: false, passwordDepth: undefined, limit: undefined, progress: undefined });
+  setArchiveSession(key, { entry, busy: 'queued', error: undefined, passwordRequired: false, passwordDepth: undefined, limit: undefined, progress: undefined });
   const result = queue.then(async () => {
     if ((generations.get(key) ?? 0) !== generation) throw new Error('Cancelled');
     checkDepth(root, chain);
@@ -56,7 +56,7 @@ async function run<T>(root: string, chain: string[], stage: 'scanning' | 'extrac
       client = new ArchiveClient((progress) => setArchiveSession(activeKey, { progress }));
     }
     activeKey = key;
-    setArchiveSession(key, { busy: loadedKey === key ? stage : 'scanning' });
+    setArchiveSession(key, { entry, busy: loadedKey === key ? stage : 'scanning' });
     if (loadedKey !== key) {
       const reply = await client.request({ action: 'open', url: new URL(api.downloadUrl(root), location.href).href, path: root, chain,
         passwords: Array.from({ length: chain.length + 1 }, (_, depth) => passwords.get(archiveKey(root, chain.slice(0, depth)))), limits: archiveLimits(), heldBytes });
@@ -92,13 +92,14 @@ export async function extractArchive(root: string, name: string, password?: stri
     if (!entry) throw new Error('File no longer exists in this archive');
     const reply = await client.request({ action: 'extract', entry: entry.id, password: passwords.get(archiveKey(root, chain)), limits: archiveLimits(), heldBytes });
     return retain(reply.blob!);
-  }, password);
+  }, password, name);
 }
 export async function downloadArchiveEntry(root: string, name: string, chain: string[] = []): Promise<void> {
-  const value = await extractArchive(root, name, undefined, chain);
+  const { loadArchiveFile } = await import('./archive-file.ts');
+  const value = await loadArchiveFile(root, chain, name);
   try {
-    const url = URL.createObjectURL(value.blob);
+    const url = value.url;
     await startDownload({ url, filename: name.split('/').pop()! });
-    setTimeout(() => { URL.revokeObjectURL(url); value.release(); }, 60_000);
+    setTimeout(() => value.release(), 60_000);
   } catch (error) { value.release(); throw error; }
 }

@@ -50,12 +50,12 @@ export function DocumentReader(props: { url: string; path: string; createReader:
           aria-haspopup="dialog" aria-expanded={outlineOpen()} aria-controls={outlineId} onClick={() => setOutlineOpen((value) => !value)}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M8 10h12M8 15h12M4 20h16M3 10h1M3 15h1"/></svg>
         </button>
-        <button class="icon-btn" title={t('reader.previous')} aria-label={t('reader.previous')} disabled={!state.total || state.position <= 1} onClick={() => reader?.goTo(state.position - 1)}>
+        <button class="icon-btn" title={t(state.unit === 'chapter' ? 'reader.previousChapter' : 'reader.previous')} aria-label={t(state.unit === 'chapter' ? 'reader.previousChapter' : 'reader.previous')} disabled={!state.total || state.position <= 1} onClick={() => reader?.goTo(state.position - 1)}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6" /></svg>
         </button>
-        <input class="reader-page-number" type="number" min="1" max={state.total ?? 1} value={state.position} aria-label={t('reader.page')} disabled={!state.total} onChange={(e) => { reader?.goTo(e.currentTarget.valueAsNumber); e.currentTarget.value = String(state.position); }} />
+        <input class="reader-page-number" type="number" min="1" max={state.total ?? 1} value={state.position} aria-label={t(state.unit === 'chapter' ? 'reader.chapter' : 'reader.page')} disabled={!state.total} onChange={(e) => { reader?.goTo(e.currentTarget.valueAsNumber); e.currentTarget.value = String(state.position); }} />
         <span class="reader-page-count">/ {state.total ?? '—'}</span>
-        <button class="icon-btn" title={t('reader.next')} aria-label={t('reader.next')} disabled={!state.total || state.position >= (state.total ?? 1)} onClick={() => reader?.goTo(state.position + 1)}>
+        <button class="icon-btn" title={t(state.unit === 'chapter' ? 'reader.nextChapter' : 'reader.next')} aria-label={t(state.unit === 'chapter' ? 'reader.nextChapter' : 'reader.next')} disabled={!state.total || state.position >= (state.total ?? 1)} onClick={() => reader?.goTo(state.position + 1)}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
         </button>
         <Show when={state.canZoom}>
@@ -81,7 +81,7 @@ export function DocumentReader(props: { url: string; path: string; createReader:
           <button type="submit">{t('reader.unlock')}</button>
         </form>
       </Show>
-      <Show when={state.error}><div class="error-banner" role="alert">{t('reader.loadFailed')}</div></Show>
+      <Show when={state.error}><div class="error-banner" role="alert">{t(state.error === 'unsupported' ? 'reader.unsupported' : 'reader.loadFailed')}</div></Show>
       <div class="reader-reading-area">
         <Show when={state.busy}><div class="reader-status" role="status">{t('loading')}</div></Show>
         <div class="reader-viewport" classList={{ 'pinch-enabled': state.canZoom && !!state.total }} ref={viewport} tabIndex={0} aria-label={props.path} aria-busy={state.busy}>

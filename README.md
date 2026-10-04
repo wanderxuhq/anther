@@ -36,6 +36,7 @@ Open `http://localhost:3000` by default. The startup log also shows a LAN addres
 | Markdown | Rendered by default in read-only mode; source toggle and relative image paths; heading outline in the file tree |
 | Images | Common browser image formats; zoom, pan, wheel and pinch gestures; SVG source editing |
 | PDF | Continuous scrolling, page jumps, zoom, pinch gestures, text selection; embedded outlines in the file tree and reader toolbar |
+| EPUB | Continuous chapter scrolling, chapter jumps, zoom and pinch gestures; contents in the file tree and reader toolbar |
 | Audio and video | Playback and seeking; format support depends on the browser |
 | CSV / TSV | Table preview, source toggle, editing; preview limited to 1,000 rows and 100 columns |
 | SQLite | Expand tables and views in the file tree; separate data and structure tabs; read-only pagination, sorting, and filtering |
@@ -43,9 +44,11 @@ Open `http://localhost:3000` by default. The startup log also shows a LAN addres
 
 Binary files without a supported preview can be downloaded.
 
-SQLite preview requires Node.js 24+ and supports workspace files. Encrypted databases and databases inside archives are not supported. Tables show up to 200 columns, with shortened previews for long text and BLOBs; slow queries can be cancelled or time out. Downloads return the original file, not a consistent snapshot of a live WAL database.
+EPUB 2/3 reflowable books are read in the browser using the existing ZIP library, including inside archives. Chapters and local images/styles are loaded on demand. DRM and fixed-layout books are not supported; obfuscated fonts use fallback fonts. Book scripts and remote resources are disabled.
 
-Archives are processed in the browser, with files extracted when opened or their outlines expanded. PDF and Markdown entries also provide file-tree outlines and chapter navigation, including inside nested archives; PDF reader outlines remain available. The defaults are 3 levels of nesting including the outer archive and a 128 MiB budget for cached archives and extracted output, adjustable in archive settings. This budget is not a limit on total browser memory; large files may exceed available memory. Text previews inside archives read up to 1 MiB; downloads contain the full file.
+SQLite preview runs locally in a browser Worker using official SQLite WASM; the server only transfers the file. Opening a database downloads it into browser memory, and refresh loads a new copy. Large databases are limited by available browser memory. Workspace and archive-entry databases, including nested archives, share the same table tree, tabs, and previews. Encrypted databases and WAL-mode files are not supported; export a standalone snapshot in DELETE journal mode for preview. Tables show up to 200 columns, with shortened previews for long text and BLOBs; slow queries can be cancelled or time out. Downloads return the original file, not a consistent snapshot of a live WAL database.
+
+Archives are processed in the browser, with files extracted when opened or their outlines expanded. PDF, EPUB and Markdown entries also provide file-tree outlines and chapter navigation, including inside nested archives; Reader outlines remain available. The defaults are 3 levels of nesting including the outer archive and a 128 MiB budget for cached archives and extracted output, adjustable in archive settings. This budget is not a limit on total browser memory; large files may exceed available memory. Text previews inside archives read up to 1 MiB; downloads contain the full file.
 
 ## Downloads
 
@@ -60,22 +63,36 @@ Click the download icon beside the pencil or choose **Download** from a file-lis
 
 Links preserve the current file, Git view, and display settings across refresh and browser Back/Forward navigation.
 
+All file positions and preview states use `#field:value;field:value`. Field order does not matter, the last duplicate wins, unknown or invalid fields are ignored, and default settings are omitted. Delimiters and special characters inside values are percent-encoded. Resource identity, database filters and global settings remain query parameters.
+
 | State | Example |
 | --- | --- |
-| File, line, or selection | `/src/main.ts?line=42`, `/src/main.ts?line=42-50` |
+| File, line, or selection | `/src/main.ts#line:42`, `/src/main.ts#line:42-50` |
+| EPUB position / zoom | `/book.epub#lbp:2@1/3%2342;zoom:125` |
+| PDF page / page coordinates | `/manual.pdf#page:7;x:0;y:600` |
+| Markdown heading | `/README.md#heading:3` |
+| Image zoom / center | `/image.png#zoom:200;x:0.7;y:0.3` |
+| Media time / speed | `/movie.mp4#time:90.5;rate:1.5` |
+| CSV/TSV position / details | `/data.csv#at:30;across:4;row:35;expanded:1`, `/data.csv#row:20;column:3` |
 | Edit mode, theme, font size | `/src/main.ts?ro=0&theme=dark&fs=110` |
 | Git changes / branches | `/-/git`, `/-/git/branches` |
 | File diff | `/-/git/diff/src/main.ts` |
 | History / commit | `/-/git/history?branch=main`, `/-/git/commit/abc1234` |
 | Sidebar / search | `/?panel=tabs`, `/?panel=search&q=TODO&case=1&exclude=dist` |
 | Archive entry / nested archive | `/books.zip?entry=readme.md`, `/books.zip?inside=inner.zip&entry=readme.md` |
+| Archive database | `/-/database/data.zip?inside=inner.zip&entry=app.db&object=users` |
 | Database table / structure | `/-/database/app.db?object=users`, `/-/database/app.db?object=users&mode=structure` |
+| Database filter / sort / page | `/-/database/app.db?object=users&filter=name&value=Alice&sort=id&order=desc#offset:100` |
 | Terminal | `/?term=t_…` |
 | Language | `?lang=zh`, `?lang=en` |
 
 Parameters can be combined. Defaults are read-only mode, system theme, browser language, and 100% font size. Search is case-insensitive and excludes `.git,node_modules,dist`. The `panel` parameter saves the selected sidebar tab; refreshing does not open the mobile drawer.
 
+Reading updates replace the current URL without adding history entries for continuous scrolling. Positions survive refresh, sharing and Back/Forward, including documents inside archives. EPUB reuses [Leaf Reader](https://github.com/wanderxuhq/leaf-reader)'s LBP coordinates: `spineIndex@elementPath#UTF-16Offset`, with zero-based indices; the URL path and archive parameters identify the book. Text coordinates survive changes in viewport width; edited content may fall back to an ancestor element or chapter start. `zoom` is a reader percentage; omitting it fits PDF to width and uses 100% for EPUB. Markdown records the current heading, without persisting the source/rendered toggle.
+
 Git uses the `/-/git` route. File paths starting with `-/` use the `/-/file/` prefix, for example `/-/file/-/git/history`.
+
+Image `x/y` specify the center as fractions of the original dimensions (0–1); omitting `zoom` fits the window. Media `time` is in seconds; restoration leaves playback paused. Table `at/across` identify the first visible row/column, and `row/column` identify inspected data, all one-based; `expanded:1` expands row details. SQLite uses the same table parameters, plus a result `offset` and an optional `cursor` for sequential paging. These states and text `line` selections also work inside archives.
 
 ## Platform notes
 

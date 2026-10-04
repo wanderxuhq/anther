@@ -1,5 +1,8 @@
-import type { DatabaseObject, DatabaseSort } from '../../server/database-types.ts';
-export type DatabaseTarget = { object: DatabaseObject | null; mode: 'data' | 'structure'; sort?: DatabaseSort };
+import { fileTargetKey, type ArchiveLocation } from './file-target.ts';
+import type { DatabaseObject, DatabaseSort, DatabaseRowsRequest } from './database/types.ts';
+import type { TablePosition } from './preview-state.ts';
+export type DatabaseTarget = { archive?: ArchiveLocation; object: DatabaseObject | null; mode: 'data' | 'structure'; sort?: DatabaseSort;
+  filter?: DatabaseRowsRequest['filter']; offset?: number; cursor?: string; table?: TablePosition };
 export type DatabaseTab = DatabaseTarget & { kind: 'database'; id: string; path: string };
 
 // web/src/tab-model.ts
@@ -87,7 +90,7 @@ export function addGitCommitTab(tabs: TabItem[], hash: string): TabItem[] {
 
 /** Content identity is independent of a backing file. Sort/page are view state, not identity. */
 export function databaseTabId(path: string, target: DatabaseTarget): string {
-  return '/-/database/' + encodeURIComponent(JSON.stringify([path, target.object?.type ?? null, target.object?.name ?? null, target.mode]));
+  return '/-/database/' + encodeURIComponent(JSON.stringify([fileTargetKey({ path, archive: target.archive }), target.object?.type ?? null, target.object?.name ?? null, target.mode]));
 }
 export function addDatabaseTab(tabs: TabItem[], path: string, target: DatabaseTarget): TabItem[] {
   const id = databaseTabId(path, target);

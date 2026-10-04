@@ -1,12 +1,14 @@
 /** Format-neutral contract; no PDF.js or view framework types cross this boundary. */
+import type { ReadingLocation } from './location.ts';
 export type ReaderOutlineItem = { id: string; title: string; navigable: boolean; children: ReaderOutlineItem[] };
 export type ReaderState = {
+  unit?: 'page' | 'chapter';
   position: number;
   total: number | null;
   scale: number;
   fitWidth: boolean;
   busy: boolean;
-  error: 'loadFailed' | null;
+  error: 'loadFailed' | 'unsupported' | null;
   password: 'required' | 'incorrect' | null;
   canZoom: boolean;
   canFitWidth: boolean;
@@ -14,7 +16,7 @@ export type ReaderState = {
   outlineStatus: 'unavailable' | 'loading' | 'ready' | 'error';
 };
 export const initialReaderState = (): ReaderState => ({
-  position: 1, total: null, scale: 1, fitWidth: true, busy: true,
+  unit: 'page', position: 1, total: null, scale: 1, fitWidth: true, busy: true,
   error: null, password: null, canZoom: false, canFitWidth: false, outline: [], outlineStatus: 'unavailable',
 });
 export type ReaderZoomOptions = {
@@ -23,6 +25,7 @@ export type ReaderZoomOptions = {
   pan?: { x: number; y: number };
 };
 export type ReaderController = {
+  restoreLocation?(location: ReadingLocation | null): void | Promise<void>;
   goTo(position: number): void;
   goToOutline?(id: string): void | Promise<void>;
   zoomTo(scale: number, options?: ReaderZoomOptions): void;
@@ -31,6 +34,8 @@ export type ReaderController = {
   destroy(): void;
 };
 export type ReaderHost = {
+  initialLocation?: ReadingLocation | null;
+  onLocation?(location: ReadingLocation): void;
   url: string;
   path: string;
   viewport: HTMLDivElement;

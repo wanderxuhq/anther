@@ -1,3 +1,4 @@
+import { parseFragment } from './url-fragment.ts';
 // 用浏览器版 Solid 和实际 App/CodeMirror 验证 URL ↔ UI；网络在内存中模拟。
 import { before, test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,6 +16,20 @@ before(async () => {
     // PDF rendering and workers require a real browser; this suite checks App routing only.
     plugins: [{ name: 'pdf-test-stub', enforce: 'pre',
       load: (id) => {
+        if (id.endsWith('/database/file-source.ts')) return `export function createDatabaseSource(target) {
+          const pending = new Set();
+          async function request(body, signal) {
+            const controller = new AbortController(); pending.add(controller);
+            const cancel = () => controller.abort();
+            signal?.addEventListener('abort', cancel, { once: true });
+            try { return await window.queryTestDatabase(target, body, controller.signal); }
+            finally { pending.delete(controller); signal?.removeEventListener('abort', cancel); }
+          }
+          return { listObjects: (signal) => request({action:'objects'}, signal),
+            describe: (object, signal) => request({action:'describe',object}, signal),
+            readRows: (input, signal) => request({action:'rows',request:input}, signal),
+            dispose() { for (const c of pending) c.abort(); } };
+        }`;
         if (id.endsWith('/readers/pdf-source.ts')) return `export function acquirePdfSource(url) {
           window.outlineLoads = (window.outlineLoads || 0) + 1;
           let active = true;
@@ -46,12 +61,26 @@ before(async () => {
         import { App } from '${path.join(import.meta.dirname, 'App.tsx')}';
         import * as stores from '${path.join(import.meta.dirname, 'stores.ts')}';
         import { EditorView } from '@codemirror/view';
-        import { createSignal } from 'solid-js';
+        import { createSignal, Show } from 'solid-js';
         import { fileTargetKey } from '${path.join(import.meta.dirname, 'file-target.ts')}';
         import * as downloads from '${path.join(import.meta.dirname, 'download.ts')}';
         import { registerReaderNavigation, cancelReaderNavigation } from '${path.join(import.meta.dirname, 'readers/navigation.ts')}';
         import { DocumentReader } from '${path.join(import.meta.dirname, 'components/document-reader.tsx')}';
-        window.harness = { stores, EditorView, downloads, fileTargetKey, registerReaderNavigation, cancelReaderNavigation, mount: () => render(() => <App />, document.getElementById('root')),
+        import { ArchiveFeedback } from '${path.join(import.meta.dirname, 'components/archive-feedback.tsx')}';
+        import { setArchiveSession } from '${path.join(import.meta.dirname, 'archive-sessions.ts')}';
+        import { archiveKey } from '${path.join(import.meta.dirname, 'archive.ts')}';
+        window.harness = { setArchiveSession: (key, ...args) => args.length === 1 ? setArchiveSession(key, { ...args[0] }) : setArchiveSession(key, ...args), archiveKey,
+          mountArchiveFeedback: (retry) => {
+            const [reader, setReader] = createSignal(true);
+            const dispose = render(() => <>
+              <ArchiveFeedback path="bundle.zip"/>
+              <ArchiveFeedback path="bundle.zip" entry="a.db" priority={20} retry={() => retry('a')}/>
+              <ArchiveFeedback path="bundle.zip" entry="b.db" priority={20} retry={() => retry('b')}/>
+              <ArchiveFeedback path="bundle.zip" chain={['inner.zip']}/>
+              <Show when={reader()}><div class="reader-feedback"><ArchiveFeedback path="bundle.zip" entry="a.db" priority={30} retry={() => retry('reader')}/></div></Show>
+            </>, document.getElementById('root'));
+            return { dispose, setReader };
+          }, stores, EditorView, downloads, fileTargetKey, registerReaderNavigation, cancelReaderNavigation, mount: () => render(() => <App />, document.getElementById('root')),
           mountReader: (factory, host = document.getElementById('root')) => {
             const [url, setUrl] = createSignal('first-document');
             const dispose = render(() => <DocumentReader url={url()} path="document" createReader={factory}/>, host);
@@ -116,6 +145,12 @@ async function setup(t: TestContext, url: string, opts: { hook?: Hook; mount?: b
     if (u.pathname === '/api/search') return new Response('data: {"type":"done","truncated":false,"fileCount":0,"matchCount":0}\n\n');
     return json({ ok: true });
   };
+  (w as any).queryTestDatabase = async (target: any, request: unknown, signal: AbortSignal) => {
+    const url = new URL('/__test/sqlite', w.location.origin);
+    url.search = new URLSearchParams({ path: target.path, entry: target.archive?.entry ?? '', inside: JSON.stringify(target.archive?.chain ?? []), request: JSON.stringify(request) }).toString();
+    const response = await opts.hook?.(url, { signal });
+    return response ? response.json() : { objects: [], truncated: false };
+  };
   w.eval(code);
   const s = w.harness.stores;
   const started = s.startSync();
@@ -134,7 +169,7 @@ async function setup(t: TestContext, url: string, opts: { hook?: Hook; mount?: b
 }
 
 test('无标签快照的文件深链恢复选区、语言、主题和字号；浏览历史恢复关闭过的标签', async (t) => {
-  const { w, s, editor, history } = await setup(t, '/a.txt?theme=dark&fs=110&lang=zh&line=2-3');
+  const { w, s, editor, history } = await setup(t, '/a.txt?theme=dark&fs=110&lang=zh#line:2-3');
   await until(() => s.docLoadedPath() === 'a.txt');
   assert.equal(s.currentFile(), 'a.txt');
   assert.equal(w.document.documentElement.lang, 'zh-CN');
@@ -163,12 +198,12 @@ test('用户选区写入 URL，连续移动不增加历史；搜索行号跳转�
   await until(() => s.docLoadedPath() === 'a.txt');
   const length = w.history.length;
   editor().dispatch({ selection: { anchor: 4, head: 13 }, userEvent: 'select' });
-  assert.equal(w.location.search, '?line=2-3');
+  assert.equal(w.location.hash, '#line:2-3');
   editor().dispatch({ selection: { anchor: 0 }, userEvent: 'select' });
-  assert.equal(w.location.search, '?line=1');
+  assert.equal(w.location.hash, '#line:1');
   assert.equal(w.history.length, length);
   s.gotoLine0('a.txt', 2);
-  assert.equal(w.location.search, '?line=3');
+  assert.equal(w.location.hash, '#line:3');
   assert.equal(w.history.length, length + 1);
   assert.equal(editor().state.selection.main.from, 8);
   await history('back');
@@ -253,7 +288,7 @@ test('Git 导航与分支筛选形成历史，后退恢复筛选；文件 diff �
 
 test('Git URL 恢复时清理无关路径和参数；不新增历史且保留分支与侧栏状态', async (t) => {
   const { w, s, history } = await setup(t,
-    '/-/git/history/?view=diff&line=3&branch=feature%2Ftest&commit=abc1234&panel=tabs', { narrow: true });
+    '/-/git/history/?view=diff&branch=feature%2Ftest&commit=abc1234&panel=tabs#line:3', { narrow: true });
   assert.equal(w.location.pathname + w.location.search, '/-/git/history?branch=feature%2Ftest&panel=tabs');
   assert.equal(w.history.length, 1);
   assert.equal(s.activeTab().kind, 'git-history');
@@ -268,7 +303,7 @@ test('Git URL 恢复时清理无关路径和参数；不新增历史且保留分
   await history('back');
   assert.equal(s.historyBranch(), 'feature/test');
   assert.equal(w.location.pathname, '/-/git/history');
-  w.history.pushState(null, '', '/-/git/commit/invalid?branch=main&line=2');
+  w.history.pushState(null, '', '/-/git/commit/invalid?branch=main#line:2');
   s.openGitBranch();
   const length = w.history.length;
   await history('back');
@@ -757,7 +792,8 @@ test('压缩包内部文件复用主工具栏和查看组件，源码只读且�
   assert.equal(w.document.querySelector('.complete-btn'), null);
   const url = w.location.href;
   editor().dispatch({ selection: { anchor: 2 }, userEvent: 'select' });
-  assert.equal(w.location.href, url);
+  assert.equal(parseFragment(w.location.hash).get('line'), '1');
+  assert.equal(new URL(w.location.href).searchParams.get('entry'), new URL(url).searchParams.get('entry'));
   const downloads: string[] = [];
   w.HTMLAnchorElement.prototype.click = function () { downloads.push(this.href); };
   w.document.querySelector('.file-download').click();
@@ -946,7 +982,7 @@ test('阅读工具栏独立弹出目录，跳转及关闭不改变侧栏和 URL'
 test('数据库表、结构使用独立标签，切换后保留分页排序，URL 后退恢复对象', async (test) => {
   const { w, s, calls, history } = await setup(test, '/-/database/app.db?object=users&lang=zh', {
     hook(url) {
-      if (url.pathname !== '/api/database') return;
+      if (url.pathname !== '/__test/sqlite') return;
       const request = JSON.parse(url.searchParams.get('request')!);
       if (request.action === 'objects') return json({ objects: [{ name: 'users', type: 'table' }, { name: 'orders', type: 'table' }], truncated: false });
       if (request.action === 'describe') return json({ object: request.object, columns: [{ name: 'id', type: 'INTEGER', nullable: false, primaryKey: 1, defaultValue: null, generated: false }], indexes: [], foreignKeys: [], sql: 'CREATE TABLE users(id INTEGER PRIMARY KEY)' });
@@ -987,7 +1023,7 @@ test('数据库表、结构使用独立标签，切换后保留分页排序，UR
 test('数据库树区分表和视图，同库不同表可同时打开，下载复用已有文件入口', async (test) => {
   const { w, s } = await setup(test, '/?lang=zh', { hook(url) {
     if (url.pathname === '/api/list') return json({ entries: [{ name: 'app.db', type: 'file', size: 4096, mtime: 0 }] });
-    if (url.pathname !== '/api/database') return;
+    if (url.pathname !== '/__test/sqlite') return;
     const request = JSON.parse(url.searchParams.get('request')!);
     if (request.action === 'objects') return json({ objects: [{ name: 'users', type: 'table' }, { name: 'names', type: 'view' }], truncated: false });
     return json({ columns: [{ key: 'id', label: 'id' }], rows: [], offset: 0, hasMore: false, limited: false });
@@ -1020,7 +1056,7 @@ test('重命名和删除数据库时同步所有对象标签，不影响其他�
   assert.equal(s.activeTab().path, 'other/app.db');
 });
 
-test('CSV 共用紧凑表格：字段浮层、复制、整行详情和展开均不改变文件或 URL', async (test) => {
+test('CSV 共用紧凑表格：字段与整行详情同步 URL，关闭后清理参数且不改变文件', async (test) => {
   const content = 'name,note\nA,"line 1\nline 2"\nB,';
   const { w, s } = await setup(test, '/data.csv?lang=zh', { hook(url) {
     if (url.pathname === '/api/file') return json({ content, utf8: true });
@@ -1060,7 +1096,7 @@ test('CSV 共用紧凑表格：字段浮层、复制、整行详情和展开均�
 
 test('字段浮层可点外部关闭，数据源变化或切换文件后清理详情', async (test) => {
   const { w, s } = await setup(test, '/-/database/app.db?object=users&lang=zh', { hook(url) {
-    if (url.pathname !== '/api/database') return;
+    if (url.pathname !== '/__test/sqlite') return;
     const request = JSON.parse(url.searchParams.get('request')!);
     if (request.action === 'objects') return json({ objects: [], truncated: false });
     return json({ columns: [{ key: 'body', label: 'body' }, { key: 'blob', label: 'blob' }], rows: [
@@ -1092,7 +1128,7 @@ test('字段浮层可点外部关闭，数据源变化或切换文件后清理�
 test('整行详情替换分页栏，逐条切换同步高亮并跨页，加载图标保留固定槽位', async (test) => {
   let release: (() => void) | undefined;
   const { w } = await setup(test, '/-/database/app.db?object=users&lang=zh', { async hook(url) {
-    if (url.pathname !== '/api/database') return;
+    if (url.pathname !== '/__test/sqlite') return;
     const request = JSON.parse(url.searchParams.get('request')!);
     if (request.action === 'objects') return json({ objects: [], truncated: false });
     const offset = request.request.offset ?? 0;
@@ -1229,9 +1265,10 @@ test('目录下载展示压缩与校验进度，状态请求超时后解除等�
   assert.equal(w.harness.downloads.preparingDownload(), false);
 });
 
-test('压缩包内的 PDF 和 Markdown 复用文件树大纲，跳转包含嵌套路径，SQLite 明确提示且不上传', async (test) => {
+test('压缩包内的 PDF 和 Markdown 复用文件树大纲，跳转包含嵌套路径，SQLite 复用数据库视图且不上传', async (test) => {
   const { w, s, calls } = await setup(test, '/bundle.zip?inside=inner.zip&lang=zh', { hook(url) {
     if (url.pathname === '/api/list') return json({ entries: [{ name: 'bundle.zip', type: 'file' }] });
+    if (url.pathname === '/__test/sqlite') return json({ objects: [{ name: 'users', type: 'table' }], truncated: false });
   } });
   await until(() => w.document.querySelectorAll('.archive-node .tree-row[title="bundle.zip › manual.pdf"]').length === 2);
   const nested = () => w.document.querySelector('.tree-row[title="bundle.zip › inner.zip"]')!.parentElement!.querySelector(':scope > .archive-tree')!;
@@ -1258,8 +1295,176 @@ test('压缩包内的 PDF 和 Markdown 复用文件树大纲，跳转包含嵌�
   assert.match(w.location.search, /inside=inner.zip/);
   assert.equal(w.document.querySelectorAll('.toolbar').length, 1);
   await s.openArchiveEntry('bundle.zip', 'app.db', ['inner.zip']);
-  await until(() => !!w.document.querySelector('.binary-preview'));
-  assert.match(w.document.querySelector('.binary-preview').textContent, /暂不支持预览压缩包内的 SQLite/);
+  await until(() => !!w.document.querySelector('.database-object-list button'));
+  assert.equal(s.activeTab().archive.entry, 'app.db');
+  assert.deepEqual(Array.from(s.activeTab().archive.chain), ['inner.zip']);
+  assert.match(w.location.pathname, /database\/bundle.zip/);
+  assert.match(w.location.search, /entry=app.db/);
   assert.equal(w.document.querySelector('.file-download').disabled, false);
   assert.equal(calls.some((call) => call.url.pathname.startsWith('/api/database') || call.url.pathname === '/api/upload'), false);
+});
+
+test('包内数据库的嵌套身份贯穿文件树、独立标签、历史和重命名', async (test) => {
+  const { w, s, history, calls } = await setup(test, '/-/database/bundle.zip?inside=inner.zip&entry=app.db&object=users&lang=zh', { hook(url) {
+    if (url.pathname === '/api/list') return json({ entries: [{ name: 'bundle.zip', type: 'file' }] });
+    if (url.pathname !== '/__test/sqlite') return;
+    const request = JSON.parse(url.searchParams.get('request')!);
+    if (request.action === 'objects') return json({ objects: [{ name: 'users', type: 'table' }, { name: 'names', type: 'view' }], truncated: false });
+    if (request.action === 'describe') return json({ object: request.object, columns: [], indexes: [], foreignKeys: [], sql: 'CREATE TABLE users(id)' });
+    return json({ columns: [{ key: 'location', label: 'location' }], rows: [[{ type: 'text', value: url.searchParams.get('inside') }]], offset: 0, hasMore: false, limited: false });
+  } });
+  await until(() => !!w.document.querySelector('.database-data tbody tr'));
+  const nestedId = s.currentTabId();
+  assert.match(w.document.querySelector('.database-data')!.textContent!, /inner.zip/);
+  await until(() => !!w.document.querySelector('.archive-node .database-object[title="users"]'));
+  w.document.querySelector('.toolbar [aria-label="结构"]')!.click();
+  await until(() => !!w.document.querySelector('.database-structure pre'));
+  assert.deepEqual(Array.from(s.activeTab().archive.chain), ['inner.zip']);
+  s.openDatabaseTab('bundle.zip', { archive: { entry: 'app.db', chain: [] }, object: { name: 'users', type: 'table' }, mode: 'data' });
+  await until(() => !!w.document.querySelector('.database-data tbody tr'));
+  assert.notEqual(s.currentTabId(), nestedId);
+  assert.equal(w.location.search.includes('inside='), false);
+  await history('back');
+  await until(() => !!w.document.querySelector('.database-structure pre'));
+  assert.match(w.location.search, /inside=inner.zip/);
+  await s.switchTab(nestedId);
+  await until(() => !!w.document.querySelector('.database-data tbody tr'));
+  assert.match(w.document.querySelector('.database-data')!.textContent!, /inner.zip/);
+  const saved = JSON.parse(w.localStorage.getItem('anther:databaseTabs')!);
+  assert.equal(saved.filter((tab: any) => tab.archive?.entry === 'app.db').length, 3);
+  assert.equal(new Set(saved.map((tab: any) => tab.id)).size, 3);
+  s.relocateDatabaseTabs('bundle.zip', 'renamed.zip');
+  assert.equal(s.tabs().filter((tab: any) => tab.kind === 'database').every((tab: any) => tab.path === 'renamed.zip'), true);
+  assert.match(w.location.pathname, /database\/renamed.zip/);
+  assert.match(w.location.search, /inside=inner.zip/);
+  assert.equal(calls.some((call) => call.url.pathname === '/api/upload' || call.url.pathname === '/api/database'), false);
+});
+
+test('压缩包预算错误只显示一次，阅读区优先，重试仍对应出错文件', async (test) => {
+  const { w } = await setup(test, '/?lang=zh', { mount: false });
+  const retries: string[] = [];
+  const mounted = w.harness.mountArchiveFeedback((target: string) => retries.push(target));
+  test.after(mounted.dispose);
+  const key = w.harness.archiveKey('bundle.zip', []);
+  w.harness.setArchiveSession(key, { entry: 'a.db', error: 'Archive memory budget exceeded', limit: 'budget', entries: [] });
+  w.harness.setArchiveSession(w.harness.archiveKey('bundle.zip', ['inner.zip']), { error: 'Archive memory budget exceeded', limit: 'budget', entries: [] });
+  await until(() => w.document.querySelectorAll('[role="alert"]').length === 1);
+  assert.match(w.document.querySelector('.reader-feedback [role="alert"]')!.textContent!, /128 MiB/);
+  w.document.querySelector('[aria-label="重试"]')!.click();
+  assert.deepEqual(retries, ['reader']);
+  w.harness.setArchiveSession(key, 'entry', 'b.db');
+  await until(() => !w.document.querySelector('.reader-feedback [role="alert"]'));
+  assert.equal(w.document.querySelectorAll('[role="alert"]').length, 1);
+  w.document.querySelector('[aria-label="重试"]')!.click();
+  assert.deepEqual(retries, ['reader', 'b']);
+  mounted.setReader(false);
+  assert.equal(w.document.querySelectorAll('[role="alert"]').length, 1);
+  w.harness.setArchiveSession(key, { entry: 'a.db', limit: undefined, error: 'Password required', passwordRequired: true });
+  await until(() => w.document.querySelectorAll('.archive-password').length === 1);
+  mounted.dispose();
+  assert.equal(w.document.querySelectorAll('.archive-feedback').length, 0);
+});
+
+test('阅读位置更新替换历史，切换文件隔离坐标，前进后退恢复同一文档目标', async (test) => {
+  const { w, s, history } = await setup(test, '/book.epub#lbp:2@1%2342;zoom:125', { mount: false });
+  assert.equal(s.readingLocationFor('book.epub').lbp, '2@1#42');
+  const length = w.history.length;
+  s.updateReadingLocation('book.epub', { kind: 'epub', lbp: '2@4#30', zoom: 1.25 });
+  assert.equal(w.history.length, length);
+  assert.equal(parseFragment(w.location.hash).get('lbp'), '2@4#30');
+  await s.openTab('other.pdf');
+  s.updateReadingLocation('book.epub', { kind: 'epub', lbp: '0@#0' });
+  assert.equal(w.location.pathname + w.location.search, '/other.pdf');
+  s.updateReadingLocation('other.pdf', { kind: 'pdf', page: 4, x: 0, y: 500 });
+  await history('back');
+  assert.equal(s.readerRestoreRequest().location.lbp, '2@4#30');
+  await history('forward');
+  assert.equal(s.readerRestoreRequest().location.page, 4);
+  w.history.pushState(null, '', '/other.pdf');
+  w.dispatchEvent(new w.PopStateEvent('popstate'));
+  assert.equal(s.readerRestoreRequest().location, null);
+});
+
+test('同名包内文档的阅读坐标按完整嵌套路径隔离', async (test) => {
+  const { w, s, history } = await setup(test, '/bundle.zip?inside=a.zip&entry=book.epub#lbp:2@1%2342', { mount: false });
+  const key = (chain: string[]) => w.harness.fileTargetKey({ path: 'bundle.zip', archive: { chain, entry: 'book.epub' } });
+  assert.equal(s.readingLocationFor(key(['a.zip'])).lbp, '2@1#42');
+  await s.openArchiveEntry('bundle.zip', 'book.epub', ['b.zip']);
+  assert.equal(parseFragment(w.location.hash).get('lbp'), null);
+  s.updateReadingLocation(key(['a.zip']), { kind: 'epub', lbp: '0@#0' });
+  assert.equal(parseFragment(w.location.hash).get('lbp'), null);
+  s.updateReadingLocation(key(['b.zip']), { kind: 'epub', lbp: '5@#0' });
+  await history('back');
+  assert.equal(s.readerRestoreRequest().key, key(['a.zip']));
+  assert.equal(s.readerRestoreRequest().location.lbp, '2@1#42');
+});
+
+test('CSV 深链恢复整行详情，选择变化替换 URL，后退恢复同一表格而不是重开文件', async (test) => {
+  const { w, history } = await setup(test, '/data.csv?lang=zh#row:2;expanded:1', { hook(url) {
+    if (url.pathname === '/api/file') return json({ content: 'name,value\nA,one\nB,two', utf8: true });
+  } });
+  await until(() => !!w.document.querySelector('.table-row-detail.expanded'));
+  assert.equal(w.document.querySelector('.table-row-detail')!.getAttribute('aria-label'), '第 2 行');
+  const count = w.history.length;
+  w.document.querySelector('[aria-label="下一条"]')!.click();
+  await until(() => parseFragment(w.location.hash).get('row') === '3');
+  assert.equal(w.history.length, count);
+  w.history.pushState(null, '', '/data.csv?lang=zh#row:1'); w.dispatchEvent(new w.PopStateEvent('popstate'));
+  await until(() => w.document.querySelector('.table-row-detail')?.getAttribute('aria-label') === '第 1 行');
+  await history('back');
+  await until(() => w.document.querySelector('.table-row-detail')?.getAttribute('aria-label') === '第 3 行');
+  assert(w.document.querySelector('.table-row-detail.expanded'));
+});
+
+test('SQLite 深链应用筛选、分页及详情，同对象的历史恢复清空旧筛选', async (test) => {
+  const queries: any[] = [];
+  const { w, history } = await setup(test, '/-/database/app.db?lang=zh&object=users&filter=name&value=Alice#offset:100;row:101', { hook(url) {
+    if (url.pathname !== '/__test/sqlite') return;
+    const body = JSON.parse(url.searchParams.get('request')!);
+    if (body.action !== 'rows') return json({ objects: [], truncated: false });
+    queries.push(body.request);
+    const offset = body.request.offset ?? 0;
+    return json({ columns: [{ key: 'name', label: 'name' }], rows: [[{ type: 'text', value: body.request.filter?.value ?? 'all' }]], offset, hasMore: true, limited: false });
+  } });
+  await until(() => !!w.document.querySelector('.table-row-detail'));
+  assert.equal(queries.at(-1).offset, 100); assert.equal(queries.at(-1).filter.value, 'Alice');
+  assert.equal(w.document.querySelector('.database-filter input')!.value, 'Alice');
+  w.history.pushState(null, '', '/-/database/app.db?lang=zh&object=users'); w.dispatchEvent(new w.PopStateEvent('popstate'));
+  await until(() => w.document.querySelector('.database-data')?.textContent.includes('all'));
+  assert.equal(queries.at(-1).offset, 0); assert.equal(queries.at(-1).filter, undefined);
+  assert.equal(w.document.querySelector('.database-filter input')!.value, '');
+  await history('back');
+  await until(() => !!w.document.querySelector('.table-row-detail'));
+  assert.equal(queries.at(-1).offset, 100); assert.equal(queries.at(-1).filter.value, 'Alice');
+});
+
+test('原生 hashchange 恢复行号，后退的 popstate/hashchange 只处理一次', async (test) => {
+  const { w, s, editor, history, calls } = await setup(test, '/a.txt#line:2');
+  await until(() => s.docLoadedPath() === 'a.txt');
+  const initialCount = w.history.length;
+  w.location.hash = 'line:3';
+  await until(() => editor()?.state.doc.lineAt(editor().state.selection.main.head).number === 3);
+  assert.equal(w.history.length, initialCount + 1);
+  const before = calls.filter(({ url }) => url.pathname === '/api/tabs/front').length;
+  await history('back');
+  await until(() => editor()?.state.doc.lineAt(editor().state.selection.main.head).number === 2);
+  await tick();
+  assert.equal(calls.filter(({ url }) => url.pathname === '/api/tabs/front').length - before, 1);
+  const length = w.history.length;
+  s.pushState(); s.pushState();
+  assert.equal(w.history.length, length, 'identical fragments must not add history entries');
+});
+
+test('片段直接切换与清空同一 CSV 的详情，不重载文件', async (test) => {
+  const { w, calls } = await setup(test, '/data.csv?lang=zh#row:2', { hook(url) {
+    if (url.pathname === '/api/file') return json({ content: 'name,value\nA,one\nB,two', utf8: true });
+  } });
+  await until(() => !!w.document.querySelector('.table-row-detail'));
+  const reads = calls.filter(({ url }) => url.pathname === '/api/file').length;
+  w.location.hash = 'row:3;expanded:1';
+  await until(() => w.document.querySelector('.table-row-detail.expanded')?.getAttribute('aria-label') === '第 3 行');
+  w.location.hash = '';
+  await until(() => !w.document.querySelector('.table-row-detail'));
+  assert.equal(calls.filter(({ url }) => url.pathname === '/api/file').length, reads);
+  assert.equal(w.location.hash, '');
 });

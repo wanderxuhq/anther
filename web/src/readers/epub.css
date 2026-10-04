@@ -1,0 +1,4 @@
+.epub-stage { width: min(100%, 960px); margin-inline: auto; overflow-anchor: none; }
+.epub-chapter { position: relative; min-height: 1px; margin-bottom: 12px; background: var(--bg); }
+.epub-chapter iframe { display: block; width: 100%; border: 0; }
+.epub-chapter[aria-busy="true"]::before { content: '…'; position: absolute; inset: 24px 0 auto; text-align: center; color: var(--muted); }

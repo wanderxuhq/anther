@@ -12,7 +12,7 @@
 import { createEffect, createSignal, ErrorBoundary, For, lazy, Show, Suspense, onCleanup } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { api, ApiError, type DirEntry } from '../api.ts';
-import { archiveChain, archiveEntry, currentFile, activeTab, openDatabaseTab, relocateDatabaseTabs, openTab, closeTab, tabs } from '../stores.ts';
+import { archiveChain, archiveEntry, activeArchiveRoot, currentFile, activeTab, openDatabaseTab, relocateDatabaseTabs, openTab, closeTab, tabs } from '../stores.ts';
 import { parentOf } from '../paths.ts';
 import { NameDialog, type DialogState } from '../components/name-dialog.tsx';
 import { t } from '../i18n.ts';
@@ -189,14 +189,14 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
   // props 对当前实例固定不变；所有可变状态都从 store 响应式读取
   const state = () => nodes[props.path];
   const isDir = props.entry.type === 'dir';
-  const database = () => !isDir && (isDatabaseFile(props.path) || tabs().some((tab) => tab.kind === 'database' && tab.path === props.path));
+  const database = () => !isDir && !isArchiveFile(props.path) && (isDatabaseFile(props.path) || tabs().some((tab) => tab.kind === 'database' && tab.path === props.path));
   const [databaseExpanded, setDatabaseExpanded] = createSignal(false);
   createEffect(() => { const tab = activeTab(); if (tab?.kind === 'database' && tab.path === props.path) setDatabaseExpanded(true); });
   const document = !isDir && hasDocumentOutline(props.path);
   const [documentExpanded, setDocumentExpanded] = createSignal(false);
   const archive = !isDir && isArchiveFile(props.path);
   const [archiveExpanded, setArchiveExpanded] = createSignal(false);
-  createEffect(() => { if (archive && currentFile() === props.path) setArchiveExpanded(true); });
+  createEffect(() => { if (archive && activeArchiveRoot() === props.path) setArchiveExpanded(true); });
   const isCurrent = () => currentFile() === props.path && (!archive || (!archiveEntry() && archiveChain().length === 0));
   const expanded = () => state()?.expanded === true;
   const loaded = () => state()?.loaded;

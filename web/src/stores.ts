@@ -1,3 +1,7 @@
+import { isArchiveFile } from './archive.ts';
+import { isArchiveLocation } from './file-target.ts';
+import { fileTargetKey } from './file-target.ts';
+import type { ReadingLocation } from './readers/location.ts';
 // web/src/stores.ts
 import { batch, createSignal, createMemo } from 'solid-js';
 import { DEFAULT_STATE, DEFAULT_EXCLUDE, parseUrl, serializeUrl, type UrlState, type Panel, type LineRange } from './url-state.ts';
@@ -30,6 +34,18 @@ const [pendingTerminal, setPendingTerminal] = createSignal<string | null>(null);
 const [filePosition, setFilePosition] = createSignal<{ path: string; line: LineRange } | null>(null);
 const [archiveLocation, setArchiveLocation] = createSignal<{ path: string; entry: string | null; chain: string[] } | null>(null);
 const EMPTY_ARCHIVE_CHAIN: string[] = [];
+const readingLocations = new Map<string, ReadingLocation>();
+export const [readerRestoreRequest, setReaderRestoreRequest] = createSignal<{ key: string; location: ReadingLocation | null } | null>(null);
+export const readingLocationFor = (key: string) => readingLocations.get(key) ?? null;
+export function currentReadingKey(): string | null {
+  const path = currentFile();
+  return path ? fileTargetKey({ path, ...(archiveEntry() ? { archive: { entry: archiveEntry()!, chain: archiveChain() } } : {}) }) : null;
+}
+export function updateReadingLocation(key: string, location: ReadingLocation): void {
+  if (currentReadingKey() !== key) return;
+  readingLocations.set(key, location);
+  pushState('replace');
+}
 
 /** 当前前台标签（文件/终端），无则 null */
 export const activeTab = createMemo<TabItem | null>(() => {
@@ -40,12 +56,20 @@ export const activeTab = createMemo<TabItem | null>(() => {
 /** 当前前台文件路径：当前标签是文件才有值，终端/无标签为 null（spec §5.3 主区域二选一） */
 export const currentFile = createMemo<string | null>(() => currentFilePath(tabs(), currentTabId()));
 /** 当前文件标签对应的压缩包内部路径；切换到其他文件或普通打开时清空。 */
+export const activeArchiveRoot = createMemo(() => {
+  const tab = activeTab();
+  return tab?.kind === 'database' && tab.archive ? tab.path : currentFile() && isArchiveFile(currentFile()!) ? currentFile() : null;
+});
 export const archiveEntry = createMemo<string | null>(() => {
+  const tab = activeTab();
+  if (tab?.kind === 'database' && tab.archive) return tab.archive.entry;
   const location = archiveLocation();
   return location?.path === currentFile() ? location.entry : null;
 });
 /** 当前压缩包内的嵌套路径链；路径不匹配时返回稳定空数组。 */
 export const archiveChain = createMemo<string[]>(() => {
+  const tab = activeTab();
+  if (tab?.kind === 'database' && tab.archive) return tab.archive.chain;
   const location = archiveLocation();
   return location?.path === currentFile() ? location.chain : EMPTY_ARCHIVE_CHAIN;
 });
@@ -61,6 +85,7 @@ export const [currentBranch, setCurrentBranch] = createSignal<string | null>(nul
 export const [gitRefreshTick, setGitRefreshTick] = createSignal(0);
 
 let started = false;
+let lastNavigationHref = '';
 let terminalsLoaded = false;
 
 // 终端名完全本地生成：计数种子 = startSync 时服务端存活的终端数（服务端内存态、
@@ -79,10 +104,12 @@ export function pushState(mode: 'push' | 'replace' = 'push'): void {
     state.path = tab.path;
     state.entry = archiveEntry();
     state.inside = archiveChain();
+    state.reader = readingLocationFor(currentReadingKey()!);
     const position = filePosition();
-    state.line = position?.path === tab.path ? position.line : null;
+    state.line = position?.path === currentReadingKey() ? position.line : null;
   } else if (tab?.kind === 'database') {
-    state.view = 'database'; state.path = tab.path; state.database = { object: tab.object, mode: tab.mode, sort: tab.sort };
+    state.view = 'database'; state.path = tab.path; state.database = { object: tab.object, mode: tab.mode, sort: tab.sort, archive: tab.archive,
+      filter: tab.filter, offset: tab.offset, cursor: tab.cursor, table: tab.table };
   } else if (tab?.kind === 'terminal') state.term = tab.id;
   else if (tab?.kind === 'git') state.view = 'git';
   else if (tab?.kind === 'git-diff') { state.view = 'diff'; state.path = tab.path; }
@@ -92,10 +119,11 @@ export function pushState(mode: 'push' | 'replace' = 'push'): void {
   else if (!tab) state.term = pendingTerminal();
   saveDatabaseTabs();
   const url = serializeUrl(state);
-  if (window.location.pathname + window.location.search !== url) {
+  if (window.location.pathname + window.location.search + window.location.hash !== url) {
     if (mode === 'replace') window.history.replaceState(null, '', url);
     else window.history.pushState(null, '', url);
   }
+  lastNavigationHref = window.location.href;
 }
 
 export function selectPanel(panel: Panel): void {
@@ -121,7 +149,7 @@ export function selectHistoryBranch(branch: string | null): void {
 export function updateFilePosition(line: LineRange): void {
   const path = currentFile();
   if (!path || docLoadedPath() !== path) return;
-  setFilePosition({ path, line });
+  setFilePosition({ path: currentReadingKey()!, line });
   pushState('replace');
 }
 
@@ -134,9 +162,10 @@ async function registerFile(path: string): Promise<void> {
 export function restoreUrl(state: UrlState, syncServer = true): void {
   // 解析会丢弃不属于当前视图的参数；同步修正地址，避免刷新后 URL 与页面不一致。
   const url = serializeUrl(state);
-  if (window.location.pathname + window.location.search !== url) {
-    window.history.replaceState(null, '', url + window.location.hash);
+  if (window.location.pathname + window.location.search + window.location.hash !== url) {
+    window.history.replaceState(null, '', url);
   }
+  lastNavigationHref = window.location.href;
   batch(() => {
     setRoMode(state.ro);
     setTheme(state.theme);
@@ -152,13 +181,20 @@ export function restoreUrl(state: UrlState, syncServer = true): void {
     setHistoryBranch(state.branch);
     setArchiveLocation((state.entry !== null || state.inside.length > 0) && state.path
       ? { path: state.path, entry: state.entry, chain: state.inside } : null);
-    setFilePosition(state.path && state.line ? { path: state.path, line: state.line } : null);
+    const readingKey = state.view === 'file' && state.path ? fileTargetKey({ path: state.path,
+      ...(state.entry ? { archive: { entry: state.entry, chain: state.inside } } : {}) }) : null;
+    setFilePosition(readingKey && state.line ? { path: readingKey, line: state.line } : null);
+    if (readingKey) {
+      if (state.reader) readingLocations.set(readingKey, state.reader); else readingLocations.delete(readingKey);
+    }
+    setReaderRestoreRequest(readingKey ? { key: readingKey, location: state.reader } : null);
     setPendingGoto(null);
     setPendingTerminal(!terminalsLoaded ? state.term : null);
     if (state.term) {
       setCurrentTabId(terminalExists(tabs(), state.term) ? state.term : null);
     } else if (state.view === 'database' && state.path && state.database) {
-      setTabs((prev) => addDatabaseTab(prev, state.path!, { ...state.database!, sort: state.database!.sort }));
+      setTabs((prev) => addDatabaseTab(prev, state.path!, { ...state.database!, sort: state.database!.sort, filter: state.database!.filter,
+        offset: state.database!.offset, cursor: state.database!.cursor, table: state.database!.table }));
       setCurrentTabId(databaseTabId(state.path, state.database));
     } else if (state.view === 'git') {
       setTabs(addGitTab); setCurrentTabId(GIT_TAB_ID);
@@ -193,9 +229,11 @@ export async function startSync(): Promise<void> {
   restoreUrl(s, false);
 
   // 浏览器前进/后退：popstate → 重解析 URL → 覆盖状态（term 按当前终端标签校验存在性）
-  window.addEventListener('popstate', () => {
-    restoreUrl(parseUrl(window.location.href));
-  });
+  const restoreLocation = () => {
+    if (window.location.href !== lastNavigationHref) restoreUrl(parseUrl(window.location.href));
+  };
+  window.addEventListener('popstate', restoreLocation);
+  window.addEventListener('hashchange', restoreLocation);
 
   // 文件标签（既有逻辑，转为 TabItem）
   let fileTabs: TabItem[] = [];
@@ -268,7 +306,7 @@ export async function openTab(path: string, line: LineRange | null = null, entry
     setTabs((prev) => addFileTab(prev, path));
     setCurrentTabId(path);
     if (line) {
-      setFilePosition({ path, line });
+      setFilePosition({ path: currentReadingKey()!, line });
       setPendingGoto({ path, line0: line.start - 1, endLine0: line.end > line.start ? line.end - 1 : undefined });
     }
   });
@@ -279,6 +317,7 @@ export async function openTab(path: string, line: LineRange | null = null, entry
 
 /** 打开/切换压缩包内部文件；通过 openTab 只写入一次导航历史。 */
 export async function openArchiveEntry(path: string, entry: string | null, chain: string[] = []): Promise<void> {
+  if (entry && isDatabaseFile(entry)) { openDatabaseTab(path, { archive: { entry, chain: [...chain] }, object: null, mode: 'data' }); return; }
   await openTab(path, null, entry, chain);
 }
 
@@ -406,7 +445,8 @@ function restoreDatabaseTabs() {
     for (const value of saved.slice(0, 100)) {
       if (!value || typeof value.path !== 'string' || !value.path || !['data', 'structure'].includes(value.mode)) continue;
       if (value.object !== null && (!value.object || typeof value.object.name !== 'string' || !['table', 'view'].includes(value.object.type))) continue;
-      const target: DatabaseTarget = { object: value.object, mode: value.mode };
+      if (value.archive !== undefined && (!isArchiveFile(value.path) || !isArchiveLocation(value.archive))) continue;
+      const target: DatabaseTarget = { object: value.object, mode: value.mode, ...(value.archive ? { archive: value.archive } : {}) };
       if (value.sort && typeof value.sort.column === 'string' && ['asc', 'desc'].includes(value.sort.direction)) target.sort = value.sort;
       setTabs((prev) => addDatabaseTab(prev, value.path, target));
     }
@@ -419,6 +459,10 @@ export function openDatabaseTab(path: string, target: DatabaseTarget = { object:
 export function updateDatabaseSort(id: string, sort: DatabaseTab['sort']) {
   setTabs((prev) => prev.map((tab) => tab.kind === 'database' && tab.id === id ? { ...tab, sort } : tab));
   pushState('replace');
+}
+export function updateDatabaseNavigation(id: string, patch: Pick<DatabaseTarget, 'sort' | 'filter' | 'offset' | 'cursor' | 'table'>) {
+  setTabs((prev) => prev.map((tab) => tab.kind === 'database' && tab.id === id ? { ...tab, ...patch } : tab));
+  if (currentTabId() === id) pushState('replace');
 }
 /** Content-specific disposal stays here; the tab list only knows an id. */
 export async function closeAnyTab(id: string): Promise<void> {

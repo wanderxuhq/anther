@@ -4,7 +4,7 @@ import { isImageFile } from './image.ts';
 import { PREVIEW_FORMATS, looksLikeText } from '../../server/preview-formats.ts';
 import { fileTargetKey } from './file-target.ts';
 
-export type ArchiveDocument = { release: () => void; name: string; blob: Blob; url: string; content?: string; truncated?: boolean; kind: 'image' | 'pdf' | 'audio' | 'video' | 'text' | 'binary' | 'sqlite'; mime: string };
+export type ArchiveDocument = { release: () => void; name: string; blob: Blob; url: string; content?: string; truncated?: boolean; kind: 'image' | 'pdf' | 'epub' | 'audio' | 'video' | 'text' | 'binary' | 'sqlite'; mime: string };
 async function inspect(name: string, value: ArchiveBlob): Promise<ArchiveDocument> {
   const { blob, release } = value;
   const extension = name.split('.').pop()!.toLowerCase();

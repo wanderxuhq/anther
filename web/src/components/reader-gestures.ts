@@ -1,7 +1,7 @@
 import type { ReaderController, ReaderState } from '../readers/types.ts';
 
 /** Preview a pinch with a compositor transform; commit document layout only on release. */
-export function bindReaderGestures(viewport: HTMLElement, content: HTMLElement, reader: ReaderController, state: () => ReaderState) {
+export function bindReaderGestures(viewport: HTMLElement, content: HTMLElement, reader: ReaderController, state: () => ReaderState, input?: { target: EventTarget; toClient(x: number, y: number): { x: number; y: number } }) {
   type Pinch = { ids: string; distance: number; x: number; y: number };
   type Gesture = {
     start: Pinch; scale: number; origin: { x: number; y: number };
@@ -13,9 +13,11 @@ export function bindReaderGestures(viewport: HTMLElement, content: HTMLElement, 
     const value = state();
     if (touches.length !== 2 || !value.canZoom || !value.total || value.busy || value.error || value.password) return;
     const [a, b] = Array.from(touches).sort((a, b) => a.identifier - b.identifier);
-    const distance = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    const point = (touch: Touch) => input?.toClient(touch.clientX, touch.clientY) ?? { x: touch.clientX, y: touch.clientY };
+    const first = point(a), second = point(b);
+    const distance = Math.hypot(first.x - second.x, first.y - second.y);
     if (distance < 1) return;
-    return { ids: `${a.identifier}:${b.identifier}`, distance, x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 };
+    return { ids: `${a.identifier}:${b.identifier}`, distance, x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
   };
   const targetScale = (active: Gesture, next: Pinch) => Math.max(0.1, Math.min(5, active.scale * next.distance / active.start.distance));
   const preview = () => {
@@ -71,15 +73,16 @@ export function bindReaderGestures(viewport: HTMLElement, content: HTMLElement, 
     if (point) begin(point);
   };
   const cancel = () => finish(false);
-  viewport.addEventListener('touchstart', start, { passive: false });
-  viewport.addEventListener('touchmove', move, { passive: false });
-  viewport.addEventListener('touchend', end);
-  viewport.addEventListener('touchcancel', cancel);
+  const target = (input?.target ?? viewport) as HTMLElement;
+  target.addEventListener('touchstart', start, { passive: false });
+  target.addEventListener('touchmove', move, { passive: false });
+  target.addEventListener('touchend', end);
+  target.addEventListener('touchcancel', cancel);
   return () => {
     cancel();
-    viewport.removeEventListener('touchstart', start);
-    viewport.removeEventListener('touchmove', move);
-    viewport.removeEventListener('touchend', end);
-    viewport.removeEventListener('touchcancel', cancel);
+    target.removeEventListener('touchstart', start);
+    target.removeEventListener('touchmove', move);
+    target.removeEventListener('touchend', end);
+    target.removeEventListener('touchcancel', cancel);
   };
 }

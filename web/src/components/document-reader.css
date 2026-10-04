@@ -1,9 +1,17 @@
-.document-reader { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
-.reader-toolbar { position: relative; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px; padding: 6px; border-bottom: 1px solid var(--border); }
+.document-reader { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; container-type: inline-size; }
+.reader-toolbar { position: relative; display: flex; flex-wrap: nowrap; flex-shrink: 0; align-items: center; justify-content: center; gap: 2px; padding: 4px; border-bottom: 1px solid var(--border); }
+.reader-toolbar > .icon-btn { flex-shrink: 0; }
 .reader-toolbar svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.75; }
-.reader-toolbar output { min-width: 46px; text-align: center; font-size: 13px; }
-.reader-page-number { width: 52px; min-width: 0; padding: 5px 2px; background: var(--bg); color: inherit; border: 1px solid var(--border); border-radius: 4px; text-align: center; }
-.reader-page-count { font-size: 13px; }
+.reader-toolbar output { min-width: 40px; white-space: nowrap; font-variant-numeric: tabular-nums; text-align: center; font-size: 13px; }
+.reader-page-number { width: 40px; flex-shrink: 0; min-width: 0; padding: 5px 2px; background: var(--bg); color: inherit; border: 1px solid var(--border); border-radius: 4px; text-align: center; }
+.reader-page-count { font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+@container (max-width: 420px) {
+  .reader-toolbar { gap: 0; padding-inline: 2px; }
+  .reader-toolbar > .icon-btn { flex: 0 0 clamp(32px, 10cqi, 40px); min-width: 0; padding-inline: 6px; }
+  .reader-page-number { width: 36px; appearance: textfield; -moz-appearance: textfield; }
+  .reader-page-number::-webkit-inner-spin-button, .reader-page-number::-webkit-outer-spin-button { appearance: none; margin: 0; }
+  .reader-toolbar > output { min-width: 36px; }
+}
 .reader-reading-area { position: relative; flex: 1; min-height: 0; min-width: 0; }
 .reader-viewport { position: absolute; inset: 0; overflow: auto; scrollbar-gutter: stable; overscroll-behavior: contain; background: light-dark(#e8e8e8, #262626); }
 .reader-stage { min-height: 100%; }

@@ -1,4 +1,4 @@
-import { fileTargetKey } from './file-target.ts';
+import { fileTargetKey, fileTargetLabel } from './file-target.ts';
 import { documentPreviewUrl } from './readers/document-file.ts';
 import { cancelReaderNavigation, registerReaderNavigation } from './readers/navigation.ts';
 import { createSignal, createMemo, createEffect, For, Show, on, onCleanup } from 'solid-js';
@@ -12,8 +12,9 @@ import { CommitView } from './views/commit.tsx';
 import { api } from './api.ts';
 import {
   activeTab, currentTabId, setCurrentTabId, openTerminal,
+  readingLocationFor, readerRestoreRequest, updateReadingLocation,
   openGit, openDatabaseTab, closeTab,
-  archiveChain, archiveEntry, openArchiveEntry,
+  archiveChain, archiveEntry, openArchiveEntry, activeArchiveRoot,
   currentFile, roMode, setRoMode, pushState, fontScale,
   pendingGoto, setPendingGoto, docLoadedPath, setDocLoadedPath,
   editorHandle, setEditorHandle,
@@ -27,9 +28,8 @@ import { isMarkdownFile, parseMarkdownDocument } from './markdown.ts';
 import { MarkdownPreview } from './components/markdown-preview.tsx';
 import { preparingDownload, startDownload, setBeforeDownload } from './download.ts';
 import { isImageFile, isBinaryImage } from './image.ts';
-import { ImagePreview } from './components/image-preview.tsx';
+import { LocatedImagePreview as ImagePreview, LocatedTablePreview as TablePreview } from './components/located-preview.tsx';
 import { FilePreview, type PreviewFile } from './components/file-preview.tsx';
-import { TablePreview } from './components/table-preview.tsx';
 import { isArchiveFile } from './archive.ts';
 import { archiveSession, archiveBusy, cancelArchive, ensureArchive, downloadArchiveEntry } from './archive-sessions.ts';
 import { loadArchiveFile, hasArchiveDocument, releaseArchiveFile, type ArchiveDocument } from './archive-file.ts';
@@ -81,6 +81,14 @@ export function App() {
   createEffect(on([currentFile, archiveEntry, archiveChain, roMode], () => setMarkdownSource(false)));
 
   let navigateMarkdown: ((id: string) => void) | null = null;
+  const restoreMarkdown = () => {
+    const location = readingLocationFor(documentKey());
+    try { navigateMarkdown?.(location?.kind === 'markdown' ? location.heading : ''); }
+    catch { navigateMarkdown?.(''); }
+  };
+  createEffect(on(readerRestoreRequest, (request) => {
+    if (request?.key === documentKey()) restoreMarkdown();
+  }));
   createEffect(() => {
     const document = loadedDoc();
     if (!document || document.path !== currentFile() || !isMarkdownFile(documentPath())) return;
@@ -127,7 +135,7 @@ export function App() {
   const toolbarPathLabel = () => {
     const tab = activeTab();
     if (!tab) return <span class="toolbar-path-hint">{t('noFileOpen')}</span>;
-    if (tab.kind === 'database') return `${tab.path}${tab.object ? ` › ${tab.object.name} · ${t(`database.${tab.mode}`)}` : ''}`;
+    if (tab.kind === 'database') return `${fileTargetLabel(tab)}${tab.object ? ` › ${tab.object.name} · ${t(`database.${tab.mode}`)}` : ''}`;
     if (tab.kind === 'terminal') return tab.name;
     if (tab.kind === 'git') return t('view.git');
     if (tab.kind === 'git-diff') return tab.path;
@@ -240,7 +248,10 @@ export function App() {
     const path = downloadPath();
     if (!path || preparingDownload()) return;
     try {
-      if (browsingArchive()) {
+      const database = activeDatabase();
+      if (database?.archive) {
+        await downloadArchiveEntry(database.path, database.archive.entry, database.archive.chain);
+      } else if (browsingArchive()) {
         const value = archiveFile(), name = archiveEntry(), chain = archiveChain();
         if (value && name === value.name) await startDownload({ url: value.url, filename: value.name.split('/').pop()! });
         else if (name) await downloadArchiveEntry(path, name, chain);
@@ -326,7 +337,7 @@ export function App() {
         initialDoc: content, readOnly: documentReadOnly(), path,
         onChange: handleEditorChange,
         onReveal: () => setMarkdownSource(true),
-        onSelectionChange: (line) => { if (!browsingArchive()) updateFilePosition(line); },
+        onSelectionChange: updateFilePosition,
         onLspNotice: (msg, kind) => showToast(msg, kind),
       });
       setEditorHandle(editor);
@@ -367,6 +378,7 @@ export function App() {
         const file = await loadArchiveFile(path, chain, name, password);
         if (path !== currentFile() || seq !== loadSeq) { releaseArchiveFile(file); return; }
         setArchiveFile(file);
+        if (file.kind === 'sqlite') { openDatabaseTab(path, { archive: { entry: name, chain }, object: null, mode: 'data' }); return; }
         if (file.kind === 'image') { setImageFile({ path: name, url: file.url }); return; }
         if (file.kind !== 'text') {
           setFilePreview({ path: name, url: file.url, kind: file.kind, size: file.blob.size, mime: file.mime, modified: '' });
@@ -384,7 +396,7 @@ export function App() {
       if (path !== currentFile() || seq !== loadSeq) return;
       const openPreview = (kind: PreviewFile['kind']) => {
         clearEditor();
-        setFilePreview({ ...info, kind, path, url: kind === 'pdf' ? documentPreviewUrl(path, info) : `${api.previewUrl(path)}&v=${Date.now()}-${seq}` });
+        setFilePreview({ ...info, kind, path, url: kind === 'pdf' || kind === 'epub' ? documentPreviewUrl(path, info) : `${api.previewUrl(path)}&v=${Date.now()}-${seq}` });
       };
       if (info.kind === 'sqlite') { clearEditor(); openDatabaseTab(path); void closeTab(path).catch(() => {}); return; }
       if (info.kind !== 'text') { openPreview(info.kind); return; }
@@ -404,10 +416,12 @@ export function App() {
   }
 
   let previousArchive: string | null = null;
-  createEffect(on([currentFile, showImagePreview, archiveEntry, archiveChain, archiveLimits, editorEl], () => {
+  createEffect(on([currentFile, activeArchiveRoot, showImagePreview, archiveEntry, archiveChain, archiveLimits, editorEl], () => {
     const path = currentFile();
-    if (previousArchive && !(previousArchive === path && archiveEntry() && hasArchiveDocument(path!, archiveChain(), archiveEntry()!))) cancelArchive(previousArchive, previousArchive !== path);
-    previousArchive = path && isArchiveFile(path) ? path : null;
+    const root = activeArchiveRoot();
+    const sharedEntry = path && archiveEntry() && hasArchiveDocument(path, archiveChain(), archiveEntry()!);
+    if (previousArchive && (previousArchive !== root || (path && !sharedEntry))) cancelArchive(previousArchive, previousArchive !== root);
+    previousArchive = root;
     if (!path) {
       loadSeq++;
       void flushSave();
@@ -525,12 +539,12 @@ export function App() {
               </svg>
             </button>
           </Show>
-          <Show when={browsingArchive()}><ArchiveOptions /></Show>
+          <Show when={browsingArchive() || activeDatabase()?.archive}><ArchiveOptions /></Show>
           <Show when={activeDatabase()}>{(tab) => <>
             <Show when={tab().object}>
               <For each={['data', 'structure'] as const}>{(mode) => <button class={`icon-btn ${tab().mode === mode ? 'active' : ''}`}
                 aria-label={t(`database.${mode}`)} title={t(`database.${mode}`)} aria-pressed={tab().mode === mode}
-                onClick={() => openDatabaseTab(tab().path, { object: tab().object, mode })}>
+                onClick={() => openDatabaseTab(tab().path, { object: tab().object, mode, archive: tab().archive })}>
                 <DatabaseIcon kind={mode === 'data' ? 'table' : 'structure'}/>
               </button>}</For>
             </Show>
@@ -564,7 +578,7 @@ export function App() {
       <main class="editor-area" classList={{ 'archive-view': browsingArchive() }}>
         <Show when={activeDatabase()?.id} keyed>{(_id) => <DatabasePane tab={activeDatabase()!} onController={setDatabaseController}/>}</Show>
         <Show when={browsingArchive()}>
-          <ArchiveFeedback path={currentFile()!} chain={archiveChain()} retry={(password) => void loadDoc(currentFile()!, false, password)} />
+          <ArchiveFeedback path={currentFile()!} chain={archiveChain()} entry={archiveEntry()} priority={30} retry={(password) => void loadDoc(currentFile()!, false, password)} />
           <Show when={!archiveEntry()}><div class="binary-preview">{t('archive.choose')}</div></Show>
           <Show when={archiveEntry() && !archiveFile() && !archiveSession(currentFile()!, archiveChain())?.busy && !archiveSession(currentFile()!, archiveChain())?.error}>
             <div class="binary-preview"><button class="link-btn" onClick={() => void loadDoc(currentFile()!)}>{t('archive.retry')}</button></div>
@@ -583,20 +597,22 @@ export function App() {
         <Show when={showImagePreview() && (!browsingArchive() || archiveFile())}>
           <Show when={imageFile()?.path === documentPath()} fallback={<div class="view-placeholder" role="status">{t('loading')}</div>}>
             <Show when={imageFile()} keyed>
-              {(file) => <ImagePreview path={file.path} url={file.url} />}
+              {(file) => <ImagePreview path={file.path} url={file.url} navigationKey={documentKey()} />}
             </Show>
           </Show>
         </Show>
         <Show when={showMarkdownPreview() && (!browsingArchive() || archiveFile())}>
           <Show when={loadedDoc()?.path === currentFile()} fallback={<div class="view-placeholder" role="status">{t('loading')}</div>}>
             <Show when={documentPath()} keyed>
-              {(path) => <MarkdownPreview content={loadedDoc()?.content ?? ''} path={path} allowRelativeLinks={!browsingArchive()} onNavigator={(navigate) => { navigateMarkdown = navigate; }} />}
+              {(path) => <MarkdownPreview content={loadedDoc()?.content ?? ''} path={path} allowRelativeLinks={!browsingArchive()}
+                onHeading={(heading) => updateReadingLocation(documentKey(), { kind: 'markdown', heading })}
+                onNavigator={(navigate) => { navigateMarkdown = navigate; if (navigate) restoreMarkdown(); }} />}
             </Show>
           </Show>
         </Show>
         <Show when={showTablePreview() && (!browsingArchive() || archiveFile())}>
           <Show when={loadedDoc()?.path === currentFile()} fallback={<div class="view-placeholder" role="status">{t('loading')}</div>}>
-            <Show when={documentPath()} keyed>{(path) => <TablePreview path={path} content={loadedDoc()?.content ?? ''} />}</Show>
+            <Show when={documentPath()} keyed>{(path) => <TablePreview path={path} content={loadedDoc()?.content ?? ''} navigationKey={documentKey()} />}</Show>
           </Show>
         </Show>
         <Show when={currentFile() && !documentReadOnly() && docLoadedPath() === currentFile()}>

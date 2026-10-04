@@ -19,7 +19,7 @@ export default defineConfig({
   root: path.resolve(import.meta.dirname),
   plugins: [solid(), pdfAssets()],
   worker: { format: 'es' },
-  optimizeDeps: { include: ['@zip.js/zip.js', 'pdfjs-dist', 'pdfjs-dist/web/pdf_viewer.mjs'] },
+  optimizeDeps: { exclude: ['@sqlite.org/sqlite-wasm'], include: ['@zip.js/zip.js', 'pdfjs-dist', 'pdfjs-dist/web/pdf_viewer.mjs'] },
   server: {
     host: true, // 监听所有网卡：手机/其他主机通过 IP 访问（vite 默认只绑 localhost）
     port: 5173,

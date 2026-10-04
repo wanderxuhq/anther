@@ -64,8 +64,15 @@ export class DatabaseController {
     return this.changePage([...this.state.pages, { offset: rows.offset + rows.rows.length, cursor: rows.nextCursor }]);
   }
   previous() {
-    if (this.state.busy || this.state.pages.length < 2) return Promise.resolve(false);
+    if (this.state.busy || !this.hasPrevious) return Promise.resolve(false);
+    if (this.state.pages.length === 1) return this.changePage([{ offset: Math.max(0, this.state.pages[0].offset - 100) }]);
     return this.changePage(this.state.pages.slice(0, -1));
+  }
+  get hasPrevious() { return this.state.pages.length > 1 || (this.state.pages[0].offset > 0 && this.state.pages[0].offset <= 100_100); }
+  restore(initial: Partial<DatabaseViewState>) {
+    this.pending?.abort();
+    this.update({ pages: initial.pages ?? [{ offset: 0 }], sort: initial.sort, filter: initial.filter, rows: null });
+    void this.load();
   }
   private async changePage(pages: DatabasePage[]) {
     const previous = this.state.pages;
@@ -74,7 +81,7 @@ export class DatabaseController {
     if (!loaded && !this.disposed && this.state.pages === pages) this.update({ pages: previous });
     return loaded;
   }
-  refresh() { this.update({ pages: [{ offset: 0 }], rows: null }); void this.load(); }
+  refresh() { this.pending?.abort(); this.source.refresh?.(); this.update({ pages: [{ offset: 0 }], rows: null }); void this.load(); }
   cancel() { this.pending?.abort(); this.pending = undefined; this.update({ busy: false }); }
   snapshot(): DatabaseViewState { return { pages: this.state.pages, sort: this.state.sort, filter: this.state.filter }; }
   dispose() { this.disposed = true; this.cancel(); this.listeners.clear(); this.source.dispose(); }
