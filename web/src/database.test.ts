@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseController } from './database/controller.ts';
-import type { DatabaseRows, DatabaseSource } from './database/source.ts';
+import type { DatabaseRows, DatabaseRowsRequest, DatabaseSource } from './database/source.ts';
 import { addDatabaseTab, databaseTabId } from './tab-model.ts';
 import { DEFAULT_STATE, parseUrl, serializeUrl } from './url-state.ts';
 
@@ -94,4 +94,51 @@ test('same-named databases in different archive levels have independent tab iden
     databaseTabId('bundle.zip', { ...target, archive: { entry: 'app.db', chain: ['inner.zip'] } }),
     databaseTabId('other.zip', { ...target, archive: { entry: 'app.db', chain: ['inner.zip'] } })];
   assert.equal(new Set(ids).size, ids.length);
+});
+
+test('restored previous pages end at the adjacent record even with variable byte-limited pages', async () => {
+  const requests: DatabaseRowsRequest[] = [];
+  const source: DatabaseSource = {
+    listObjects: async () => ({ objects: [], truncated: false }), describe: async () => { throw new Error('unused'); },
+    async readRows(request) {
+      requests.push(request);
+      const offset = request.offset ?? 0, count = Math.min(request.limit ?? 100, offset % 3 + 3);
+      return { ...rows('', true), offset, rows: Array.from({ length: count }, (_, i) => [{ type: 'integer' as const, value: String(offset + i + 1) }]), nextCursor: String(offset + count) };
+    }, dispose() {},
+  };
+  for (const sort of [undefined, { column: 'name', direction: 'desc' as const }]) {
+    const controller = new DatabaseController(source, object, 'data', { pages: [{ offset: 21 }], sort, filter: { column: 'name', value: 'x' } });
+    await controller.load();
+    await controller.previous();
+    assert.equal(controller.state.rows!.rows.at(-1)![0].value, '21');
+    const last = controller.state.rows!.offset;
+    await controller.next(); assert.equal(controller.state.rows!.offset, 21);
+    await controller.previous(); assert.equal(controller.state.rows!.rows.at(-1)![0].value, '21');
+    await controller.previous(); assert.equal(controller.state.rows!.rows.at(-1)![0].value, String(last));
+    assert(requests.every(request => request.filter?.value === 'x'));
+    controller.dispose();
+  }
+});
+
+test('cancelling or failing restored backward navigation retains the current page', async () => {
+  let request = 0, fail = false;
+  const delayed = deferred<DatabaseRows>();
+  const source: DatabaseSource = {
+    listObjects: async () => ({ objects: [], truncated: false }), describe: async () => { throw new Error('unused'); },
+    async readRows(input) {
+      if (fail) throw new Error('read failed');
+      if (++request === 3) return delayed.promise;
+      return { ...rows('value', true), offset: input.offset ?? 0 };
+    }, dispose() {},
+  };
+  const controller = new DatabaseController(source, object, 'data', { pages: [{ offset: 20 }] });
+  await controller.load();
+  const pending = controller.previous();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  controller.cancel(); delayed.resolve({ ...rows('late'), offset: 1 });
+  assert.equal(await pending, false);
+  assert.equal(controller.state.rows!.offset, 20); assert.equal(controller.state.pages[0].offset, 20);
+  fail = true; assert.equal(await controller.previous(), false);
+  assert.equal(controller.state.rows!.offset, 20); assert.equal(controller.state.pages[0].offset, 20);
+  controller.dispose();
 });

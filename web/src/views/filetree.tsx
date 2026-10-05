@@ -1,3 +1,4 @@
+import { withFileMutation } from '../file-operations.ts';
 // web/src/views/filetree.tsx
 // 文件树视图：懒加载目录（点击展开/收起）、文件点击打开、当前文件高亮。
 //
@@ -12,7 +13,7 @@
 import { createEffect, createSignal, ErrorBoundary, For, lazy, Show, Suspense, onCleanup } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { api, ApiError, type DirEntry } from '../api.ts';
-import { archiveChain, archiveEntry, activeArchiveRoot, currentFile, activeTab, openDatabaseTab, relocateDatabaseTabs, openTab, closeTab, tabs } from '../stores.ts';
+import { archiveChain, archiveEntry, activeArchiveRoot, currentFile, activeTab, openDatabaseTab, relocateFileTabs, openTab, tabs } from '../stores.ts';
 import { parentOf } from '../paths.ts';
 import { NameDialog, type DialogState } from '../components/name-dialog.tsx';
 import { t } from '../i18n.ts';
@@ -151,15 +152,11 @@ async function doRename(target: MenuTarget, name: string) {
   const to = childPath(parentOf(target.path), name);
   if (to === target.path) return; // 同名重命名 = 取消，静默关闭
   try {
-    await api.rename(target.path, to);
-    relocateDatabaseTabs(target.path, to);
+    await withFileMutation(target.path, async () => {
+      await api.rename(target.path, to);
+      await relocateFileTabs(target.path, to);
+    });
     await refreshParent(parentOf(target.path));
-    if (tabs().some((t) => t.kind === 'file' && t.path === target.path)) {
-      // 级联走 stores 的 closeTab/openTab：封装了服务器调用 + 本地信号 + 快照 + pushState，
-      // 直接调 api.tabs.close 会漏本地信号更新，旧路径残留标签列表
-      await closeTab(target.path);
-      await openTab(to);
-    }
     setError(null);
   } catch (e) { setError((e as Error).message); }
 }
@@ -174,10 +171,11 @@ function onDeleteTap(target: MenuTarget) {
   setConfirmDel(null); setMenu(null);
   void (async () => {
     try {
-      await api.del(target.path);
-      relocateDatabaseTabs(target.path);
+      await withFileMutation(target.path, async () => {
+        await api.del(target.path);
+        await relocateFileTabs(target.path);
+      });
       await refreshParent(parentOf(target.path));
-      if (tabs().some((t) => t.kind === 'file' && t.path === target.path)) await closeTab(target.path); // closeTab 含本地移除 + 快照 + pushState
       setError(null);
     } catch (e) { setError((e as Error).message); }
   })();

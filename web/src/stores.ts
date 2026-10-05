@@ -1,4 +1,5 @@
 import { isArchiveFile } from './archive.ts';
+import { pathWithin } from './file-operations.ts';
 import { isArchiveLocation } from './file-target.ts';
 import { fileTargetKey } from './file-target.ts';
 import type { ReadingLocation } from './readers/location.ts';
@@ -44,6 +45,7 @@ export function currentReadingKey(): string | null {
 export function updateReadingLocation(key: string, location: ReadingLocation): void {
   if (currentReadingKey() !== key) return;
   readingLocations.set(key, location);
+  setFilePosition(null);
   pushState('replace');
 }
 
@@ -94,6 +96,12 @@ let termCount = 0;
 
 /** 主导航新增历史；连续输入/选区变化只替换当前历史。恢复 URL 不调用此函数。 */
 export function pushState(mode: 'push' | 'replace' = 'push'): void {
+  // Native hash navigation changes location before hashchange is delivered.
+  // A queued scroll/selection notification must not replace that destination.
+  if (mode === 'replace' && lastNavigationHref && window.location.href !== lastNavigationHref) {
+    restoreUrl(parseUrl(window.location.href));
+    return;
+  }
   const state: UrlState = {
     ...DEFAULT_STATE, ro: roMode(), theme: theme(), fs: fontScale(), lang: urlLang(),
     panel: activePanel(), query: searchQuery(), caseSensitive: searchCaseSensitive(), exclude: searchExclude(),
@@ -149,6 +157,7 @@ export function selectHistoryBranch(branch: string | null): void {
 export function updateFilePosition(line: LineRange): void {
   const path = currentFile();
   if (!path || docLoadedPath() !== path) return;
+  readingLocations.delete(currentReadingKey()!);
   setFilePosition({ path: currentReadingKey()!, line });
   pushState('replace');
 }
@@ -475,6 +484,43 @@ export async function closeAnyTab(id: string): Promise<void> {
 }
 
 /** File operations update every object tab backed by that file or directory. */
+export async function relocateFileTabs(from: string, to?: string) {
+  const affected = fileTabPaths(tabs()).filter((path) => pathWithin(path, from));
+  const move = (path: string) => to! + path.slice(from.length);
+  const moveKey = (key: string): string | null => {
+    if (pathWithin(key, from)) return to ? move(key) : null;
+    if (key.startsWith('/-/entry/')) {
+      const [path, chain, entry] = JSON.parse(key.slice('/-/entry/'.length));
+      if (pathWithin(path, from)) return to ? fileTargetKey({ path: move(path), archive: { chain, entry } }) : null;
+    }
+    return key;
+  };
+  batch(() => {
+    for (const [key, location] of [...readingLocations]) {
+      const next = moveKey(key);
+      if (next !== key) { readingLocations.delete(key); if (next) readingLocations.set(next, location); }
+    }
+    const position = filePosition();
+    if (position) { const path = moveKey(position.path); setFilePosition(path ? { ...position, path } : null); }
+    const archive = archiveLocation();
+    if (archive && pathWithin(archive.path, from)) setArchiveLocation(to ? { ...archive, path: move(archive.path) } : null);
+    const active = currentTabId();
+    setTabs((all) => all.flatMap((tab) => tab.kind !== 'file' || !pathWithin(tab.path, from)
+      ? [tab] : to ? [{ ...tab, path: move(tab.path), id: move(tab.path) }] : []));
+    if (active && affected.includes(active)) setCurrentTabId(to ? move(active) : nextActiveTabId(tabs(), active));
+    setPendingGoto(null);
+    relocateDatabaseTabs(from, to);
+  });
+  saveTabsSnapshot(fileTabPaths(tabs()));
+  pushState('replace');
+  // The filesystem operation has succeeded: reflect it locally even if tab
+  // persistence is temporarily unavailable.
+  await Promise.all(affected.map(async (path) => {
+    await api.tabs.close(path);
+    if (to) await registerFile(move(path));
+  }));
+}
+
 export function relocateDatabaseTabs(from: string, to?: string) {
   if (!tabs().some((tab) => tab.kind === 'database' && (tab.path === from || tab.path.startsWith(from + '/')))) return;
   const active = currentTabId();

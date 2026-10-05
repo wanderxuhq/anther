@@ -1,3 +1,4 @@
+import { fileMutationLocked, pathWithin, setBeforeFileMutation } from './file-operations.ts';
 import { fileTargetKey, fileTargetLabel } from './file-target.ts';
 import { documentPreviewUrl } from './readers/document-file.ts';
 import { cancelReaderNavigation, registerReaderNavigation } from './readers/navigation.ts';
@@ -237,6 +238,12 @@ export function App() {
     return saveChain;
   }
 
+  setBeforeFileMutation(async (path) => {
+    await flushSave();
+    if ([...failedSavePaths].some((failed) => pathWithin(failed, path))) {
+      throw new Error(t('filetree.saveFirst'));
+    }
+  });
   setBeforeDownload(async (path, directory) => {
     await flushSave();
     if ([...failedSavePaths].some((failed) => failed === path || (directory && (path === '.' || failed.startsWith(`${path}/`))))) {
@@ -267,7 +274,7 @@ export function App() {
     // 只由用户编辑触发（适配层已过滤程序性 dispatch）；编辑必然发生在
     // 有当前文件的场景，此处为防御性 guard
     const path = currentFile();
-    if (!path || browsingArchive()) return;
+    if (!path || browsingArchive() || fileMutationLocked(path)) return;
     setLoadedDoc({ path, content: doc });
     if (roMode()) return; // 只读模式不自动保存（checkout 前切只读后，防抖内的后续编辑不落盘）
     scheduleSave(path, doc);
@@ -334,10 +341,10 @@ export function App() {
     const path = virtual ? null : root;
     if (!editor) {
       editor = createEditor(el, {
-        initialDoc: content, readOnly: documentReadOnly(), path,
+        initialDoc: content, readOnly: documentReadOnly() || fileMutationLocked(path), path,
         onChange: handleEditorChange,
         onReveal: () => setMarkdownSource(true),
-        onSelectionChange: updateFilePosition,
+        onSelectionChange: (line) => { if (!showRenderedDocument()) updateFilePosition(line); },
         onLspNotice: (msg, kind) => showToast(msg, kind),
       });
       setEditorHandle(editor);
@@ -346,7 +353,7 @@ export function App() {
       editor.setReadOnly(true);
       editor.setDoc(content, path);
     }
-    editor.setReadOnly(documentReadOnly());
+    editor.setReadOnly(documentReadOnly() || fileMutationLocked(path));
     setLoadedDoc({ path: root, content });
     setDocLoadedPath(root);
     const desc = describeLanguage(name);
@@ -438,7 +445,7 @@ export function App() {
   // 仍为 undefined，`editor?.setReadOnly(roMode())` 的可选链会短路并跳过参数求值，
   // 依赖永不建立，✎ 切换永不生效（2026-08-08 修复）。
   createEffect(() => {
-    const ro = documentReadOnly();
+    const ro = documentReadOnly() || fileMutationLocked(currentFile());
     editor?.setReadOnly(ro);
   });
 
@@ -467,6 +474,7 @@ export function App() {
     if (previousArchive) cancelArchive(previousArchive, true);
     clearArchiveFile();
     setBeforeDownload(undefined);
+    setBeforeFileMutation(undefined);
     window.removeEventListener('keydown', onKeyDown);
     clearTimeout(saveTimer);
     editor?.destroy();

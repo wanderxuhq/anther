@@ -1,3 +1,4 @@
+import { setEpubViewport } from './epub-layout.ts';
 import { acquireEpubSource } from './epub-source.ts';
 import { initialReaderState, type ReaderController, type ReaderFactory } from './types.ts';
 import type { EpubBook, EpubLink } from './epub-data.ts';
@@ -12,6 +13,7 @@ type ChapterView = { node: HTMLElement; generation: number; cancel?: AbortContro
 /** Continuous chapter layout. The source owns ZIP/package/content; this adapter only owns views. */
 export const createEpubReader: ReaderFactory = ({ url, viewport, content, onState, initialLocation, onLocation }) => {
   const source = acquireEpubSource(url), views: ChapterView[] = [];
+  let visible: number[] = [];
   let book: EpubBook | undefined, disposed = false, scrollFrame = 0, navigation = 0, navigating = true;
   let positionTimer: ReturnType<typeof setTimeout> | undefined;
   let lastLocation: ReadingLocation | null = initialLocation ?? null;
@@ -23,10 +25,20 @@ export const createEpubReader: ReaderFactory = ({ url, viewport, content, onStat
   const unsubscribe = source.subscribe(update);
   const top = (index: number) => views[index].node.getBoundingClientRect().top - content.getBoundingClientRect().top;
   const indexAt = (position: number) => {
-    let low = 0, high = views.length - 1;
-    while (low < high) { const middle = Math.ceil((low + high) / 2); if (top(middle) <= position) low = middle; else high = middle - 1; }
-    return low;
+    let low = 0, high = visible.length - 1;
+    while (low < high) { const middle = Math.ceil((low + high) / 2); if (top(visible[middle]) <= position) low = middle; else high = middle - 1; }
+    return visible[low] ?? 0;
   };
+  // Keep package spine indices stable for LBP, while auxiliary chapters enter
+  // the continuous layout only when explicitly opened (e.g. a footnote link).
+  const reveal = (index: number) => {
+    visible = [];
+    views.forEach((view, i) => {
+      view.node.hidden = !book!.spine[i].linear && i !== index;
+      if (!view.node.hidden) visible.push(i);
+    });
+  };
+  const firstChapter = () => Math.max(0, book!.spine.findIndex((item) => item.linear));
   const current = () => indexAt(viewport.scrollTop + 24);
   const publish = () => {
     if (disposed || navigating || !book) return;
@@ -65,8 +77,9 @@ export const createEpubReader: ReaderFactory = ({ url, viewport, content, onStat
         doc.documentElement.style.zoom = String(state.scale);
         const measure = () => {
           if (!active()) return;
+          setEpubViewport(doc, frame.clientWidth, viewport.clientHeight, state.scale);
           const style = frame.contentWindow!.getComputedStyle(doc.body);
-          const height = Math.max(1, Math.ceil(doc.body.getBoundingClientRect().height + ((parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0)) * state.scale));
+          const height = Math.max(1, Math.ceil(Math.max(doc.body.getBoundingClientRect().height, doc.body.scrollHeight * state.scale) + ((parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0)) * state.scale));
           if (frame.style.height !== `${height}px`) {
             const above = !navigating && index < current(), previous = view.node.offsetHeight;
             frame.style.height = `${height}px`; view.node.style.height = `${height}px`;
@@ -76,6 +89,8 @@ export const createEpubReader: ReaderFactory = ({ url, viewport, content, onStat
         };
         view.measure = measure;
         observer = new ResizeObserver(measure); observer.observe(doc.body);
+        // A book may fix the body's height while an image increases its overflow.
+        doc.addEventListener('load', measure, true);
         unbind = bindReaderGestures(viewport, content, controller, () => state, { target: doc, toClient(x, y) {
           const bounds = frame.getBoundingClientRect(), ratio = bounds.width / frame.clientWidth;
           return { x: bounds.left + x * ratio, y: bounds.top + y * ratio };
@@ -102,9 +117,11 @@ export const createEpubReader: ReaderFactory = ({ url, viewport, content, onStat
   const refreshVisible = (index = current()) => {
     if (disposed || !book) return;
     update({ position: index + 1 });
-    const first = Math.max(0, index - 1), last = Math.min(views.length - 1, index + 8, indexAt(viewport.scrollTop + viewport.clientHeight) + 1);
-    for (let i = first; i <= last; i++) void load(i);
-    for (let i = 0; i < views.length; i++) if ((i < first || i > last) && (views[i].frame || views[i].pending)) unload(views[i]);
+    const position = visible.indexOf(index);
+    const first = Math.max(0, position - 1), last = Math.min(visible.length - 1, position + 8, visible.indexOf(indexAt(viewport.scrollTop + viewport.clientHeight)) + 1);
+    const wanted = new Set(visible.slice(first, last + 1));
+    for (const i of wanted) void load(i);
+    for (let i = 0; i < views.length; i++) if (!wanted.has(i) && (views[i].frame || views[i].pending)) unload(views[i]);
     schedulePosition();
   };
   const scroll = () => {
@@ -121,8 +138,10 @@ export const createEpubReader: ReaderFactory = ({ url, viewport, content, onStat
     }
     update({ total: book.spine.length });
     const initial = initialLocation?.kind === 'epub' ? locationLBP(initialLocation.lbp) : null;
+    const index = Math.min(book.spine.length - 1, initial?.start.spineIndex ?? firstChapter());
+    reveal(index);
     if (initialLocation?.kind === 'epub' && initialLocation.zoom) update({ scale: initialLocation.zoom, fitWidth: initialLocation.zoom === 1 });
-    await load(Math.min(book.spine.length - 1, initial?.start.spineIndex ?? 0));
+    await load(index);
     if (!disposed) update({ busy: false });
   });
   void ready.catch(fail);
@@ -133,8 +152,9 @@ export const createEpubReader: ReaderFactory = ({ url, viewport, content, onStat
       await ready;
       if (disposed || request !== navigation) return;
       const value = location?.kind === 'epub' ? location : null;
-      const position = locationLBP(value?.lbp ?? '0@#0')!;
+      const position = locationLBP(value?.lbp ?? `${firstChapter()}@#0`)!;
       const index = Math.min(book!.spine.length - 1, position.start.spineIndex);
+      reveal(index);
       const scale = value?.zoom ?? 1;
       update({ scale, fitWidth: scale === 1 });
       for (const view of views) if (view.frame?.contentDocument) { view.frame.contentDocument.documentElement.style.zoom = String(scale); view.measure?.(); }
@@ -159,6 +179,7 @@ export const createEpubReader: ReaderFactory = ({ url, viewport, content, onStat
     if (index < 0) throw new Error('Chapter not found');
     navigating = true;
     try {
+      reveal(index);
       await load(index);
       if (disposed || request !== navigation) return;
       const view = views[index], doc = view.frame?.contentDocument;
@@ -215,10 +236,11 @@ export const createEpubReader: ReaderFactory = ({ url, viewport, content, onStat
       views.forEach(unload); content.replaceChildren(); content.classList.remove('epub-stage'); unsubscribe(); source.release();
     },
   };
-  let width = viewport.clientWidth;
+  let width = viewport.clientWidth, height = viewport.clientHeight;
   const resize = new ResizeObserver(() => {
-    if (width === viewport.clientWidth) return;
-    width = viewport.clientWidth;
+    if (width === viewport.clientWidth && height === viewport.clientHeight) return;
+    width = viewport.clientWidth; height = viewport.clientHeight;
+    views.forEach((view) => view.measure?.());
     if (!navigating && lastLocation) void restoreLocation(lastLocation);
   });
   resize.observe(viewport);

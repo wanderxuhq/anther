@@ -1468,3 +1468,111 @@ test('片段直接切换与清空同一 CSV 的详情，不重载文件', async 
   assert.equal(calls.filter(({ url }) => url.pathname === '/api/file').length, reads);
   assert.equal(w.location.hash, '');
 });
+
+test('Markdown source and rendered positions do not force a refreshed preview back to source', async (test) => {
+  const { w, s, editor } = await setup(test, '/README.md?lang=zh#line:3');
+  await until(() => s.docLoadedPath() === 'README.md' && !w.document.querySelector('.markdown-preview'));
+  w.document.querySelector('[aria-label="显示 Markdown 预览"]')!.click();
+  await until(() => !!w.document.querySelector('.markdown-preview'));
+  assert.equal(parseFragment(w.location.hash).get('line'), null, 'switching back to preview clears even an unscrolled source position');
+  s.updateReadingLocation('README.md', { kind: 'markdown', heading: '0' });
+  const href = w.location.href;
+  w.history.pushState(null, '', href); w.dispatchEvent(new w.PopStateEvent('popstate'));
+  await tick();
+  assert(w.document.querySelector('.markdown-preview'));
+  assert.equal(parseFragment(w.location.hash).get('heading'), '0');
+  w.document.querySelector('[aria-label="显示 Markdown 源码"]')!.click();
+  editor()!.dispatch({ selection: { anchor: editor()!.state.doc.line(2).from } });
+  await until(() => parseFragment(w.location.hash).get('line') === '2');
+  assert.equal(parseFragment(w.location.hash).get('heading'), null);
+});
+
+test('a pending native hash navigation wins over a late position notification from the old view', async (test) => {
+  const { w, s } = await setup(test, '/data.csv?lang=zh#row:2', { mount: false });
+  // hashchange has not run yet; emulate the old view's queued animation/timer.
+  w.location.hash = 'row:3;expanded:1';
+  s.updateReadingLocation('data.csv', { kind: 'table', row: 2 });
+  assert.equal(w.location.hash, '#row:3;expanded:1');
+  assert.equal(s.readerRestoreRequest().location.row, 3);
+  await tick();
+  assert.equal(s.readingLocationFor('data.csv').row, 3);
+  w.location.hash = '';
+  s.updateReadingLocation('data.csv', { kind: 'table', row: 3, expanded: true });
+  assert.equal(w.location.hash, '');
+  assert.equal(s.readerRestoreRequest().location, null);
+});
+
+function fileMenu(w: any, path: string, text: string) {
+  w.document.querySelector(`.tree-row[title="${path}"] .row-menu-btn`).click();
+  [...w.document.querySelectorAll('.menu-item')].find((el: any) => el.textContent === text)!.click();
+}
+function submitRename(w: any, name: string) {
+  const input = w.document.querySelector('.dialog-input');
+  input.value = name; input.dispatchEvent(new w.Event('input', { bubbles: true }));
+  w.document.querySelector('.dialog-card').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
+}
+
+test('重命名等待防抖和进行中的保存；等待期间锁定编辑，目录内标签一起迁移', async (t) => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let renames = 0;
+  const h = await setup(t, '/folder/a.txt?ro=0&lang=zh', { hook: async (url, init) => {
+    if (url.pathname === '/api/list') return json({ entries: [{ name: 'folder', type: 'dir' }] });
+    if (url.pathname === '/api/file' && init.method !== 'PUT') return json({ content: 'original', utf8: true });
+    if (url.pathname === '/api/file' && init.method === 'PUT') await gate;
+    if (url.pathname === '/api/rename') {
+      renames++;
+      assert.match(h.docs.get('folder/a.txt')!, /changed/);
+      return json({ ok: true });
+    }
+  } });
+  await until(() => h.s.docLoadedPath() === 'folder/a.txt');
+  await h.s.openTab('folder/b.txt'); await h.s.openTab('folder/a.txt');
+  await until(() => h.s.docLoadedPath() === 'folder/a.txt');
+  h.editor().dispatch({ changes: { from: 0, insert: 'changed ' }, userEvent: 'input' });
+  await until(() => !!h.w.document.querySelector('.tree-row[title="folder"]'));
+  fileMenu(h.w, 'folder', '重命名'); submitRename(h.w, 'renamed');
+  await until(() => h.calls.some(c => c.url.pathname === '/api/file' && c.init.method === 'PUT'));
+  assert.equal(renames, 0);
+  assert.equal(h.editor().state.readOnly, true);
+  release();
+  await until(() => h.s.docLoadedPath() === 'renamed/a.txt');
+  assert.equal(renames, 1);
+  assert.equal(h.editor().state.readOnly, false);
+  assert.equal(h.s.tabs().some((tab: any) => tab.path === 'renamed/b.txt'), true);
+  assert.equal(h.s.tabs().some((tab: any) => tab.path.startsWith('folder/')), false);
+  assert.equal(h.w.location.pathname, '/renamed/a.txt');
+});
+
+test('删除等待正在保存的内容完成，不在删除后重新创建旧文件', async (t) => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let deleted = false;
+  const h = await setup(t, '/a.txt?ro=0&lang=zh', { hook: async (url, init) => {
+    if (url.pathname === '/api/list') return json({ entries: deleted ? [] : [{ name: 'a.txt', type: 'file' }] });
+    if (url.pathname === '/api/file' && init.method === 'PUT') await gate;
+    if (url.pathname === '/api/delete') { deleted = true; h.docs.delete('a.txt'); return json({ ok: true }); }
+  } });
+  await until(() => h.s.docLoadedPath() === 'a.txt');
+  h.editor().dispatch({ changes: { from: 0, insert: 'changed ' }, userEvent: 'input' });
+  await until(() => h.calls.some(c => c.url.pathname === '/api/file' && c.init.method === 'PUT'));
+  fileMenu(h.w, 'a.txt', '删除');
+  [...h.w.document.querySelectorAll('.menu-item')].find((el: any) => el.textContent.includes('确认删除'))!.click();
+  await tick(); assert.equal(deleted, false); assert.equal(h.editor().state.readOnly, true);
+  release(); await until(() => deleted && h.s.currentFile() === null);
+  await tick(1100); assert.equal(h.docs.has('a.txt'), false);
+});
+
+test('保存失败阻止重命名，并恢复可编辑状态', async (t) => {
+  const h = await setup(t, '/a.txt?ro=0&lang=zh', { hook: (url, init) => {
+    if (url.pathname === '/api/list') return json({ entries: [{ name: 'a.txt', type: 'file' }] });
+    if (url.pathname === '/api/file' && init.method === 'PUT') return json({ error: 'disk full' }, 500);
+  } });
+  await until(() => h.s.docLoadedPath() === 'a.txt');
+  h.editor().dispatch({ changes: { from: 0, insert: 'changed ' }, userEvent: 'input' });
+  fileMenu(h.w, 'a.txt', '重命名'); submitRename(h.w, 'b.txt');
+  await tick(2200);
+  assert.equal(h.calls.some(c => c.url.pathname === '/api/rename'), false);
+  assert.equal(h.s.currentFile(), 'a.txt'); assert.equal(h.editor().state.readOnly, false);
+  assert.match(h.w.document.body.textContent, /请先成功保存修改后再重命名或删除/);
+});

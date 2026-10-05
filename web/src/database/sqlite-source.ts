@@ -15,6 +15,7 @@ let sequence = 0;
 class Session {
   references = 0;
   private worker?: Worker;
+  private generation = 0;
   private queue: Job[] = [];
   private active?: Job;
   private timer?: ReturnType<typeof setTimeout>;
@@ -32,25 +33,29 @@ class Session {
     });
   }
   private stopWorker() {
+    this.generation++;
     this.worker?.terminate(); this.worker = undefined; clearTimeout(this.timer);
     const material = this.material; this.material = undefined;
     void material?.then((value) => value.release(), () => {});
   }
   private deadline(job: Job, ms: number) {
     clearTimeout(this.timer);
+    const generation = this.generation;
     this.timer = setTimeout(() => {
+      if (this.active !== job || this.generation !== generation) return;
       this.stopWorker(); this.finish(job, new Error('SQLite operation timed out. Retry or narrow the filter.'));
     }, ms);
   }
   private async pump() {
     if (this.active || !this.queue.length) return;
     const job = this.active = this.queue.shift()!;
+    const generation = this.generation;
     try {
       let blob: Blob | undefined;
       if (!this.worker && this.input.load) {
         const material = this.material = this.input.load();
         const value = await material;
-        if (this.active !== job || this.material !== material) return;
+        if (this.active !== job || this.generation !== generation || this.material !== material) return;
         blob = value.blob;
       }
       if (!this.worker) {
@@ -80,7 +85,7 @@ class Session {
       }
       this.deadline(job, 60_000);
       this.worker.postMessage({ id: job.id, request: job.request, url: this.input.url, headers: this.input.headers, blob });
-    } catch (error) { if (this.active === job) { this.stopWorker(); this.finish(job, error as Error); } }
+    } catch (error) { if (this.active === job && this.generation === generation) { this.stopWorker(); this.finish(job, error as Error); } }
   }
   private finish(job: Job, error?: Error, result?: unknown) {
     if (this.active !== job) return;
@@ -91,7 +96,14 @@ class Session {
   }
   reset() {
     this.stopWorker();
-    if (this.active) this.finish(this.active, abortError());
+    // Refresh the shared snapshot without cancelling another consumer's request.
+    if (this.active) {
+      const job = this.active;
+      this.active = undefined;
+      job.id = ++sequence;
+      this.queue.unshift(job);
+    }
+    void this.pump();
   }
   release() {
     this.references--;

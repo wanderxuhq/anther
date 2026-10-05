@@ -1,6 +1,6 @@
 import type { DatabaseSource, DatabaseDescription, DatabaseObject, DatabaseRows, DatabaseRowsRequest, DatabaseSort } from './source.ts';
 
-export type DatabasePage = { offset: number; cursor?: string };
+export type DatabasePage = { offset: number; cursor?: string; limit?: number };
 export type DatabaseViewState = {
   pages: DatabasePage[];
   sort?: DatabaseSort;
@@ -30,7 +30,7 @@ export class DatabaseController {
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener(this.state);
   }
-  async load() {
+  async load(before?: number) {
     if (this.disposed) return false;
     this.pending?.abort();
     const pending = this.pending = new AbortController();
@@ -43,8 +43,27 @@ export class DatabaseController {
         const description = await this.source.describe(this.object, pending.signal);
         if (this.pending === pending && !pending.signal.aborted) this.update({ description });
       } else {
-        const rows = await this.source.readRows({ object: this.object, ...this.state.pages.at(-1), sort: this.state.sort, filter: this.state.filter }, pending.signal);
-        if (this.pending === pending && !pending.signal.aborted) this.update({ rows });
+        const query = { object: this.object, sort: this.state.sort, filter: this.state.filter };
+        let pages = this.state.pages;
+        let rows: DatabaseRows;
+        if (before !== undefined) {
+          // A response may contain fewer than 100 rows due to its byte budget.
+          // Rebuild only the preceding 100-record window, retaining page coordinates,
+          // until the last response ends immediately before the current page.
+          pages = [];
+          let page: DatabasePage = { offset: Math.max(0, before - 100) };
+          for (;;) {
+            page = { ...page, limit: before - page.offset };
+            rows = await this.source.readRows({ ...query, ...page }, pending.signal);
+            if (this.pending !== pending || pending.signal.aborted) return false;
+            if (!rows.rows.length) throw new Error('Previous page is no longer available');
+            pages.push(page);
+            const offset = rows.offset + rows.rows.length;
+            if (offset >= before) break;
+            page = { offset, cursor: rows.nextCursor };
+          }
+        } else rows = await this.source.readRows({ ...query, ...pages.at(-1) }, pending.signal);
+        if (this.pending === pending && !pending.signal.aborted) this.update({ rows, pages });
       }
       return this.pending === pending && !pending.signal.aborted;
     } catch (error) {
@@ -65,7 +84,7 @@ export class DatabaseController {
   }
   previous() {
     if (this.state.busy || !this.hasPrevious) return Promise.resolve(false);
-    if (this.state.pages.length === 1) return this.changePage([{ offset: Math.max(0, this.state.pages[0].offset - 100) }]);
+    if (this.state.pages.length === 1) return this.load(this.state.pages[0].offset);
     return this.changePage(this.state.pages.slice(0, -1));
   }
   get hasPrevious() { return this.state.pages.length > 1 || (this.state.pages[0].offset > 0 && this.state.pages[0].offset <= 100_100); }

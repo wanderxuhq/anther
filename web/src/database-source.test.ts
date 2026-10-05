@@ -133,3 +133,45 @@ test('closing during extraction releases late blobs without starting a worker', 
   await tick(); await tick();
   assert.equal(FakeWorker.instances.length, 0); assert.equal(releases, 1);
 });
+
+test('tree refresh retries another reader against the fresh snapshot without rejecting it', async (t) => {
+  const reader = createSqliteSource('shared-refresh.db'), tree = createSqliteSource('shared-refresh.db');
+  t.after(() => { reader.dispose(); tree.dispose(); });
+  const controller = new AbortController();
+  const reading = reader.describe({ name: 'items', type: 'table' }, controller.signal);
+  const old = FakeWorker.instances[0], oldId = old.messages[0].id;
+  tree.refresh!();
+  const listing = tree.listObjects(), fresh = FakeWorker.instances[1];
+  assert.equal(old.terminated, true);
+  assert.notEqual(fresh.messages[0].id, oldId);
+  old.reply('result', { stale: true });
+  fresh.reply('result', { columns: ['fresh'] });
+  assert.deepEqual(await reading, { columns: ['fresh'] });
+  await tick();
+  fresh.reply('result', { objects: [] }); await listing;
+  const pending = reader.listObjects(controller.signal);
+  tree.refresh!();
+  const rejected = assert.rejects(pending, { name: 'AbortError' });
+  controller.abort(); await rejected;
+  assert.equal(FakeWorker.instances.at(-1)!.terminated, true);
+});
+
+test('refresh during extraction ignores stale failures and releases stale blobs', async (t) => {
+  const loads: { resolve(value: { blob: Blob; release(): void }): void; reject(error: Error): void }[] = [];
+  let releases = 0;
+  const source = createSqliteSource({ key: 'refresh-extract', load: () => new Promise((resolve, reject) => loads.push({ resolve, reject })) });
+  t.after(() => source.dispose());
+  const reading = source.listObjects();
+  source.refresh!(); source.refresh!();
+  loads[0].reject(new Error('Old extraction failed'));
+  loads[1].resolve({ blob: new Blob(['stale']), release() { releases++; } });
+  loads[2].resolve({ blob: new Blob(['fresh']), release() { releases++; } });
+  await tick(); await tick();
+  assert.equal(FakeWorker.instances.length, 1);
+  assert.equal(releases, 1);
+  const worker = FakeWorker.instances[0];
+  assert.equal(await worker.messages[0].blob.text(), 'fresh');
+  worker.reply('result', { objects: [] }); await reading;
+  source.dispose(); await tick(); await tick();
+  assert.equal(releases, 2);
+});

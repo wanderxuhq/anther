@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import init, { type Database as DB } from '@sqlite.org/sqlite-wasm';
 import { queryDatabase } from './database/sqlite-query.ts';
 import { openSqliteBytes } from './database/sqlite-engine.ts';
+import { DatabaseController } from './database/controller.ts';
 import type { DatabaseDescription, DatabaseRows } from './database/types.ts';
 const sqlite = await init();
 let db: DB;
@@ -92,4 +93,20 @@ test('computed values have a native SQLite allocation bound', () => {
   try {
     assert.throws(() => queryDatabase(imported, { action: 'rows', request: { object: { name: 'oversized', type: 'view' } } }), /too big/i);
   } finally { imported.close(); }
+});
+
+test('byte-budgeted SQLite pages remain adjacent after URL restoration and backward/forward navigation', async () => {
+  db.exec('CREATE TABLE wide (id INTEGER PRIMARY KEY, ' + Array.from({ length: 20 }, (_, i) => `c${i} TEXT`).join(',') + ')');
+  const insert = db.prepare('INSERT INTO wide VALUES (' + Array(21).fill('?').join(',') + ')');
+  try { for (let i = 1; i <= 30; i++) { insert.bind([i, ...Array(20).fill('中'.repeat(4096))]); insert.step(); insert.reset(); } }
+  finally { insert.finalize(); }
+  const controller = new DatabaseController({
+    listObjects: async () => ({ objects: [], truncated: false }), describe: async () => { throw new Error('unused'); },
+    readRows: async request => queryDatabase(db, { action: 'rows', request }) as DatabaseRows, dispose() {},
+  }, { name: 'wide', type: 'table' }, 'data', { pages: [{ offset: 21, cursor: '21' }] });
+  await controller.load(); await controller.previous();
+  assert.equal(controller.state.rows!.rows.at(-1)![0].value, '21');
+  await controller.next(); assert.equal(controller.state.rows!.rows[0][0].value, '22');
+  await controller.previous(); assert.equal(controller.state.rows!.rows.at(-1)![0].value, '21');
+  controller.dispose();
 });

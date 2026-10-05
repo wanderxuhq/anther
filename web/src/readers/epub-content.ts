@@ -1,3 +1,4 @@
+import { stabilizeEpubCss } from './epub-layout.ts';
 import DOMPurify from 'dompurify';
 import { epubLink, type EpubBook } from './epub-data.ts';
 
@@ -48,11 +49,12 @@ export async function prepareEpubChapter(book: EpubBook, index: number, read: (p
       const url = await resource(match[1] ?? match[2], base, ancestors);
       return url ? `@import url("${url}")${match[3]};` : '';
     });
-    return replaceAsync(value, /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*))\s*\)/gi, async (match) => {
+    value = await replaceAsync(value, /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*))\s*\)/gi, async (match) => {
       const href = (match[1] ?? match[2] ?? match[3]).trim();
       if (href.startsWith('#')) return `url("${href.replace(/["<>]/g, '')}")`;
       return `url("${await resource(href, base, ancestors)}")`;
     });
+    return stabilizeEpubCss(value);
   };
   try {
     const markup = text.decode(await load(item.path, 16 * 1024 * 1024));

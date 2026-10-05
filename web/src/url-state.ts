@@ -131,7 +131,7 @@ export function parseUrl(href: string): UrlState {
   }
   if (s.database && s.entry) s.database.archive = { entry: s.entry, chain: s.inside };
   if (s.view === 'file' && s.path) s.reader = parseReadingLocation(s.entry ?? (s.inside.length ? '' : s.path), position);
-  if (s.view === 'file' && s.path && (s.entry || s.inside.length === 0)) s.line = parseLine(position.get('line'));
+  if (s.view === 'file' && s.path && !s.reader && (s.entry || s.inside.length === 0)) s.line = parseLine(position.get('line'));
   if (s.view === 'history') s.branch = q.get('branch') || null;
 
   s.ro = q.get('ro') !== '0';
@@ -170,7 +170,7 @@ export function serializeUrl(state: UrlState): string {
     ? archiveEntry : null;
   if (entry) params.set('entry', entry);
   if (view === 'file' && path) writeReadingLocation(position, entry ?? (validInside ? '' : path), state.reader);
-  if (view === 'file' && path && (entry || !validInside) && state.line) {
+  if (view === 'file' && path && !position.size && (entry || !validInside) && state.line) {
     const { start, end } = state.line;
     position.set('line', start === end ? String(start) : `${start}-${end}`);
   }

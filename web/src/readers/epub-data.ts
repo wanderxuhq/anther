@@ -3,7 +3,7 @@ import type { ReaderOutlineItem } from './types.ts';
 export type EpubLink = { path: string; fragment: string };
 export type EpubItem = { id: string; path: string; mime: string; properties: string[] };
 export type EpubBook = {
-  title: string; language: string; spine: EpubItem[]; manifest: Map<string, EpubItem>;
+  title: string; language: string; spine: (EpubItem & { linear: boolean })[]; manifest: Map<string, EpubItem>;
   outline: ReaderOutlineItem[]; destinations: Map<string, EpubLink>; hiddenResources: Set<string>;
 };
 export const unsupportedEpub = () => Object.assign(new Error('Unsupported EPUB encryption or layout'), { readerError: 'unsupported' as const });
@@ -17,7 +17,7 @@ export const elements = (node: Document | Element, name: string) => Array.from(n
 export function epubLink(reference: string, base: string): EpubLink | null {
   if (!reference || /^[a-z][\w+.-]*:|^\/\//i.test(reference)) return null;
   try {
-    const url = new URL(reference, `https://epub.invalid/${base}`);
+    const url = new URL(reference, `https://epub.invalid/${base.split('/').map(encodeURIComponent).join('/')}`);
     const path = decodeURIComponent(url.pathname.slice(1));
     if (!path || /[\0\\]/.test(path)) return null;
     return { path, fragment: decodeURIComponent(url.hash.slice(1)) };
@@ -39,11 +39,11 @@ export async function readEpubBook(read: (path: string) => Promise<string>, path
     const item = { id, path: link.path, mime: el.getAttribute('media-type') ?? '', properties: (el.getAttribute('properties') ?? '').split(/\s+/) };
     manifest.set(item.path, item); ids.set(id, item);
   }
-  const spine = elements(doc, 'itemref').filter((ref) => ref.getAttribute('linear') !== 'no').map((ref) => {
+  const spine = elements(doc, 'itemref').map((ref) => {
     if ((ref.getAttribute('properties') ?? '').includes('rendition:layout-pre-paginated')) throw unsupportedEpub();
     const item = ids.get(ref.getAttribute('idref') ?? '');
     if (!item || !paths.has(item.path) || !['application/xhtml+xml', 'text/html'].includes(item.mime)) throw unsupportedEpub();
-    return item;
+    return { ...item, linear: ref.getAttribute('linear') !== 'no' };
   });
   if (!spine.length || spine.length > 10_000) throw new Error('Invalid EPUB spine');
   const hiddenResources = new Set<string>();
@@ -81,6 +81,6 @@ export async function readEpubBook(read: (path: string) => Promise<string>, path
       add(elements(point, 'navLabel')[0]?.textContent ?? '', elements(point, 'content')[0]?.getAttribute('src') ?? '', ncx.path, parsePoints(point)));
     book.outline = parsePoints(elements(navigation, 'navMap')[0]);
   }
-  if (!book.outline.length) book.outline = spine.map((item, index) => add(item.id || String(index + 1), item.path.split('/').map(encodeURIComponent).join('/'), '', []));
+  if (!book.outline.length) book.outline = spine.flatMap((item, index) => item.linear ? [add(item.id || String(index + 1), item.path.split('/').map(encodeURIComponent).join('/'), '', [])] : []);
   return book;
 }

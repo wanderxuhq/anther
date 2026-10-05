@@ -26,7 +26,8 @@ test('EPUB 3 metadata/TOC resolve relative Unicode targets without loading chapt
   const files = fixture(), reads: string[] = [];
   const value = await readEpubBook(async path => { reads.push(path); return files.get(path)!; }, new Set(files.keys()));
   assert.equal(value.title, 'Book'); assert.equal(value.language, 'zh');
-  assert.equal(value.spine.length, 2);
+  assert.equal(value.spine.length, 3);
+  assert.deepEqual(value.spine.map(item => item.linear), [false, true, true]);
   assert.deepEqual(reads, ['META-INF/container.xml', 'OPS/book.opf', 'OPS/nav.xhtml']);
   const child = value.outline[0].children[0];
   assert.equal(child.title, 'Second');
@@ -34,7 +35,7 @@ test('EPUB 3 metadata/TOC resolve relative Unicode targets without loading chapt
 });
 test('EPUB 2 NCX and ordinary XHTML doctypes are supported; missing TOC falls back to spine', async () => {
   const files = fixture();
-  files.set('OPS/book.opf', opf.replace('properties="nav" media-type="application/xhtml+xml"', 'media-type="application/x-dtbncx+xml"').replace('<spine>', '<spine toc="nav">'));
+  files.set('OPS/book.opf', opf.replace('properties="nav" media-type="application/xhtml+xml"', 'media-type="application/x-dtbncx+xml"').replace('<spine>', '<spine toc="nav">').replace('<itemref idref="nav" linear="no"/>', ''));
   files.set('OPS/nav.xhtml', '<!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd"><ncx><navMap><navPoint><navLabel><text>First</text></navLabel><content src="chapters/one.xhtml#start"/></navPoint></navMap></ncx>');
   assert.equal((await book(files)).outline[0].title, 'First');
   files.set('OPS/book.opf', opf.replace('properties="nav"', ''));
@@ -57,7 +58,7 @@ test('EPUB chapter styles/images are local leased resources, chapter links stay 
   const files = fixture();
   files.set('OPS/chapters/one.xhtml', files.get('OPS/chapters/one.xhtml')!.replace('</body>', '<script>evil()</script><iframe src="https://evil.test"></iframe><img src="https://evil.test/a" onerror="evil()"/><form><input/></form></body>'));
   const value = await book(files), reads: string[] = [];
-  const chapter = await prepareEpubChapter(value, 0, async path => { reads.push(path); return new TextEncoder().encode(files.get(path)!); });
+  const chapter = await prepareEpubChapter(value, 1, async path => { reads.push(path); return new TextEncoder().encode(files.get(path)!); });
   const doc = new dom.window.DOMParser().parseFromString(chapter.html, 'text/html');
   assert.equal(doc.querySelectorAll('script,iframe,form,input,[onerror]').length, 0);
   assert.match(doc.querySelector('meta')!.content, /script-src 'none'/);
@@ -71,9 +72,28 @@ test('EPUB chapter styles/images are local leased resources, chapter links stay 
 });
 test('Recursive CSS imports terminate and resources are released when loading fails', async () => {
   const files = fixture(); files.set('OPS/style.css', '@import "style.css"; p { background: url(image.png) }');
-  const chapter = await prepareEpubChapter(await book(files), 0, async path => new TextEncoder().encode(files.get(path)!));
+  const chapter = await prepareEpubChapter(await book(files), 1, async path => new TextEncoder().encode(files.get(path)!));
   chapter.release();
-  await assert.rejects(prepareEpubChapter(await book(files), 0, async path => { if (path.endsWith('image.png')) throw new Error('read failed'); return new TextEncoder().encode(files.get(path)!); }), /read failed/);
+  await assert.rejects(prepareEpubChapter(await book(files), 1, async path => { if (path.endsWith('image.png')) throw new Error('read failed'); return new TextEncoder().encode(files.get(path)!); }), /read failed/);
+});
+
+test('nonlinear EPUB chapters keep their spine coordinates and support lazy footnote/backlink navigation', async () => {
+  const files = fixture();
+  files.set('OPS/book.opf', opf.replace('<itemref idref="two"/>', '<itemref idref="two" linear="no"/>'));
+  files.set('OPS/chapters/二 章.xhtml', '<html><body><p id="end">Footnote</p><a href="one.xhtml#start">Back</a></body></html>');
+  const metadata = await book(files);
+  assert.deepEqual(metadata.spine.map(item => item.linear), [false, true, false]);
+  assert.equal(metadata.outline[0].children[0].navigable, true);
+  const reads: string[] = [];
+  const read = async (path: string) => { reads.push(path); return new TextEncoder().encode(files.get(path)!); };
+  const chapter = await prepareEpubChapter(metadata, 1, read);
+  const chapterDoc = new DOMParser().parseFromString(chapter.html, 'text/html');
+  assert.deepEqual(JSON.parse(chapterDoc.querySelector('a')!.getAttribute('data-epub-link')!), { path: 'OPS/chapters/二 章.xhtml', fragment: 'end' });
+  assert(!reads.includes('OPS/chapters/二 章.xhtml'));
+  const note = await prepareEpubChapter(metadata, 2, read);
+  const noteDoc = new DOMParser().parseFromString(note.html, 'text/html');
+  assert.deepEqual(JSON.parse(noteDoc.querySelector('a')!.getAttribute('data-epub-link')!), { path: 'OPS/chapters/one.xhtml', fragment: 'start' });
+  chapter.release(); note.release();
 });
 
 const { acquireEpubSource } = await import('./readers/epub-source.ts');
@@ -112,14 +132,14 @@ test('EPUB tree/reader share metadata and release the worker only after the fina
   const worker = EpubWorker.instances[0];
   assert(!worker.messages.some(message => message.path?.includes('chapters/')));
   tree.release(); await tick(); assert.equal(worker.terminated, false);
-  const chapter = await reader.chapter(0); chapter.release();
+  const chapter = await reader.chapter(1); chapter.release();
   reader.release(); await tick(); assert.equal(worker.terminated, true);
 });
 test('Leaving a loading EPUB chapter stops further resources and discards its late bytes', async t => {
   mockWorker(t, 'OPS/chapters/one.xhtml');
   const source = acquireEpubSource('cancel.epub'); t.after(source.release);
   await source.book;
-  const cancel = new AbortController(), pending = source.chapter(0, cancel.signal);
+  const cancel = new AbortController(), pending = source.chapter(1, cancel.signal);
   const rejected = assert.rejects(pending, { name: 'AbortError' });
   await tick(); await tick();
   cancel.abort(); const worker = EpubWorker.instances[0]; worker.reply();
@@ -141,4 +161,34 @@ test('EPUB timeout reports an outline error and stops the worker instead of load
   t.mock.timers.tick(60_001); await rejected; await tick(); await tick();
   assert.equal(EpubWorker.instances[0].terminated, true);
   assert.equal(states.at(-1), 'error');
+});
+
+test('decoded ZIP base paths preserve reserved characters throughout package, outline and resources', async () => {
+  for (const segment of ['part#1', 'part?1', 'part%20', '章节 空格']) {
+    const files = new Map([...fixture()].map(([path, content]) => [path.replace('OPS/', `OPS/${segment}/`), content]));
+    files.set('META-INF/container.xml', container.replace('OPS/book.opf', `OPS/${segment}/book.opf`));
+    const value = await book(files);
+    assert.equal(value.spine[1].path, `OPS/${segment}/chapters/one.xhtml`);
+    assert.equal(value.destinations.get(value.outline[0].id)!.path, value.spine[1].path);
+    const chapter = await prepareEpubChapter(value, 1, async path => {
+      assert(files.has(path), path); return new TextEncoder().encode(files.get(path)!);
+    });
+    assert.match(chapter.html, /blob:/); chapter.release();
+    assert.deepEqual(epubLink('二%20章.xhtml#end%23here', value.spine[1].path), {
+      path: `OPS/${segment}/chapters/二 章.xhtml`, fragment: 'end#here',
+    });
+  }
+});
+
+test('EPUB viewport CSS uses a stable outer viewport without changing strings, URLs or comments', async () => {
+  const { stabilizeEpubCss, setEpubViewport } = await import('./readers/epub-layout.ts');
+  assert.equal(stabilizeEpubCss('body{min-height:100vh;width:90svw;padding:calc(2dvh + 1vmin);--size:1e2vmax}'),
+    'body{min-height:calc(100 * var(--anther-epub-vh));width:calc(90 * var(--anther-epub-vw));padding:calc(calc(2 * var(--anther-epub-vh)) + calc(1 * var(--anther-epub-vmin)));--size:calc(1e2 * var(--anther-epub-vmax))}');
+  const literal = '/* 100vh */ p{content:"100vh";background:url(20vh.png);--100vh:1}';
+  assert.equal(stabilizeEpubCss(literal), literal);
+  const doc = dom.window.document.implementation.createHTMLDocument();
+  setEpubViewport(doc, 400, 600, 2);
+  assert.equal(doc.documentElement.style.height, '300px');
+  assert.equal(doc.documentElement.style.getPropertyValue('--anther-epub-vh'), '3px');
+  assert.equal(doc.documentElement.style.getPropertyValue('--anther-epub-vw'), '2px');
 });

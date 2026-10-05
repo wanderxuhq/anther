@@ -12,7 +12,7 @@ export function MarkdownPreview(props: { content: string; path?: string; allowRe
     if (heading) props.onHeading?.(heading.dataset.mdHeading!);
   };
   onMount(() => props.onNavigator?.((id) => {
-    if (id === '') { viewport.scrollTop = 0; return; }
+    if (id === '') { viewport.scrollTop = 0; props.onHeading?.(''); return; }
     const heading = [...viewport.querySelectorAll<HTMLElement>('[data-md-heading]')].find((element) => element.dataset.mdHeading === id);
     if (!heading) throw new Error('Heading unavailable');
     viewport.scrollTop += heading.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 12;

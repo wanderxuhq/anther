@@ -3,6 +3,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULT_STATE, parseUrl, serializeUrl } from './url-state.ts';
 
+test('rendered reading positions take precedence over conflicting source line coordinates', () => {
+  const state = parseUrl('http://host/README.md#heading:3;line:8');
+  assert.equal(state.line, null);
+  assert.equal(serializeUrl({ ...state, line: { start: 8, end: 8 } }), '/README.md#heading:3');
+  assert.deepEqual(parseUrl('http://host/README.md#line:8').line, { start: 8, end: 8 });
+});
+
 test('阅读位置按文件类型恢复，包含嵌套压缩包和缩放', () => {
   for (const href of [
     '/book.epub#lbp:2@1/3%2342;zoom:125',
