@@ -73,7 +73,7 @@ export async function main(argv: string[]): Promise<void> {
   const git = new Git(dir);
   registerFsRoutes(http, files);
   registerTabsRoutes(http, tabs);
-  registerTerminalRoutes(http, terminals);
+  registerTerminalRoutes(http, terminals, files);
   registerGitRoutes(http, git);
   registerSystemRoutes(http, dir);
   registerIdentifyRoutes(http, dir);

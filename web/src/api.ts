@@ -138,6 +138,11 @@ export const api = {
     list: () => request<{ terminals: TerminalInfo[] }>('GET', '/api/terminals'),
     create: (name: string) => request<TerminalInfo>('POST', '/api/terminals', { name }),
     close: (id: string) => request('POST', '/api/terminals/close', { id }),
+    resolve: (path: string, cwd?: string) => {
+      const query = new URLSearchParams({ path });
+      if (cwd) query.set('cwd', cwd);
+      return request<LocatedPath>('GET', `/api/terminal/resolve?${query}`);
+    },
   },
   git: {
     status: () => request<GitStatus>('GET', '/api/git/status'),
@@ -237,6 +242,7 @@ export function searchStream(
 }
 
 export type TerminalInfo = { id: string; name: string };
+export type LocatedPath = { path: string; kind: 'file' | 'dir' };
 
 export type TerminalHandlers = {
   /** 每次 WS 打开（含重连）：前端清屏，等服务端历史重放重建画面 */

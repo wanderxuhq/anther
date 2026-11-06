@@ -305,8 +305,12 @@ export function applyTheme(t: 'auto' | 'light' | 'dark'): void {
   }
 }
 
+// 从终端点开文件时记住来源标签；预览关闭后回到终端，而不是随机文件标签。
+let filePreviewOrigin: string | null = null;
+
 /** 打开/前台一个文件标签 */
 export async function openTab(path: string, line: LineRange | null = null, entry: string | null = null, chain: string[] = []): Promise<void> {
+  filePreviewOrigin = null;
   if (isDatabaseFile(path)) { openDatabaseTab(path); return; }
   batch(() => {
     if (currentFile() !== path || entry !== null || chain.length > 0) setFilePosition(null);
@@ -322,6 +326,26 @@ export async function openTab(path: string, line: LineRange | null = null, entry
   saveTabsSnapshot(fileTabPaths(tabs()));
   pushState();
   await registerFile(path);
+}
+
+/** 终端点开文件：复用现有文件标签/预览链路，并记住来源终端。 */
+export async function openPreviewTab(path: string, line: LineRange | null = null): Promise<void> {
+  const origin = currentTabId();
+  await openTab(path, line);
+  filePreviewOrigin = origin;
+}
+
+/** 关闭当前文件预览；优先回到打开它的终端标签。 */
+export async function closePreviewTab(): Promise<void> {
+  const tab = activeTab();
+  if (tab?.kind !== 'file') return;
+  const origin = filePreviewOrigin;
+  filePreviewOrigin = null;
+  await closeTab(tab.path);
+  if (origin && tabs().some((item) => item.id === origin)) {
+    setCurrentTabId(origin);
+    pushState();
+  }
 }
 
 /** 打开/切换压缩包内部文件；通过 openTab 只写入一次导航历史。 */

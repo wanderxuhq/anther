@@ -12,7 +12,7 @@ import { BranchView } from './views/branch.tsx';
 import { CommitView } from './views/commit.tsx';
 import { api } from './api.ts';
 import {
-  activeTab, currentTabId, setCurrentTabId, openTerminal,
+  activeTab, currentTabId, setCurrentTabId, openTerminal, closePreviewTab,
   readingLocationFor, readerRestoreRequest, updateReadingLocation,
   openGit, openDatabaseTab, closeTab,
   archiveChain, archiveEntry, openArchiveEntry, activeArchiveRoot,
@@ -533,6 +533,19 @@ export function App() {
             🔍
           </button>
           <span class="toolbar-path" title={browsingArchive() ? [currentFile(), ...archiveChain(), archiveEntry()].filter(Boolean).join(' › ') : undefined}>{toolbarPathLabel()}</span>
+          <Show when={activeTab()?.kind === 'file'}>
+            <button
+              class="icon-btn preview-close"
+              onClick={() => void closePreviewTab().catch(() => { /* 关闭失败时保留预览 */ })}
+              title={t('preview.close')}
+              aria-label={t('preview.close')}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="1.75" stroke-linecap="round" aria-hidden="true">
+                <path d="M6 6l12 12M18 6 6 18" />
+              </svg>
+            </button>
+          </Show>
           <Show when={canPreviewMarkdown() || canPreviewTable()}>
             <button
               class="icon-btn markdown-toggle"

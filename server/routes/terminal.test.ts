@@ -2,17 +2,19 @@
 // 终端 HTTP + WS 集成测试（真实 script PTY + 真实 ws 客户端）。
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { WebSocket } from 'ws';
 import { HttpServer } from '../http.ts';
 import { TerminalManager } from '../terminal.ts';
+import { FileStore } from '../files.ts';
 import { registerTerminalRoutes } from './terminal.ts';
 
 let root: string;
 let server: HttpServer;
 let terminals: TerminalManager;
+let files: FileStore;
 let base: string;
 let port: number;
 
@@ -20,7 +22,8 @@ beforeEach(async () => {
   root = await mkdtemp(path.join(tmpdir(), 'anther-term-'));
   server = new HttpServer({ staticDir: root });
   terminals = new TerminalManager(process.cwd());
-  registerTerminalRoutes(server, terminals);
+  files = new FileStore(root);
+  registerTerminalRoutes(server, terminals, files);
   await server.listen(0, '127.0.0.1');
   port = (server.address() as { port: number }).port;
   base = `http://127.0.0.1:${port}`;
@@ -99,6 +102,37 @@ test('WS 集成：历史重放 → input echo → ping/pong → exit', async () 
   ws.send(JSON.stringify({ type: 'input', data: 'exit\n' }));
   await waitFor(() => frames.some((f) => f.type === 'exit'));
   ws.close();
+});
+
+test('resolve：工作区相对路径、cwd 相对路径、目录、越界与缺失', async () => {
+  await mkdir(path.join(root, 'src'), { recursive: true });
+  await mkdir(path.join(root, 'docs'), { recursive: true });
+  await writeFile(path.join(root, 'src', 'foo.ts'), 'export {};');
+  await writeFile(path.join(root, 'README.md'), '# hi');
+
+  const rootRelative = await call('GET', '/api/terminal/resolve?path=src%2Ffoo.ts');
+  assert.equal(rootRelative.status, 200);
+  assert.deepEqual(await rootRelative.json(), { path: 'src/foo.ts', kind: 'file' });
+
+  const fromCwd = await call('GET', '/api/terminal/resolve?path=foo.ts&cwd=src');
+  assert.equal(fromCwd.status, 200);
+  assert.deepEqual(await fromCwd.json(), { path: 'src/foo.ts', kind: 'file' });
+
+  const dir = await call('GET', '/api/terminal/resolve?path=docs');
+  assert.equal(dir.status, 200);
+  assert.deepEqual(await dir.json(), { path: 'docs', kind: 'dir' });
+
+  const home = await call('GET', '/api/terminal/resolve?path=~%2FREADME.md');
+  assert.equal(home.status, 200);
+  assert.deepEqual(await home.json(), { path: 'README.md', kind: 'file' });
+
+  const osc7Cwd = await call('GET', `/api/terminal/resolve?path=foo.ts&cwd=${encodeURIComponent(`file://localhost${path.join(root, 'src')}`)}`);
+  assert.equal(osc7Cwd.status, 200);
+  assert.deepEqual(await osc7Cwd.json(), { path: 'src/foo.ts', kind: 'file' });
+
+  assert.equal((await call('GET', '/api/terminal/resolve?path=missing.ts')).status, 404);
+  assert.equal((await call('GET', '/api/terminal/resolve?path=..%2Foutside.ts')).status, 404);
+  assert.equal((await call('GET', '/api/terminal/resolve')).status, 400);
 });
 
 test('WS 无效 id / 他人终端 → 拒绝（close 4404）', async () => {

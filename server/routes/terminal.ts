@@ -6,6 +6,7 @@
 import type { HttpServer } from '../http.ts';
 import { HttpError } from '../http-error.ts';
 import type { TerminalManager } from '../terminal.ts';
+import type { FileStore } from '../files.ts';
 import { WebSocket } from 'ws';
 
 const userId = (req: import('node:http').IncomingMessage): string => {
@@ -15,7 +16,16 @@ const userId = (req: import('node:http').IncomingMessage): string => {
 
 const WS_FORBIDDEN = 4404; // 应用自定义关闭码：终端不存在/不属于该用户
 
-export function registerTerminalRoutes(http: HttpServer, terminals: TerminalManager): void {
+export function registerTerminalRoutes(http: HttpServer, terminals: TerminalManager, files?: FileStore): void {
+  // 终端输出里的路径 → 工作区文件/目录。cwd 来自 OSC 7（shell 当前目录）。
+  http.get('/api/terminal/resolve', async (req) => {
+    if (!files) throw new HttpError(404, 'not found');
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const raw = url.searchParams.get('path');
+    if (!raw) throw new HttpError(400, 'missing path');
+    return files.locateTerminalPath(raw, url.searchParams.get('cwd') ?? '');
+  });
+
   http.post('/api/terminals', async (req, body) => {
     // name 由前端本地生成（含本地化）后随请求传入；服务端不命名、不兜底
     if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');

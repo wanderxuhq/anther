@@ -11,6 +11,9 @@ export type DirEntry = {
   mtime: number;
 };
 
+/** 终端输出里点开的路径：工作区相对路径 + 文件/目录类型。 */
+export type LocatedPath = { path: string; kind: 'file' | 'dir' };
+
 export type SearchMatch = { line: number; col: number; text: string };
 export type SearchOptions = {
   caseSensitive?: boolean;
@@ -96,6 +99,53 @@ export class FileStore {
       }
       return suffix.length === 0 ? real : path.join(real, ...suffix);
     }
+  }
+
+  /**
+   * 解析终端里点开的路径。先按 shell 当前目录（OSC 7 上报，绝对路径）尝试，
+   * 再按工作区根目录尝试。只返回根目录内的文件/目录；越界或不存在 → 404。
+   */
+  async locateTerminalPath(rawPath: string, cwd = ''): Promise<LocatedPath> {
+    const raw = rawPath.trim();
+    if (!raw) throw new HttpError(400, 'missing path');
+    const cwdPath = this.fileUrlPath(cwd);
+    const candidates: string[] = [];
+    if (raw === '~' || raw.startsWith('~/')) {
+      // ~ 始终指工作区根，不跟随 shell 当前目录。
+      candidates.push(path.resolve(this.root, raw === '~' ? '.' : raw.slice(2)));
+    } else if (path.isAbsolute(raw)) {
+      candidates.push(raw);
+    } else {
+      if (cwdPath) {
+        const base = path.isAbsolute(cwdPath) ? cwdPath : path.resolve(this.root, cwdPath);
+        candidates.push(path.resolve(base, raw));
+      }
+      candidates.push(path.resolve(this.root, raw));
+    }
+    for (const abs of candidates) {
+      try {
+        const rootAbs = path.resolve(this.root);
+        const rel = path.relative(rootAbs, abs);
+        if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) continue;
+        return await this.locate(rel === '' ? '.' : rel.split(path.sep).join('/'));
+      } catch { /* 试下一个候选路径 */ }
+    }
+    throw new HttpError(404, 'not found');
+  }
+
+  /** 工作区相对路径 → 规范化相对路径 + 类型（跟随根内符号链接，越界拒绝）。 */
+  async locate(relPath: string): Promise<LocatedPath> {
+    const abs = await this.resolveSafe(relPath);
+    let stat;
+    try {
+      stat = await fs.stat(abs);
+    } catch (e: unknown) {
+      throw this.mapFsError(e);
+    }
+    const rootReal = await fs.realpath(this.root);
+    let rel = path.relative(rootReal, abs).split(path.sep).join('/');
+    if (rel === '') rel = '.';
+    return { path: rel, kind: stat.isDirectory() ? 'dir' : 'file' };
   }
 
   async list(relPath: string): Promise<DirEntry[]> {
@@ -314,6 +364,12 @@ export class FileStore {
     } catch {
       return false;
     }
+  }
+
+  /** OSC 7 的 cwd 可能是 file:// URL；转成普通路径。 */
+  private fileUrlPath(value: string): string {
+    if (!value.startsWith('file://')) return value;
+    try { return decodeURIComponent(new URL(value).pathname); } catch { return value; }
   }
 
   private hasInvalidUtf8(buf: Buffer): boolean {

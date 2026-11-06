@@ -20,10 +20,20 @@ export class PtySession extends EventEmitter {
 
   constructor(cwd: string) {
     super();
+    // OSC 7 上报当前目录：前端据此把终端里的相对路径解析成工作区文件。
+    // PROMPT_COMMAND 走环境变量注入，不改用户 .bashrc；用户自己的 PROMPT_COMMAND 保留在前。
+    const osc7 = `printf '\\033]7;file://%s%s\\007' "\${HOSTNAME:-localhost}" "$PWD"`;
+    const promptCommand = process.env.PROMPT_COMMAND
+      ? `${process.env.PROMPT_COMMAND}; ${osc7}`
+      : osc7;
     this.child = spawn(
       'script',
       ['-qfc', 'echo PTYMARKER $(tty); exec bash', '/dev/null'],
-      { cwd, stdio: ['pipe', 'pipe', 'pipe'] },
+      {
+        cwd,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, PROMPT_COMMAND: promptCommand, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+      },
     );
     this.pid = this.child.pid ?? 0;
     this.ready = new Promise((resolve, reject) => {

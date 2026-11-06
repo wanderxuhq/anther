@@ -13,7 +13,7 @@ import { withFileMutation } from '../file-operations.ts';
 import { createEffect, createSignal, ErrorBoundary, For, lazy, Show, Suspense, onCleanup } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { api, type DirEntry } from '../api.ts';
-import { archiveChain, archiveEntry, activeArchiveRoot, currentFile, activeTab, openDatabaseTab, relocateFileTabs, openTab, tabs } from '../stores.ts';
+import { archiveChain, archiveEntry, activeArchiveRoot, currentFile, activeTab, openDatabaseTab, relocateFileTabs, openTab, tabs, setActivePanel, setDrawerOpen, pushState } from '../stores.ts';
 import { parentOf } from '../paths.ts';
 import { NameDialog, type DialogState } from '../components/name-dialog.tsx';
 import { t } from '../i18n.ts';
@@ -49,6 +49,25 @@ let confirmTimer: ReturnType<typeof setTimeout> | undefined;
 /** 根目录子项不带 './' 前缀：与 URL/currentFile 中的相对路径形式一致，保证高亮可匹配 */
 function childPath(parent: string, name: string): string {
   return parent === '.' ? name : `${parent}/${name}`;
+}
+
+/** 终端里点开目录：切到文件面板并逐级展开到该目录。 */
+export async function revealDirectory(path: string): Promise<void> {
+  setActivePanel('files');
+  setDrawerOpen(true);
+  pushState();
+  await ensureRoot();
+  let parent = '.';
+  for (const part of path.split('/').filter(Boolean)) {
+    const child = childPath(parent, part);
+    if (!nodes[child]?.loaded) {
+      const { entries } = await api.list(child);
+      setNodes(child, { expanded: true, loaded: entries });
+    } else {
+      setNodes(child, 'expanded', true);
+    }
+    parent = child;
+  }
 }
 
 async function ensureRoot(): Promise<void> {
