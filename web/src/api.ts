@@ -281,20 +281,26 @@ export function connectTerminal(id: string, handlers: TerminalHandlers, urlOverr
 
   const open = () => {
     if (disposed || dead) return;
-    ws = new WebSocket(urlOverride ?? `/api/terminal?term=${encodeURIComponent(id)}&user=${encodeURIComponent(user)}`);
-    ws.onopen = () => {
+    const socket = new WebSocket(urlOverride ?? `/api/terminal?term=${encodeURIComponent(id)}&user=${encodeURIComponent(user)}`);
+    ws = socket;
+    // 重连后旧 socket 仍可能投递已排队的消息；只认当前 socket，避免把历史重放
+    // 处理两次（表现为本地多出一行重复提示符）。
+    socket.onopen = () => {
+      if (socket !== ws) return;
       attempt = 0;
       const q = pending; pending = [];   // 先 flush 排队的 resize/input
-      for (const f of q) ws!.send(f);
+      for (const f of q) socket.send(f);
       handlers.onOpen();                 // 再清屏等服务端历史重放
     };
-    ws.onmessage = (e) => {
+    socket.onmessage = (e) => {
+      if (socket !== ws) return;
       let msg: { type?: string; data?: string; code?: number };
       try { msg = JSON.parse(String(e.data)); } catch { return; }
       if (msg.type === 'output' && typeof msg.data === 'string') handlers.onOutput(msg.data);
       else if (msg.type === 'exit') { dead = true; handlers.onExit(typeof msg.code === 'number' ? msg.code : 0); }
     };
-    ws.onclose = (e) => {
+    socket.onclose = (e) => {
+      if (socket !== ws) return;
       ws = null;
       if (disposed || dead) return;
       if (e.code === 4404) { dead = true; handlers.onExit(1); return; } // 终端已不存在/被删
@@ -302,7 +308,7 @@ export function connectTerminal(id: string, handlers: TerminalHandlers, urlOverr
       attempt += 1;
       timer = setTimeout(open, delay);
     };
-    ws.onerror = () => { /* 由 onclose 接管重连 */ };
+    socket.onerror = () => { /* 由 onclose 接管重连 */ };
   };
   open();
 
