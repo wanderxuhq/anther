@@ -493,6 +493,14 @@ export function TerminalView(props: { id: string }) {
     if (reportMouse(event, event.deltaY < 0 ? 64 : 65)) event.preventDefault();
   };
 
+  const focusOnPaneClick = (event: MouseEvent) => {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('button, a, input, textarea, select, [role="button"]')) return;
+    // 在终端内容上拖选文本时不抢焦点；点空白/工具栏区域则总是聚焦。
+    if (scrollEl?.contains(target) && window.getSelection()?.toString()) return;
+    focusInput?.();
+  };
+
   const handleClick = (event: MouseEvent) => {
     const element = event.target as HTMLElement | null;
     const target = element?.closest<HTMLElement>('[data-term-path]');
@@ -522,7 +530,7 @@ export function TerminalView(props: { id: string }) {
   };
 
   return (
-    <div class="terminal-pane" ref={(el) => (paneEl = el)}>
+    <div class="terminal-pane" ref={(el) => (paneEl = el)} onClick={focusOnPaneClick}>
       <div class="terminal-toolbar">
         <div class="terminal-mode" role="group" aria-label={t('terminal.renderMode')}>
           <button
