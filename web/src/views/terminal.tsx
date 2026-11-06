@@ -57,6 +57,13 @@ export function TerminalView(props: { id: string }) {
   let lastRows = 0;
   let cellWidth = 0;
   let cellHeight = 0;
+  // 键盘未弹出时的稳定尺寸。手机软键盘只遮挡可视区，不改变终端逻辑行列。
+  let stableWidth = 0;
+  let stableHeight = 0;
+  let stableCols = 0;
+  let stableRows = 0;
+  let keyboardOpen = false;
+  let lastAltMode = false;
   let lastMode: 'html' | 'text' = 'html';
   let lastAlt = false;
   let renderedStart = -1;
@@ -106,11 +113,45 @@ export function TerminalView(props: { id: string }) {
     if (!width || !height) return;
     cellWidth = width;
     cellHeight = height;
+    const paneWidth = scroller.clientWidth;
+    const paneHeight = scroller.clientHeight;
     const style = getComputedStyle(scroller);
     const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
     const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
-    const cols = Math.max(20, Math.floor((scroller.clientWidth - padX) / width));
-    const rows = Math.max(5, Math.floor((scroller.clientHeight - padY) / height));
+    const cols = Math.max(20, Math.floor((paneWidth - padX) / width));
+    const rows = Math.max(5, Math.floor((paneHeight - padY) / height));
+
+    // 软键盘只缩小可视区：普通 shell 保持终端行列不变，避免 SIGWINCH/readline 重画；
+    // 全屏 TUI（alt screen）仍按可视高度 resize，让它自己重排。
+    const coarse = window.matchMedia('(pointer: coarse)').matches;
+    const alt = screen.getMode('altScreen') === true;
+    const widthChanged = Math.abs(paneWidth - stableWidth) > 40;
+    const heightShrank = stableHeight > 0 && paneHeight < stableHeight - 80;
+    const keyboard = coarse && !widthChanged && heightShrank;
+
+    if (keyboard && !alt) {
+      if (!keyboardOpen) {
+        keyboardOpen = true;
+        requestAnimationFrame(() => {
+          if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
+        });
+      }
+      // 如果刚退出 alt screen，恢复到键盘未弹出时的稳定尺寸。
+      if (screen.cols !== stableCols || screen.screenRows() !== stableRows) {
+        screen.resize(stableCols, stableRows);
+        socket?.resize(stableCols, stableRows);
+        scheduleRender();
+      }
+      return;
+    }
+
+    keyboardOpen = false;
+    if (!keyboard) {
+      stableWidth = paneWidth;
+      stableHeight = paneHeight;
+      stableCols = cols;
+      stableRows = rows;
+    }
     if (cols === lastCols && rows === lastRows) return;
     lastCols = cols;
     lastRows = rows;
@@ -246,6 +287,12 @@ export function TerminalView(props: { id: string }) {
     setCtrlArmed(false);
     lastCols = 0;
     lastRows = 0;
+    stableWidth = 0;
+    stableHeight = 0;
+    stableCols = 0;
+    stableRows = 0;
+    keyboardOpen = false;
+    lastAltMode = false;
     lastMode = terminalRenderMode();
     lastAlt = false;
 
@@ -295,6 +342,12 @@ export function TerminalView(props: { id: string }) {
       textCache = [];
       lastFirst = -1;
       lastCursorAbs = -1;
+      stableWidth = 0;
+      stableHeight = 0;
+      stableCols = 0;
+      stableRows = 0;
+      keyboardOpen = false;
+      lastAltMode = false;
     });
   }));
 
@@ -302,7 +355,14 @@ export function TerminalView(props: { id: string }) {
   createEffect(() => {
     terminalRenderMode();
     tick();
-    if (screen) scheduleRender();
+    if (!screen) return;
+    const alt = screen.getMode('altScreen') === true;
+    if (alt !== lastAltMode) {
+      lastAltMode = alt;
+      // 进入/退出全屏 TUI 时重新按当前可视高度决定是否 resize。
+      scheduleResize();
+    }
+    scheduleRender();
   });
 
   // 字号跟随全局设置；重新测量列宽/行高后回发 resize。
