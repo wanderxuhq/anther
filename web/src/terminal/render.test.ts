@@ -1,7 +1,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
-import { createVtermScreen, type ScreenCell } from 'vterm.js';
+import { createTerminalScreen, type ScreenCell } from './vt.ts';
 
 const dom = new JSDOM('');
 Object.assign(globalThis, { window: dom.window });
@@ -9,8 +9,8 @@ const { renderRow, rowClass, rowText } = await import('./render.ts');
 after(() => { dom.window.close(); delete (globalThis as Record<string, unknown>).window; });
 
 function cells(text: string, cols = 80): ScreenCell[] {
-  const screen = createVtermScreen({ cols, rows: 1 });
-  screen.process(new TextEncoder().encode(text));
+  const screen = createTerminalScreen({ cols, rows: 1 });
+  screen.process(text);
   return screen.getRow(0);
 }
 

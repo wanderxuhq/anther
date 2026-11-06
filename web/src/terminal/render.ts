@@ -1,10 +1,10 @@
 // web/src/terminal/render.ts
-// 把 vterm.js 的单元格网格渲染成 HTML。两种模式共用同一份屏幕缓冲区：
+// 把自研 VT 引擎的单元格网格渲染成 HTML。两种模式共用同一份屏幕缓冲区：
 // - html：链接化文件路径、识别 Markdown（标题/列表/引用/代码围栏/内联样式）
 // - text：经典等宽纯文字（保留 ANSI 颜色，不做链接/Markdown）
 // 纯函数，便于 node:test 直接覆盖；DOM 更新在 views/terminal.tsx。
 
-import type { ScreenCell } from 'vterm.js';
+import type { ScreenCell } from './vt.ts';
 import { splitLinks, type TermLink } from './linkify.ts';
 import type { MarkdownBlock } from './markdown-blocks.ts';
 import { renderMarkdownInline } from '../markdown.ts';

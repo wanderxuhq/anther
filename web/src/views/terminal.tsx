@@ -1,11 +1,11 @@
 // web/src/views/terminal.tsx
-// HTML 终端：vterm.js 只负责解析 VT 序列/维护屏幕缓冲区，渲染完全由本组件控制。
+// HTML 终端：terminal/vt.ts 负责解析 VT 序列/维护屏幕缓冲区，渲染完全由本组件控制。
 // 同一份缓冲区可切换两种渲染：
 //   html（默认）— 路径可点、Markdown 可视化、长行自动换行
 //   text        — 经典等宽纯文字（保留 ANSI 颜色，不做链接/Markdown）
 // 切换只重绘，不重置 PTY、屏幕缓冲区或输入状态。
 import { createEffect, createSignal, For, on, onCleanup, Show } from 'solid-js';
-import { createVtermScreen, type VtermScreen as Screen, type ScreenCell } from 'vterm.js';
+import { createTerminalScreen, type TerminalScreen as Screen, type ScreenCell } from '../terminal/vt.ts';
 import { api, connectTerminal, type TerminalSocket } from '../api.ts';
 import { fontScale, openPreviewTab, removeTerminalTab } from '../stores.ts';
 import { t } from '../i18n.ts';
@@ -16,7 +16,7 @@ import { renderRow, rowClass, rowText } from '../terminal/render.ts';
 import { keyToSequence, pasteInput } from '../terminal/input.ts';
 import { revealDirectory } from './filetree.tsx';
 
-const MAX_SCROLLBACK_ROWS = 5000;
+const MAX_SCROLLBACK_ROWS = 2000;
 const FONT_SCALE_TO_PX = 0.14;
 
 function blockKey(block: MarkdownBlock): string {
@@ -54,6 +54,8 @@ export function TerminalView(props: { id: string }) {
   let skipInput = false;
   let lastCols = 0;
   let lastRows = 0;
+  let cellWidth = 0;
+  let cellHeight = 0;
   let lastMode: 'html' | 'text' = 'html';
   let lastAlt = false;
   let renderedStart = -1;
@@ -98,14 +100,16 @@ export function TerminalView(props: { id: string }) {
     const measure = measureEl;
     if (!scroller || !measure || !screen) return;
     measure.textContent = 'M'.repeat(50);
-    const cellWidth = measure.getBoundingClientRect().width / 50;
-    const cellHeight = measure.getBoundingClientRect().height;
-    if (!cellWidth || !cellHeight) return;
+    const width = measure.getBoundingClientRect().width / 50;
+    const height = measure.getBoundingClientRect().height;
+    if (!width || !height) return;
+    cellWidth = width;
+    cellHeight = height;
     const style = getComputedStyle(scroller);
     const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
     const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
-    const cols = Math.max(20, Math.floor((scroller.clientWidth - padX) / cellWidth));
-    const rows = Math.max(5, Math.floor((scroller.clientHeight - padY) / cellHeight));
+    const cols = Math.max(20, Math.floor((scroller.clientWidth - padX) / width));
+    const rows = Math.max(5, Math.floor((scroller.clientHeight - padY) / height));
     if (cols === lastCols && rows === lastRows) return;
     lastCols = cols;
     lastRows = rows;
@@ -177,7 +181,7 @@ export function TerminalView(props: { id: string }) {
     }
 
     // 只物化脏行/新行的单元格；未变化的行复用文本缓存，避免每帧重建整个滚动缓冲区。
-    // 单元格对象只在本次渲染内短暂保留，不长期缓存（否则会和 vterm 的网格重复占内存）。
+    // 单元格对象只在本次渲染内短暂保留，不长期缓存（否则会和 VT 屏幕网格重复占内存）。
     const freshCells = new Map<number, ScreenCell[]>();
     for (let index = 0; index < count; index++) {
       const absolute = start + index;
@@ -224,7 +228,7 @@ export function TerminalView(props: { id: string }) {
     else scroller.scrollTop = oldScrollTop;
   };
 
-  // 每个终端 id 一套 vterm 缓冲区 + WS；渲染模式变化不会进入这里。
+  // 每个终端 id 一套 VT 缓冲区 + WS；渲染模式变化不会进入这里。
   createEffect(on(() => props.id, (id) => {
     resetRendered();
     setCtrlArmed(false);
@@ -233,19 +237,18 @@ export function TerminalView(props: { id: string }) {
     lastMode = terminalRenderMode();
     lastAlt = false;
 
-    const s = createVtermScreen({
+    const s = createTerminalScreen({
       cols: 80,
       rows: 24,
       scrollbackLimit: MAX_SCROLLBACK_ROWS,
       onResponse: (data) => sendText(data),
     });
     screen = s;
-    const encoder = new TextEncoder();
 
     const sock = connectTerminal(id, {
       // 首次/重连：清空本地缓冲区，等服务端历史重放重建画面（进程与信号不中断）。
       onOpen: () => { s.reset(); resetRendered(); scheduleRender(); },
-      onOutput: (data) => { s.process(encoder.encode(data)); setTick((value) => value + 1); },
+      onOutput: (data) => { s.process(data); setTick((value) => value + 1); },
       onExit: () => removeTerminalTab(id),
     });
     socket = sock;
@@ -314,6 +317,24 @@ export function TerminalView(props: { id: string }) {
   };
 
   const handleKeyDown = (event: KeyboardEvent) => {
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'c') {
+      const text = window.getSelection()?.toString();
+      if (text) {
+        event.preventDefault();
+        void navigator.clipboard?.writeText(text).catch(() => { /* 无剪贴板权限时忽略 */ });
+        return;
+      }
+    }
+    if (event.shiftKey && event.key === 'PageUp') {
+      event.preventDefault();
+      scrollEl?.scrollBy({ top: -scrollEl.clientHeight * 0.9 });
+      return;
+    }
+    if (event.shiftKey && event.key === 'PageDown') {
+      event.preventDefault();
+      scrollEl?.scrollBy({ top: scrollEl.clientHeight * 0.9 });
+      return;
+    }
     if (ctrlArmed() && !event.ctrlKey && !event.metaKey && !event.altKey && !event.isComposing) {
       const data = controlChar(event.key);
       if (data !== null) {
@@ -365,6 +386,38 @@ export function TerminalView(props: { id: string }) {
     if (text) sendText(text);
     skipInput = true;
     queueMicrotask(() => { skipInput = false; });
+  };
+
+  const reportMouse = (event: MouseEvent, button: number, release = false): boolean => {
+    const rows = rowsEl;
+    if (!rows || !cellWidth || !cellHeight) return false;
+    const rect = rows.getBoundingClientRect();
+    const col = Math.max(0, Math.min(lastCols - 1, Math.floor((event.clientX - rect.left) / cellWidth)));
+    const row = Math.max(0, Math.min(lastRows - 1, Math.floor((event.clientY - rect.top) / cellHeight)));
+    if (screen?.getMode('sgrMouse') === true) {
+      sendText(`\x1b[<${button};${col + 1};${row + 1}${release ? 'm' : 'M'}`);
+    } else {
+      sendText(`\x1b[M${String.fromCharCode(32 + (release ? 3 : button), 32 + col + 1, 32 + row + 1)}`);
+    }
+    return true;
+  };
+
+  const handlePointerDown = (event: PointerEvent) => {
+    if (event.button !== 0) return;
+    if ((event.target as HTMLElement | null)?.closest('.term-link, .term-url')) return;
+    if (screen?.getMode('mouseTracking') === true) reportMouse(event, 0);
+  };
+
+  const handlePointerUp = (event: PointerEvent) => {
+    if (event.button !== 0) return;
+    if ((event.target as HTMLElement | null)?.closest('.term-link, .term-url')) return;
+    if (screen?.getMode('mouseTracking') === true) reportMouse(event, 0, true);
+  };
+
+  const handleWheel = (event: WheelEvent) => {
+    // 只在全屏 TUI 里把滚轮交给应用；普通 shell 保留原生回滚。
+    if (screen?.getMode('mouseTracking') !== true || screen?.getMode('altScreen') !== true) return;
+    if (reportMouse(event, event.deltaY < 0 ? 64 : 65)) event.preventDefault();
   };
 
   const handleClick = (event: MouseEvent) => {
@@ -425,6 +478,9 @@ export function TerminalView(props: { id: string }) {
         classList={{ 'terminal-html': terminalRenderMode() === 'html', 'terminal-text': terminalRenderMode() === 'text' }}
         ref={(el) => (scrollEl = el)}
         onClick={handleClick}
+        onWheel={handleWheel}
+        onPointerDown={handlePointerDown}
+        onPointerUp={handlePointerUp}
       >
         <div class="terminal-rows" ref={(el) => (rowsEl = el)} />
         <span class="terminal-measure" ref={(el) => (measureEl = el)} aria-hidden="true" />
@@ -444,6 +500,8 @@ export function TerminalView(props: { id: string }) {
         onPaste={handlePaste}
         onCompositionStart={() => { composing = true; }}
         onCompositionEnd={handleCompositionEnd}
+        onFocus={() => { if (screen?.getMode('focusTracking') === true) sendText('\x1b[I'); }}
+        onBlur={() => { if (screen?.getMode('focusTracking') === true) sendText('\x1b[O'); }}
       />
 
       <div class="terminal-keys" role="toolbar" aria-label={t('terminal.keys')}>

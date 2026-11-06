@@ -1,0 +1,185 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createTerminalScreen, type ScreenCell } from './vt.ts';
+
+function text(cells: readonly ScreenCell[]): string {
+  return cells.map((cell) => cell.char).join('').replace(/ +$/, '');
+}
+
+function screen(cols = 20, rows = 4, scrollbackLimit = 100) {
+  return createTerminalScreen({ cols, rows, scrollbackLimit });
+}
+
+test('基本文本、CR/LF 与光标', () => {
+  const s = screen();
+  s.process('hello');
+  assert.equal(text(s.getRow(0)), 'hello');
+  assert.deepEqual(s.getCursor(), { col: 5, row: 0 });
+  s.process('\r\nworld');
+  assert.equal(text(s.getRow(0)), 'hello');
+  assert.equal(text(s.getRow(1)), 'world');
+});
+
+test('SGR：16 色、256 色、真彩色、粗体/下划线/反色', () => {
+  const s = screen();
+  s.process('\x1b[31mA\x1b[38;5;196mB\x1b[38;2;1;2;3mC\x1b[1;4;7mD\x1b[0mE');
+  const row = s.getRow(0);
+  assert.deepEqual(row[0].fg, { r: 128, g: 0, b: 0 });
+  assert.deepEqual(row[1].fg, { r: 255, g: 0, b: 0 });
+  assert.deepEqual(row[2].fg, { r: 1, g: 2, b: 3 });
+  assert.equal(row[3].bold, true);
+  assert.equal(row[3].underline, 'single');
+  assert.equal(row[3].inverse, true);
+  assert.equal(row[4].bold, false);
+  assert.equal(row[4].fg, null);
+});
+
+test('光标移动与擦除', () => {
+  const s = screen();
+  s.process('abc\r\x1b[2DXY');
+  assert.equal(text(s.getRow(0)), 'XYc');
+  s.process('\x1b[1;1H\x1b[K');
+  assert.equal(text(s.getRow(0)), '');
+  s.process('abc\x1b[2D\x1b[K');
+  assert.equal(text(s.getRow(0)), 'a');
+});
+
+test('滚动与回滚缓冲', () => {
+  const s = screen(10, 3, 100);
+  s.process('1\r\n2\r\n3\r\n4\r\n5');
+  assert.equal(s.getScrollbackLength(), 2);
+  assert.equal(s.totalRows(), 5);
+  assert.equal(text(s.getRowAbsolute(0)), '1');
+  assert.equal(text(s.getRowAbsolute(1)), '2');
+  assert.equal(text(s.getRow(0)), '3');
+  assert.equal(text(s.getRow(2)), '5');
+});
+
+test('alt screen 保存/恢复主屏幕', () => {
+  const s = screen();
+  s.process('main\x1b[?1049hALT');
+  assert.equal(s.getMode('altScreen'), true);
+  assert.equal(text(s.getRow(0)), 'ALT');
+  s.process('\x1b[?1049l');
+  assert.equal(s.getMode('altScreen'), false);
+  assert.equal(text(s.getRow(0)), 'main');
+  assert.deepEqual(s.getCursor(), { col: 4, row: 0 });
+});
+
+test('宽字符、emoji 与组合字符', () => {
+  const s = screen();
+  s.process('中a😀');
+  const row = s.getRow(0);
+  assert.equal(row[0].char, '中');
+  assert.equal(row[0].wide, true);
+  assert.equal(row[1].char, '');
+  assert.equal(row[2].char, 'a');
+  assert.equal(row[3].char, '😀');
+  assert.equal(row[3].wide, true);
+  assert.equal(s.getCursor().col, 5);
+
+  const combining = screen();
+  combining.process('e');
+  combining.process('\u0301');
+  assert.equal(combining.getRow(0)[0].char, 'e\u0301');
+});
+
+test('OSC：标题、cwd、超链接', () => {
+  const s = screen();
+  s.process('\x1b]0;hello title\x07\x1b]7;file://localhost/tmp\x07');
+  assert.equal(s.getTitle(), 'hello title');
+  assert.equal(s.getCwd(), 'file://localhost/tmp');
+  s.process('\x1b]8;;https://example.com\x07x\x1b]8;;\x07');
+  assert.equal(s.getRow(0)[0].url, 'https://example.com');
+});
+
+test('模式：bracketed paste、application cursor、光标形状/可见性', () => {
+  const s = screen();
+  s.process('\x1b[?2004h\x1b[?1h\x1b[?25l\x1b[5 q');
+  assert.equal(s.getMode('bracketedPaste'), true);
+  assert.equal(s.getMode('applicationCursor'), true);
+  assert.equal(s.getCursorVisible(), false);
+  assert.equal(s.getCursorShape(), 'bar');
+  assert.equal(s.getCursorBlinking(), true);
+  s.process('\x1b[?12l');
+  assert.equal(s.getCursorBlinking(), false);
+});
+
+test('DEC Special Graphics 与 DECALN', () => {
+  const s = screen();
+  s.process('\x1b(0q\x1b(B');
+  assert.equal(s.getRow(0)[0].char, '─');
+  const fill = screen(4, 2);
+  fill.process('\x1b#8');
+  assert.equal(fill.getRow(0).every((cell) => cell.char === 'E'), true);
+  assert.equal(fill.getRow(1).every((cell) => cell.char === 'E'), true);
+});
+
+test('DSR/DA1 回应', () => {
+  const responses: string[] = [];
+  const s = createTerminalScreen({ cols: 20, rows: 4, onResponse: (data) => responses.push(data) });
+  s.process('\x1b[6n\x1b[c');
+  assert.deepEqual(responses, ['\x1b[1;1R', '\x1b[?62;22c']);
+});
+
+test('脏行追踪：只报告变化的行', () => {
+  const s = screen(10, 3);
+  const initial = s.takeDirty();
+  assert.equal(initial.rows, 'all');
+  s.process('a');
+  const first = s.takeDirty();
+  assert.notEqual(first.rows, 'all');
+  assert.equal((first.rows as Set<number>).has(0), true);
+  s.process('b');
+  const second = s.takeDirty();
+  assert.equal((second.rows as Set<number>).has(0), true);
+  s.process('\x1b[2;1Hc');
+  const third = s.takeDirty();
+  assert.equal((third.rows as Set<number>).has(1), true);
+});
+
+test('resize：列截断、行收缩进入回滚缓冲', () => {
+  const s = screen(10, 3);
+  s.process('abcde\r\nsecond\r\nthird');
+  s.resize(4, 2);
+  assert.equal(s.cols, 4);
+  assert.equal(s.screenRows(), 2);
+  assert.equal(text(s.getRow(0)), 'seco');
+  assert.equal(s.getScrollbackLength(), 1);
+  assert.equal(text(s.getRowAbsolute(0)), 'abcd');
+});
+
+test('插入/删除字符、制表符', () => {
+  const s = screen(20, 2);
+  s.process('abc\x1b[2G\x1b[2@');
+  assert.equal(text(s.getRow(0)), 'a  bc');
+  s.process('\x1b[2G\x1b[2P');
+  assert.equal(text(s.getRow(0)), 'abc');
+  const tabs = screen(20, 2);
+  tabs.process('a\tb');
+  assert.equal(tabs.getRow(0)[8].char, 'b');
+});
+
+test('滚动区内的插入/删除行', () => {
+  const s = screen(10, 5);
+  s.process('1\r\n2\r\n3\r\n4\r\n5');
+  s.process('\x1b[2;4r\x1b[2;1H\x1b[L');
+  // 在滚动区顶部插入一行：原 2/3/4 下移，5 保留。
+  assert.equal(text(s.getRow(0)), '1');
+  assert.equal(text(s.getRow(1)), '');
+  assert.equal(text(s.getRow(2)), '2');
+  assert.equal(text(s.getRow(3)), '3');
+  assert.equal(text(s.getRow(4)), '5');
+});
+
+test('split grapheme across chunks：组合字符与 ZWJ', () => {
+  const s = screen();
+  s.process('e');
+  s.process('\u0301');
+  assert.equal(s.getRow(0)[0].char, 'e\u0301');
+  s.process('\r\n👩');
+  s.process('\u200d');
+  s.process('💻');
+  assert.equal(s.getRow(1)[0].char, '👩\u200d💻');
+  assert.equal(s.getRow(1)[0].wide, true);
+});

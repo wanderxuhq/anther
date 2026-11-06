@@ -5,6 +5,7 @@
 // 模式下注入会被当按键，污染 vim 缓冲区——实测）。
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { StringDecoder } from 'node:string_decoder';
 
 const MARKER_RE = /^PTYMARKER (\S+)\r?\n/;
 const FIRST_BUF_LIMIT = 64 * 1024; // marker 解析的兜底上限（防异常 shell 无限攒）
@@ -15,6 +16,8 @@ export class PtySession extends EventEmitter {
   private child: ChildProcess;
   private dev: string | null = null;
   private firstBuf = '';
+  // 多字节 UTF-8 可能被 pipe 切断；逐块 toString 会产生替换符，StringDecoder 负责拼接。
+  private decoder = new StringDecoder('utf8');
   private readyResolve!: () => void;
   private readyReject!: (e: Error) => void;
 
@@ -52,7 +55,8 @@ export class PtySession extends EventEmitter {
   get readyDevPath(): string | null { return this.dev; }
 
   private onStdout(d: Buffer): void {
-    const s = d.toString('utf8');
+    const s = this.decoder.write(d);
+    if (!s) return;
     if (this.dev === null) {
       this.firstBuf += s;
       const m = this.firstBuf.match(MARKER_RE);
