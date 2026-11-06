@@ -7,7 +7,7 @@
 import { createEffect, createSignal, For, on, onCleanup, Show } from 'solid-js';
 import { createTerminalScreen, type TerminalScreen as Screen, type ScreenCell } from '../terminal/vt.ts';
 import { api, connectTerminal, type TerminalSocket } from '../api.ts';
-import { fontScale, openPreviewTab, removeTerminalTab } from '../stores.ts';
+import { fontScale, openPreviewTab, removeTerminalTab, theme } from '../stores.ts';
 import { t } from '../i18n.ts';
 import { CONTROL_LETTERS, TERMINAL_KEYS, controlChar, keySequence } from '../terminal-keys.ts';
 import { setTerminalRenderMode, terminalRenderMode } from '../terminal/settings.ts';
@@ -78,6 +78,7 @@ export function TerminalView(props: { id: string }) {
   let lastContentRows = 0;
   let lastRenderedContentRows = 0;
   let keepBottom = false;
+  let lastMeta = '';
   let lastMode: 'html' | 'text' = 'html';
   let lastAlt = false;
   let renderedStart = -1;
@@ -169,6 +170,7 @@ export function TerminalView(props: { id: string }) {
     scroller.style.height = `${visualHeight}px`;
     if (contentRows >= rows && wasAtBottom) keepBottom = true;
     scheduleRender();
+    sendMeta();
   };
 
   // 软键盘动画/地址栏伸缩会连续触发 ResizeObserver；防抖合并成一次 resize，
@@ -180,6 +182,25 @@ export function TerminalView(props: { id: string }) {
       updateSize();
       scheduleRender();
     }, 120);
+  };
+
+  const sendMeta = () => {
+    if (!socket) return;
+    const root = getComputedStyle(document.documentElement);
+    const scroller = scrollEl;
+    const meta = {
+      fg: parseCssColor(root.getPropertyValue('--term-fg')) ?? undefined,
+      bg: parseCssColor(root.getPropertyValue('--term-bg')) ?? undefined,
+      cursor: parseCssColor(root.getPropertyValue('--term-cursor-bg')) ?? undefined,
+      pixelWidth: scroller?.clientWidth,
+      pixelHeight: scroller?.clientHeight,
+      cellWidth,
+      cellHeight,
+    };
+    const key = JSON.stringify(meta);
+    if (key === lastMeta) return;
+    lastMeta = key;
+    socket.meta(meta);
   };
 
   const renderNow = () => {
@@ -307,6 +328,7 @@ export function TerminalView(props: { id: string }) {
     lastContentRows = 0;
     lastRenderedContentRows = 0;
     keepBottom = false;
+    lastMeta = '';
     lastMode = terminalRenderMode();
     lastAlt = false;
 
@@ -314,23 +336,12 @@ export function TerminalView(props: { id: string }) {
       cols: 80,
       rows: 24,
       scrollbackLimit: MAX_SCROLLBACK_ROWS,
-      // 只回 OSC 10/11/12 颜色查询；DSR/DA1/DECRQM 继续不回，避免 readline 回显。
-      onResponse: (data) => { if (data.startsWith('\x1b]')) sendText(data); },
-      defaultColors: () => {
-        const style = scrollEl ? getComputedStyle(scrollEl) : null;
-        const root = getComputedStyle(document.documentElement);
-        return {
-          fg: style ? parseCssColor(style.color) : null,
-          bg: style ? parseCssColor(style.backgroundColor) : null,
-          cursor: parseCssColor(root.getPropertyValue('--term-cursor-bg')),
-        };
-      },
     });
     screen = s;
 
     const sock = connectTerminal(id, {
       // 首次/重连：清空本地缓冲区，等服务端历史重放重建画面（进程与信号不中断）。
-      onOpen: () => { s.reset(); resetRendered(); scheduleRender(); },
+      onOpen: () => { s.reset(); resetRendered(); scheduleRender(); lastMeta = ''; sendMeta(); },
       onOutput: (data) => { s.process(data); setTick((value) => value + 1); },
       onExit: () => removeTerminalTab(id),
     });
@@ -372,6 +383,7 @@ export function TerminalView(props: { id: string }) {
       lastContentRows = 0;
       lastRenderedContentRows = 0;
       keepBottom = false;
+      lastMeta = '';
     });
   }));
 
@@ -383,6 +395,12 @@ export function TerminalView(props: { id: string }) {
     // 内容行数会随输出变化：重新计算视觉高度（逻辑行列不变时不会触发 PTY resize）。
     updateSize();
     scheduleRender();
+  });
+
+  // 主题色变化同步给服务端，供 OSC 10/11 本地回应。
+  createEffect(() => {
+    theme();
+    sendMeta();
   });
 
   // 字号跟随全局设置；重新测量列宽/行高后回发 resize。

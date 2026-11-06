@@ -93,27 +93,6 @@ test('OSC：标题、cwd、超链接', () => {
   assert.equal(s.getRow(0)[0].url, 'https://example.com');
 });
 
-test('OSC 10/11/12 颜色查询回应', () => {
-  const responses: string[] = [];
-  const s = createTerminalScreen({
-    cols: 20,
-    rows: 4,
-    scrollbackLimit: 10,
-    defaultColors: () => ({
-      fg: { r: 30, g: 30, b: 30 },
-      bg: { r: 255, g: 255, b: 255 },
-      cursor: { r: 30, g: 30, b: 30 },
-    }),
-    onResponse: (data) => responses.push(data),
-  });
-  s.process('\x1b]10;?\x07\x1b]11;?\x07\x1b]12;?\x07');
-  assert.deepEqual(responses, [
-    '\x1b]10;rgb:1e1e/1e1e/1e1e\x1b\\',
-    '\x1b]11;rgb:ffff/ffff/ffff\x1b\\',
-    '\x1b]12;rgb:1e1e/1e1e/1e1e\x1b\\',
-  ]);
-});
-
 test('模式：bracketed paste、application cursor、光标形状/可见性', () => {
   const s = screen();
   s.process('\x1b[?2004h\x1b[?1h\x1b[?25l\x1b[5 q');

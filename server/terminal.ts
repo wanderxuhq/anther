@@ -4,6 +4,7 @@
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import { PtySession } from './pty.ts';
+import { TerminalQueryResponder, type TerminalQueryMeta } from './terminal-queries.ts';
 
 export type TerminalInfo = { id: string; name: string };
 
@@ -19,6 +20,10 @@ export class Terminal extends EventEmitter {
   private live: string[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly historyLimit: number;
+  private cols = 80;
+  private rows = 24;
+  private meta: TerminalQueryMeta = {};
+  private readonly queries: TerminalQueryResponder;
 
   constructor(id: string, name: string, pty: PtySession, historyLimit = HISTORY_LIMIT) {
     super();
@@ -26,10 +31,17 @@ export class Terminal extends EventEmitter {
     this.name = name;
     this.pty = pty;
     this.historyLimit = historyLimit;
+    this.queries = new TerminalQueryResponder(
+      (data) => this.pty.write(data),
+      () => ({ cols: this.cols, rows: this.rows }),
+      () => this.meta,
+    );
     pty.on('data', (chunk: string) => this.feed(chunk));
   }
 
   private feed(chunk: string): void {
+    // 先处理查询：直接写回 PTY，不经过 40ms 批处理和 WebSocket。
+    this.queries.feed(chunk);
     this.history.push(chunk);
     this.historyBytes += chunk.length;
     while (this.historyBytes > this.historyLimit && this.history.length > 1) {
@@ -48,7 +60,15 @@ export class Terminal extends EventEmitter {
   }
 
   write(data: string): void { this.pty.write(data); }
-  resize(cols: number, rows: number): Promise<void> { return this.pty.resize(cols, rows); }
+  resize(cols: number, rows: number): Promise<void> {
+    this.cols = cols;
+    this.rows = rows;
+    return this.pty.resize(cols, rows);
+  }
+  /** 浏览器同步过来的终端主题色/像素尺寸，用于 OSC/窗口查询的本地回应。 */
+  setMeta(meta: TerminalQueryMeta): void {
+    this.meta = { ...this.meta, ...meta };
+  }
   async close(): Promise<void> { await this.pty.kill(); }
   replay(): string { return this.history.join(''); }
 }

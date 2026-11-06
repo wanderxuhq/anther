@@ -252,9 +252,21 @@ export type TerminalHandlers = {
   onExit: (code: number) => void;
 };
 
+export type TerminalMeta = {
+  fg?: { r: number; g: number; b: number };
+  bg?: { r: number; g: number; b: number };
+  cursor?: { r: number; g: number; b: number };
+  pixelWidth?: number;
+  pixelHeight?: number;
+  cellWidth?: number;
+  cellHeight?: number;
+};
+
 export type TerminalSocket = {
   input: (data: string) => void;
   resize: (cols: number, rows: number) => void;
+  /** 把终端主题色/像素尺寸同步给服务端，供 OSC/窗口查询本地快速回应。 */
+  meta: (meta: TerminalMeta) => void;
   dispose: () => void;
 };
 
@@ -272,7 +284,7 @@ export function connectTerminal(id: string, handlers: TerminalHandlers, urlOverr
   let attempt = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const send = (obj: { type: 'input'; data: string } | { type: 'resize'; cols: number; rows: number }) => {
+  const send = (obj: { type: 'input'; data: string } | { type: 'resize'; cols: number; rows: number } | ({ type: 'meta' } & TerminalMeta)) => {
     const frame = JSON.stringify(obj);
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(frame);
     else if (ws && ws.readyState === WebSocket.CONNECTING) pending.push(frame);
@@ -315,6 +327,7 @@ export function connectTerminal(id: string, handlers: TerminalHandlers, urlOverr
   return {
     input: (data) => send({ type: 'input', data }),
     resize: (cols, rows) => send({ type: 'resize', cols, rows }),
+    meta: (meta) => send({ type: 'meta', ...meta }),
     dispose: () => { disposed = true; clearTimeout(timer); pending = []; ws?.close(); },
   };
 }

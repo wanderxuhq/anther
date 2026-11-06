@@ -7,6 +7,7 @@ import type { HttpServer } from '../http.ts';
 import { HttpError } from '../http-error.ts';
 import type { TerminalManager } from '../terminal.ts';
 import type { FileStore } from '../files.ts';
+import type { RGB, TerminalQueryMeta } from '../terminal-queries.ts';
 import { WebSocket } from 'ws';
 
 const userId = (req: import('node:http').IncomingMessage): string => {
@@ -15,6 +16,15 @@ const userId = (req: import('node:http').IncomingMessage): string => {
 };
 
 const WS_FORBIDDEN = 4404; // 应用自定义关闭码：终端不存在/不属于该用户
+
+const isRgb = (value: unknown): value is RGB => {
+  if (typeof value !== 'object' || value === null) return false;
+  const c = value as { r?: unknown; g?: unknown; b?: unknown };
+  return [c.r, c.g, c.b].every((v) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 255);
+};
+
+const isPositive = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0;
 
 export function registerTerminalRoutes(http: HttpServer, terminals: TerminalManager, files?: FileStore): void {
   // 终端输出里的路径 → 工作区文件/目录。cwd 来自 OSC 7（shell 当前目录）。
@@ -77,7 +87,11 @@ export function registerTerminalRoutes(http: HttpServer, terminals: TerminalMana
     });
 
     ws.on('message', (raw) => {
-      let msg: { type?: string; data?: unknown; cols?: unknown; rows?: unknown };
+      let msg: {
+        type?: string; data?: unknown; cols?: unknown; rows?: unknown;
+        fg?: unknown; bg?: unknown; cursor?: unknown;
+        pixelWidth?: unknown; pixelHeight?: unknown; cellWidth?: unknown; cellHeight?: unknown;
+      };
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (msg.type === 'input' && typeof msg.data === 'string') {
         term.write(msg.data);
@@ -87,6 +101,16 @@ export function registerTerminalRoutes(http: HttpServer, terminals: TerminalMana
         typeof msg.rows === 'number' && Number.isInteger(msg.rows) && msg.rows > 0
       ) {
         void term.resize(msg.cols, msg.rows);
+      } else if (msg.type === 'meta') {
+        const meta: TerminalQueryMeta = {};
+        if (isRgb(msg.fg)) meta.fg = msg.fg;
+        if (isRgb(msg.bg)) meta.bg = msg.bg;
+        if (isRgb(msg.cursor)) meta.cursor = msg.cursor;
+        if (isPositive(msg.pixelWidth)) meta.pixelWidth = msg.pixelWidth;
+        if (isPositive(msg.pixelHeight)) meta.pixelHeight = msg.pixelHeight;
+        if (isPositive(msg.cellWidth)) meta.cellWidth = msg.cellWidth;
+        if (isPositive(msg.cellHeight)) meta.cellHeight = msg.cellHeight;
+        term.setMeta(meta);
       } else if (msg.type === 'ping') {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'pong' }));
       }
