@@ -108,9 +108,12 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   line-height: 1.35; font-variant-ligatures: none;
   -webkit-user-select: text; user-select: text;
 }
+/* HTML 模式长行会换行，不需要横向滚动；纯文字模式仍保留横向滚动看长行。 */
+.terminal-scroll.terminal-html { overflow-x: hidden; }
 .terminal-rows { min-width: 100%; }
 .terminal-text .terminal-rows { width: max-content; }
-.terminal-measure { position: absolute; left: 0; top: 0; visibility: hidden; white-space: pre; pointer-events: none; }
+/* fixed 定位不参与滚动容器的可滚动区域，避免测量元素撑出横向滚动条。 */
+.terminal-measure { position: fixed; left: 0; top: 0; visibility: hidden; white-space: pre; pointer-events: none; }
 .term-row { min-height: 1.35em; }
 .terminal-text .term-row, .term-row-grid { white-space: pre; }
 .terminal-html .term-row-html, .terminal-html .term-row-md { white-space: pre-wrap; overflow-wrap: anywhere; }
