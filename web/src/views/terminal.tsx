@@ -39,6 +39,7 @@ function cwdPath(value: string): string {
 }
 
 export function TerminalView(props: { id: string }) {
+  let paneEl: HTMLDivElement | undefined;
   let scrollEl: HTMLDivElement | undefined;
   let rowsEl: HTMLDivElement | undefined;
   let measureEl: HTMLSpanElement | undefined;
@@ -57,6 +58,11 @@ export function TerminalView(props: { id: string }) {
   let lastRows = 0;
   let cellWidth = 0;
   let cellHeight = 0;
+  // 终端逻辑行数按“最大可用高度”算；视觉高度按内容行数收缩，超过上限再滚动。
+  let logicalRows = 0;
+  let lastContentRows = 0;
+  let lastRenderedContentRows = 0;
+  let keepBottom = false;
   let lastMode: 'html' | 'text' = 'html';
   let lastAlt = false;
   let renderedStart = -1;
@@ -97,27 +103,56 @@ export function TerminalView(props: { id: string }) {
   };
 
   const updateSize = () => {
+    const pane = paneEl;
     const scroller = scrollEl;
     const measure = measureEl;
-    if (!scroller || !measure || !screen) return;
+    if (!pane || !scroller || !measure || !screen) return;
     measure.textContent = 'M'.repeat(50);
-    const width = measure.getBoundingClientRect().width / 50;
-    const height = measure.getBoundingClientRect().height;
-    if (!width || !height) return;
-    cellWidth = width;
-    cellHeight = height;
-    const paneWidth = scroller.clientWidth;
-    const paneHeight = scroller.clientHeight;
+    const cellW = measure.getBoundingClientRect().width / 50;
+    const cellH = measure.getBoundingClientRect().height;
+    if (!cellW || !cellH) return;
+    cellWidth = cellW;
+    cellHeight = cellH;
+
     const style = getComputedStyle(scroller);
     const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
     const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
-    const cols = Math.max(20, Math.floor((paneWidth - padX) / width));
-    const rows = Math.max(5, Math.floor((paneHeight - padY) / height));
-    if (cols === lastCols && rows === lastRows) return;
-    lastCols = cols;
-    lastRows = rows;
-    screen.resize(cols, rows);
-    socket?.resize(cols, rows);
+    const paneWidth = scroller.clientWidth;
+    const toolbar = pane.querySelector<HTMLElement>('.terminal-toolbar');
+    const keys = pane.querySelector<HTMLElement>('.terminal-keys');
+    const parent = pane.parentElement;
+    const available = Math.max(1, (parent?.clientHeight ?? 0) - (toolbar?.offsetHeight ?? 0) - (keys?.offsetHeight ?? 0));
+    const cols = Math.max(20, Math.floor((paneWidth - padX) / cellW));
+
+    const alt = screen.getMode('altScreen') === true;
+    // 逻辑行列跟随当前可用高度；内容高度只影响视觉盒高度，不触发 PTY resize。
+    const rows = Math.max(5, Math.floor((available - padY) / cellH));
+
+    if (cols !== lastCols || rows !== lastRows) {
+      lastCols = cols;
+      lastRows = rows;
+      screen.resize(cols, rows);
+      socket?.resize(cols, rows);
+    }
+
+    // 内容行数：没有回滚且不在 alt screen 时，只显示实际用到的行；有回滚/全屏 TUI
+    // 则用满最大高度，出现滚动条。
+    const scrollback = screen.getScrollbackLength();
+    let contentRows = rows;
+    if (!alt && scrollback === 0) {
+      let last = 0;
+      for (let i = 0; i < screen.screenRows(); i++) {
+        if (rowText(screen.getRow(i)).trim() !== '') last = i;
+      }
+      contentRows = Math.min(rows, Math.max(1, last + 1, screen.getCursor().row + 1));
+    }
+    logicalRows = rows;
+    lastContentRows = contentRows;
+    const contentHeight = contentRows * cellH + padY;
+    const wasAtBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 8;
+    const visualHeight = Math.max(cellH + padY, Math.min(contentHeight, available));
+    scroller.style.height = `${visualHeight}px`;
+    if (contentRows >= rows && wasAtBottom) keepBottom = true;
     scheduleRender();
   };
 
@@ -236,10 +271,15 @@ export function TerminalView(props: { id: string }) {
       rowBlockKeys[index] = key;
     }
 
-    // 输出追加时保持用户当前位置；切换渲染/结构变化时按比例保持阅读位置。
-    if (atBottom) scroller.scrollTop = scroller.scrollHeight;
+    // 内容少：框高就是内容高，滚到顶部；内容多：保持底部跟随，用户上滚后保持位置。
+    const contentLarge = lastContentRows >= logicalRows;
+    const becameLarge = contentLarge && lastRenderedContentRows < logicalRows;
+    if (!contentLarge) scroller.scrollTop = 0;
+    else if (atBottom || keepBottom || becameLarge) scroller.scrollTop = scroller.scrollHeight;
     else if (structureChanged && oldScrollHeight > 0) scroller.scrollTop = oldScrollTop * (scroller.scrollHeight / oldScrollHeight);
     else scroller.scrollTop = oldScrollTop;
+    keepBottom = false;
+    lastRenderedContentRows = lastContentRows;
   };
 
   // 每个终端 id 一套 VT 缓冲区 + WS；渲染模式变化不会进入这里。
@@ -248,6 +288,10 @@ export function TerminalView(props: { id: string }) {
     setCtrlArmed(false);
     lastCols = 0;
     lastRows = 0;
+    logicalRows = 0;
+    lastContentRows = 0;
+    lastRenderedContentRows = 0;
+    keepBottom = false;
     lastMode = terminalRenderMode();
     lastAlt = false;
 
@@ -275,6 +319,10 @@ export function TerminalView(props: { id: string }) {
 
     resizeObserver = new ResizeObserver(scheduleResize);
     if (scrollEl) resizeObserver.observe(scrollEl);
+    // 内容盒高度是显式设置的，键盘/地址栏变化时 scrollEl 自身尺寸可能不变；
+    // 观察外层编辑区，保证可用高度变化能触发重新布局。
+    const area = paneEl?.parentElement;
+    if (area) resizeObserver.observe(area);
     updateSize();
     scheduleRender();
 
@@ -297,6 +345,10 @@ export function TerminalView(props: { id: string }) {
       textCache = [];
       lastFirst = -1;
       lastCursorAbs = -1;
+      logicalRows = 0;
+      lastContentRows = 0;
+      lastRenderedContentRows = 0;
+      keepBottom = false;
     });
   }));
 
@@ -304,7 +356,10 @@ export function TerminalView(props: { id: string }) {
   createEffect(() => {
     terminalRenderMode();
     tick();
-    if (screen) scheduleRender();
+    if (!screen) return;
+    // 内容行数会随输出变化：重新计算视觉高度（逻辑行列不变时不会触发 PTY resize）。
+    updateSize();
+    scheduleRender();
   });
 
   // 字号跟随全局设置；重新测量列宽/行高后回发 resize。
@@ -467,7 +522,7 @@ export function TerminalView(props: { id: string }) {
   };
 
   return (
-    <div class="terminal-pane">
+    <div class="terminal-pane" ref={(el) => (paneEl = el)}>
       <div class="terminal-toolbar">
         <div class="terminal-mode" role="group" aria-label={t('terminal.renderMode')}>
           <button
