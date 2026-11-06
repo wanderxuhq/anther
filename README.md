@@ -23,10 +23,29 @@ Open `http://localhost:3000` by default. The startup log also shows a LAN addres
 ## Usage
 
 - Files open read-only. Click the pencil icon in the toolbar to edit.
-- Upload files from **New** or a file-list ⋯ menu. There are no added size or type restrictions, and existing files are not overwritten.
-- Use the Git toolbar to switch between pending changes, history, and branch management.
-- Files, database objects, and terminals share a tab bar, with independent tabs for each. Refreshing reconnects terminals; closing a terminal tab ends its process.
+- Upload files or whole folders from **New** or a file-list ⋯ menu. Select several files at once, or drag files and folders from your desktop onto the tree; dropping on a folder uploads into it. There are no added size or type restrictions, and existing files are not overwritten.
+- Use the Git toolbar to switch between pending changes, history, and branch management. The changes panel stages and unstages files, discards changes, amends the last commit, and runs fetch/pull/push with ahead/behind status. Pull is fast-forward only.
+- Files, database objects, and terminals share a tab bar, with independent tabs for each. Refreshing reconnects terminals; closing a terminal tab ends its process. On touch screens the terminal shows a key bar with Esc, Tab, arrows and Ctrl combinations.
+- Click ⓘ at the bottom of the drawer for server information: host, OS, CPU, memory, disk, uptime, Node.js and Anther versions, and the workspace path. The dialog can refresh in place.
 - On desktop, the file list and editor scroll independently.
+
+## Detection API
+
+`GET /api/anther` is an anther-specific endpoint for launchers, probes and integrations:
+
+```json
+{
+  "name": "anther",
+  "package": "@wanderxuhq/anther",
+  "version": "0.1.5",
+  "apiVersion": 1,
+  "workspace": "/path/to/workspace",
+  "instanceId": "0f9c…",
+  "startedAt": 1760000000000
+}
+```
+
+It returns identity and instance context only, not host or hardware details. A launcher can use `name`/`apiVersion` to recognize anther, and `workspace` to check whether a port that is already in use belongs to the same workspace before reusing that instance.
 
 ## File previews
 
@@ -97,6 +116,8 @@ Image `x/y` specify the center as fractions of the original dimensions (0–1); 
 ## Platform notes
 
 File browsing and editing work across platforms. Terminals require `script` and `stty`: Linux, Termux, WSL, and macOS are supported; Windows terminals are unavailable.
+
+Git sync uses your existing git configuration. Interactive credential prompts are disabled, so configure an SSH agent, a credential helper, or an HTTPS token before pushing over the network.
 
 ## Development
 

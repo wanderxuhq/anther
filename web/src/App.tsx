@@ -40,6 +40,7 @@ import { DatabasePane } from './views/database.tsx';
 import { DatabaseIcon } from './components/database-icon.tsx';
 import type { DatabaseController } from './database/controller.ts';
 import { ArchiveOptions } from './components/archive-options.tsx';
+import { SystemInfoDialog } from './components/system-info.tsx';
 
 const NARROW_QUERY = '(max-width: 599px)';
 
@@ -309,6 +310,8 @@ export function App() {
   const [branchDialogOpen, setBranchDialogOpen] = createSignal(false);
   const [newBranchName, setNewBranchName] = createSignal('');
   const [branchCreating, setBranchCreating] = createSignal(false);
+  // 抽屉底部 ⓘ：服务器系统信息（进入抽屉的视图导航区，避免挤占工具栏）
+  const [systemOpen, setSystemOpen] = createSignal(false);
 
   async function handleNewBranch(): Promise<void> {
     const name = newBranchName().trim();
@@ -679,6 +682,10 @@ export function App() {
         </div>
       </Show>
 
+      <Show when={systemOpen()}>
+        <SystemInfoDialog onClose={() => setSystemOpen(false)} />
+      </Show>
+
       <Show when={drawerOpen() || !isNarrow()}>
         <div class="drawer-backdrop" onClick={() => setDrawerOpen(false)} />
         <aside class="drawer">
@@ -699,6 +706,14 @@ export function App() {
             </button>
             <button class="view-tab" onClick={() => void openGit()} title={t('view.git')}>
               🕘
+            </button>
+            <button
+              class="view-tab"
+              onClick={() => { setSystemOpen(true); setDrawerOpen(false); }}
+              title={t('system.info')}
+              aria-label={t('system.info')}
+            >
+              ⓘ
             </button>
           </nav>
           <div class="drawer-content">

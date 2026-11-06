@@ -12,7 +12,7 @@ import { withFileMutation } from '../file-operations.ts';
 // 每次展开/收起只触发对应子树重渲染。
 import { createEffect, createSignal, ErrorBoundary, For, lazy, Show, Suspense, onCleanup } from 'solid-js';
 import { createStore } from 'solid-js/store';
-import { api, ApiError, type DirEntry } from '../api.ts';
+import { api, type DirEntry } from '../api.ts';
 import { archiveChain, archiveEntry, activeArchiveRoot, currentFile, activeTab, openDatabaseTab, relocateFileTabs, openTab, tabs } from '../stores.ts';
 import { parentOf } from '../paths.ts';
 import { NameDialog, type DialogState } from '../components/name-dialog.tsx';
@@ -20,6 +20,7 @@ import { t } from '../i18n.ts';
 import { preparingDownload, downloadProgressText, startDownload } from '../download.ts';
 import { isArchiveFile } from '../archive.ts';
 import { hasDocumentOutline } from '../readers/document-file.ts';
+import { entriesFromDataTransfer, entriesFromFiles, uploadEntries, type UploadEntry } from '../upload.ts';
 const DocumentTree = lazy(() => import('../components/document-tree.tsx'));
 
 import { isDatabaseFile } from '../database/source.ts';
@@ -33,7 +34,10 @@ type DirState = { expanded: boolean; loaded?: DirEntry[]; loading?: boolean };
 // path → 目录状态。渲染时 nodes[path] 是响应式读取，setNodes 精确更新。
 const [nodes, setNodes] = createStore<{ [path: string]: DirState }>({});
 const [error, setError] = createSignal<string | null>(null);
-const [uploading, setUploading] = createSignal(false);
+const [upload, setUpload] = createSignal<{ done: number; total: number } | null>(null);
+const uploading = () => upload() !== null;
+/** 拖拽文件悬停的目标路径（'.' 为根），用于高亮可放置位置。 */
+const [dropTarget, setDropTarget] = createSignal<string | null>(null);
 
 // ---- 文件管理（Task 16）：菜单 + 命名对话框 + 两击确认删除 ----
 type MenuTarget = { path: string; kind: 'dir' | 'file' | 'root' };
@@ -112,35 +116,67 @@ function beginRename(target: MenuTarget) {
   });
 }
 
-function UploadItem(props: { target: MenuTarget }) {
-  let input!: HTMLInputElement;
-  const upload = async (file: File) => {
-    if (uploading()) return;
-    const base = props.target.kind === 'dir' ? props.target.path : parentOf(props.target.path);
-    setUploading(true);
-    setError(null);
-    setMenu(null);
-    try {
-      await api.upload(childPath(base, file.name), file);
-      await refreshParent(base);
-      setNodes(base, 'expanded', true);
-    } catch (e) {
-      setError(e instanceof ApiError && e.status === 409
-        ? t('filetree.uploadExists', { name: file.name })
-        : (e as Error).message);
-    } finally {
-      setUploading(false);
+/** 拖拽事件里是否带文件（内部文本拖拽不处理）。 */
+function isFileDrag(e: DragEvent): boolean {
+  return Array.from(e.dataTransfer?.types ?? []).includes('Files');
+}
+
+async function startUpload(base: string, entries: UploadEntry[]): Promise<void> {
+  if (entries.length === 0 || uploading()) return;
+  setError(null);
+  setUpload({ done: 0, total: entries.length });
+  try {
+    const result = await uploadEntries(base, entries, (done, total) => setUpload({ done, total }));
+    await refreshParent(base);
+    setNodes(base, 'expanded', true);
+    if (result.failed.length > 0) {
+      const first = result.failed[0];
+      const name = first.path.split('/').pop() ?? first.path;
+      setError(result.uploaded === 0 && result.failed.length === 1 && first.status === 409
+        ? t('filetree.uploadExists', { name })
+        : t('filetree.uploadFailed', { uploaded: result.uploaded, failed: result.failed.length, name }));
     }
+  } catch (e) {
+    setError((e as Error).message);
+    await refreshParent(base).catch(() => { /* 目标目录可能已不存在 */ });
+  } finally {
+    setUpload(null);
+  }
+}
+
+async function dropUpload(e: DragEvent, base: string): Promise<void> {
+  if (!e.dataTransfer) return;
+  try {
+    await startUpload(base, await entriesFromDataTransfer(e.dataTransfer));
+  } catch (err) {
+    setError((err as Error).message);
+  }
+}
+
+function UploadItem(props: { target: MenuTarget }) {
+  let fileInput!: HTMLInputElement;
+  let folderInput!: HTMLInputElement;
+  const base = () => props.target.kind === 'dir' ? props.target.path : parentOf(props.target.path);
+  const pick = (input: HTMLInputElement) => {
+    // 先快照 FileList：部分浏览器在 value='' 后会把 input.files 清空。
+    const entries = input.files ? entriesFromFiles(input.files) : [];
+    input.value = ''; // 允许连续选择同一批文件
+    setMenu(null);
+    if (entries.length > 0) void startUpload(base(), entries);
   };
   return (
     <>
-      <input ref={input} type="file" hidden onChange={(e) => {
-        const file = e.currentTarget.files?.[0];
-        e.currentTarget.value = '';
-        if (file) void upload(file);
-      }} />
-      <button class="menu-item" disabled={uploading()} onClick={() => input.click()}>
+      <input ref={fileInput} type="file" hidden multiple onChange={(e) => pick(e.currentTarget)} />
+      <input
+        ref={(el) => { folderInput = el; el.setAttribute('webkitdirectory', ''); el.setAttribute('directory', ''); }}
+        type="file" hidden multiple
+        onChange={(e) => pick(e.currentTarget)}
+      />
+      <button class="menu-item" disabled={uploading()} onClick={() => fileInput.click()}>
         {t('filetree.uploadFile')}
+      </button>
+      <button class="menu-item" disabled={uploading()} onClick={() => folderInput.click()}>
+        {t('filetree.uploadFolder')}
       </button>
     </>
   );
@@ -233,8 +269,29 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
     <div class="tree-node">
       <div
         class={`tree-row ${isCurrent() ? 'active' : ''}`}
+        classList={{ 'drop-target': dropTarget() === props.path }}
         onClick={onRowClick}
         title={props.path}
+        onDragOver={(e) => {
+          if (!isFileDrag(e)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+          setDropTarget(props.path);
+        }}
+        onDragLeave={(e) => {
+          e.stopPropagation();
+          const next = e.relatedTarget;
+          if (next instanceof Node && e.currentTarget.contains(next)) return; // 在行内子元素间移动不算离开
+          if (dropTarget() === props.path) setDropTarget(null);
+        }}
+        onDrop={(e) => {
+          if (!isFileDrag(e)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setDropTarget(null);
+          void dropUpload(e, isDir ? props.path : parentOf(props.path));
+        }}
       >
         <span class="tree-arrow"><Show when={archive || database() || document} fallback={isDir ? (expanded() ? '▾' : '▸') : ''}>
           <button class="archive-toggle" title={t(database() ? 'database.expand' : document ? 'reader.expandOutline' : 'archive.expand')} aria-label={t(database() ? 'database.expand' : document ? 'reader.expandOutline' : 'archive.expand')} aria-expanded={database() ? databaseExpanded() : document ? documentExpanded() : archiveExpanded()} onClick={(e) => { e.stopPropagation(); if (database()) setDatabaseExpanded((value) => !value); else if (document) setDocumentExpanded((value) => !value); else setArchiveExpanded((value) => !value); }}>{(database() ? databaseExpanded() : document ? documentExpanded() : archiveExpanded()) ? '▾' : '▸'}</button>
@@ -300,12 +357,33 @@ export function FileTreeView() {
   void ensureRoot();
 
   return (
-    <div class="filetree">
+    <div
+      class="filetree"
+      classList={{ 'drop-active': dropTarget() === '.' }}
+      onDragOver={(e) => {
+        if (!isFileDrag(e)) return;
+        e.preventDefault();
+        setDropTarget('.');
+      }}
+      onDragLeave={(e) => {
+        const next = e.relatedTarget;
+        if (next instanceof Node && e.currentTarget.contains(next)) return;
+        setDropTarget(null);
+      }}
+      onDrop={(e) => {
+        if (!isFileDrag(e)) return;
+        e.preventDefault();
+        setDropTarget(null);
+        void dropUpload(e, '.');
+      }}
+    >
       <Show when={error()}>
         <div class="error-banner">{error()}</div>
       </Show>
-      <Show when={uploading()}>
-        <div role="status">{t('filetree.uploading')}</div>
+      <Show when={upload()}>
+        {(state) => (
+          <div role="status">{t('filetree.uploadingProgress', { done: state().done, total: state().total })}</div>
+        )}
       </Show>
       <Show when={preparingDownload()}>
         <div role="status">{downloadProgressText()}</div>

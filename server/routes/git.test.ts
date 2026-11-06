@@ -54,6 +54,11 @@ test('GET /api/git/status：isRepo + 显示状态字母', async () => {
   const byPath = Object.fromEntries(body.changes.map((c: { path: string; status: string }) => [c.path, c.status]));
   assert.equal(byPath['a.txt'], 'M');
   assert.equal(byPath['b.txt'], '??');
+  assert.equal(body.branch, 'main');
+  assert.equal(body.hasCommits, true);
+  assert.equal(body.upstream, null);
+  assert.equal(body.ahead, 0);
+  assert.equal(body.behind, 0);
 });
 
 test('GET /api/git/diff：已跟踪修改 → unified diff；未跟踪 → 全 + 新增', async () => {
@@ -130,6 +135,43 @@ test('POST /api/git/create-branch：创建 + 切新分支；非法名 / 已存�
   assert.equal(body.current, 'feat/x');
   assert.equal((await call('POST', '/api/git/create-branch', { name: 'bad name' })).status, 400);
   assert.equal((await call('POST', '/api/git/create-branch', { name: 'main' })).status, 400);
+});
+
+test('POST /api/git/stage|unstage|discard：暂存、取消暂存、丢弃', async () => {
+  assert.equal((await call('POST', '/api/git/stage', { paths: [] })).status, 400);
+  assert.equal((await call('POST', '/api/git/stage', { paths: ['a.txt', 'b.txt'] })).status, 200);
+
+  let st = await call('GET', '/api/git/status');
+  const staged = Object.fromEntries(st.body.changes.map((c: { path: string; index: string }) => [c.path, c.index]));
+  assert.equal(staged['a.txt'], 'M');
+  assert.equal(staged['b.txt'], 'A');
+
+  assert.equal((await call('POST', '/api/git/unstage', { paths: ['a.txt', 'b.txt'] })).status, 200);
+  st = await call('GET', '/api/git/status');
+  const unstaged = Object.fromEntries(st.body.changes.map((c: { path: string; index: string; worktree: string }) => [c.path, c.index + c.worktree]));
+  assert.equal(unstaged['a.txt'], ' M');
+  assert.equal(unstaged['b.txt'], '??');
+
+  assert.equal((await call('POST', '/api/git/discard', { paths: ['a.txt', 'b.txt'] })).status, 200);
+  st = await call('GET', '/api/git/status');
+  assert.deepEqual(st.body.changes, []);
+});
+
+test('POST /api/git/commit：paths 为空提交已暂存内容，amend 改写上一条', async () => {
+  assert.equal((await call('POST', '/api/git/commit', { paths: ['a.txt'], message: 'one' })).status, 200);
+  await writeFile(path.join(repoDir, 'a.txt'), 'one\nthree\n');
+  assert.equal((await call('POST', '/api/git/stage', { paths: ['a.txt'] })).status, 200);
+  assert.equal((await call('POST', '/api/git/commit', { paths: [], message: 'one amended', amend: true })).status, 200);
+  const log = await call('GET', '/api/git/log');
+  assert.equal(log.body.commits.length, 2); // init + 被改写的 one
+  assert.equal(log.body.commits[0].subject, 'one amended');
+  const st = await call('GET', '/api/git/status');
+  assert.deepEqual(st.body.changes.map((c: { path: string }) => c.path), ['b.txt']); // 未跟踪文件保持原样
+});
+
+test('POST /api/git/pull|push：没有上游 → 400', async () => {
+  assert.equal((await call('POST', '/api/git/pull')).status, 400);
+  assert.equal((await call('POST', '/api/git/push')).status, 400);
 });
 
 test('GET /api/git/log：非仓库 → 200 + isRepo:false + 空列表（不再 500）', async () => {

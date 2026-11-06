@@ -62,13 +62,46 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
   return (await res.json()) as T;
 }
 
-export type GitChange = { path: string; status: string };
-export type GitStatus = { isRepo: boolean; changes: GitChange[] };
+export type GitChange = {
+  path: string;
+  status: string;
+  index: string;
+  worktree: string;
+  staged: boolean;
+  origPath?: string;
+};
+export type GitStatus = {
+  isRepo: boolean;
+  changes: GitChange[];
+  branch: string | null;
+  hasCommits: boolean;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+};
 export type GitCommit = { hash: string; shortHash: string; subject: string; author: string; time: number; decorations: string; parents: string[] };
 export type GitBranch = { name: string; current: boolean; tip: string };
 export type GitBranches = { isRepo: boolean; current: string | null; branches: GitBranch[] };
 export type GitLog = { isRepo: boolean; commits: GitCommit[] };
 export type GitShow = { commit: GitCommit; diff: string };
+export type SystemInfo = {
+  hostname: string;
+  type: string;
+  platform: string;
+  release: string;
+  arch: string;
+  node: string;
+  version: string;
+  uptime: number;
+  processUptime: number;
+  cpuModel: string;
+  cpuCount: number;
+  loadavg: number[];
+  totalMem: number;
+  freeMem: number;
+  workspace: string;
+  disk: { total: number; free: number } | null;
+};
 export type FileInfo = { kind: 'text' | 'binary' | 'audio' | 'video' | 'pdf' | 'epub' | 'sqlite'; size: number; modified: string; mime: string };
 export type ArchiveDownload = {
   kind: 'archive'; id: string; status: 'preparing' | 'ready' | 'failed';
@@ -87,11 +120,12 @@ export const api = {
   downloadStatus: (id: string, signal?: AbortSignal) => request<ArchiveDownload>('GET', `/api/download/status?id=${encodeURIComponent(id)}`, undefined, signal),
   writeFile: (path: string, content: string) =>
     request('PUT', `/api/file?path=${encodeURIComponent(path)}`, { content }),
-  mkDir: (path: string) => request('POST', '/api/mkdir', { path }),
+  mkDir: (path: string, recursive = false) => request('POST', '/api/mkdir', { path, recursive }),
   create: (path: string) => request('POST', '/api/create', { path }),
   upload: (path: string, file: Blob) => request('POST', `/api/upload?path=${encodeURIComponent(path)}`, file),
   rename: (path: string, to: string) => request('POST', '/api/rename', { path, to }),
   del: (path: string) => request('POST', '/api/delete', { path }),
+  system: () => request<SystemInfo>('GET', '/api/system'),
   tabs: {
     list: () => request<{ tabs: string[] }>('GET', '/api/tabs'),
     open: (path: string) => request('PUT', '/api/tabs/open', { path }),
@@ -108,7 +142,13 @@ export const api = {
   git: {
     status: () => request<GitStatus>('GET', '/api/git/status'),
     diff: (path: string) => request<{ diff: string }>('GET', `/api/git/diff?path=${encodeURIComponent(path)}`),
-    commit: (paths: string[], message: string) => request('POST', '/api/git/commit', { paths, message }),
+    commit: (paths: string[], message: string, amend = false) => request('POST', '/api/git/commit', { paths, message, amend }),
+    stage: (paths: string[]) => request('POST', '/api/git/stage', { paths }),
+    unstage: (paths: string[]) => request('POST', '/api/git/unstage', { paths }),
+    discard: (paths: string[]) => request('POST', '/api/git/discard', { paths }),
+    fetch: () => request<{ output: string }>('POST', '/api/git/fetch'),
+    pull: () => request<{ output: string }>('POST', '/api/git/pull'),
+    push: () => request<{ output: string }>('POST', '/api/git/push'),
     branches: () => request<GitBranches>('GET', '/api/git/branches'),
     log: (params: { branch?: string; limit?: number; skip?: number }) => {
       const q = new URLSearchParams();

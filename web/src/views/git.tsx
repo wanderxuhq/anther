@@ -1,50 +1,30 @@
 // web/src/views/git.tsx
-// Git 面板（主区域独立标签，单例）：顶部提交区 + 全选/取消全选，下方改动列表。
-// 每行：点行主体 = 切换勾选；行尾独立 [diff] 按钮 = 打开该文件 diff 标签（两目标分离，避免误触）。
-import { createSignal, createEffect, For, Show } from 'solid-js';
-import { api, type GitStatus, type GitChange } from '../api.ts';
+// Git 面板（主区域独立标签，单例）：同步栏（fetch/pull/push + ahead/behind）、
+// 提交区（含 amend）、已暂存/工作区分组。行主体打开 diff，行尾是暂存切换与丢弃。
+import { createEffect, createSignal, For, Show, onCleanup } from 'solid-js';
+import { api, type GitChange, type GitStatus } from '../api.ts';
 import { openGitDiff, gitRefreshTick } from '../stores.ts';
 import { t } from '../i18n.ts';
+import { canCommit, changeBadge, stagedChanges, statusClass, unstagedChanges } from './git-model.ts';
 
-export function togglePath(selected: Set<string>, path: string): Set<string> {
-  const next = new Set(selected);
-  if (next.has(path)) next.delete(path);
-  else next.add(path);
-  return next;
-}
-
-export function allPaths(status: GitStatus | null): string[] {
-  return status?.changes.map((c) => c.path) ?? [];
-}
-
-export function selectedPaths(status: GitStatus | null, selected: Set<string>): string[] {
-  return allPaths(status).filter((p) => selected.has(p));
-}
-
-/** 状态字母 → CSS 着色类名（git-status-<class>） */
-export function statusClass(status: string): string {
-  if (status === '??') return 'untracked';
-  if (status === 'D') return 'deleted';
-  if (status === 'A') return 'added';
-  if (status === 'R' || status === 'C') return 'renamed';
-  return 'modified';
-}
+type SyncAction = 'fetch' | 'pull' | 'push';
+type BusyAction = SyncAction | 'stage' | 'unstage' | 'discard' | 'commit';
 
 export function GitView() {
   const [status, setStatus] = createSignal<GitStatus | null>(null);
-  const [selected, setSelected] = createSignal<Set<string>>(new Set());
   const [message, setMessage] = createSignal('');
+  const [amend, setAmend] = createSignal(false);
   const [loading, setLoading] = createSignal(true);
+  const [busy, setBusy] = createSignal<BusyAction | null>(null);
   const [error, setError] = createSignal<string | null>(null);
-  const [committing, setCommitting] = createSignal(false);
+  const [notice, setNotice] = createSignal<string | null>(null);
+  const [discardPath, setDiscardPath] = createSignal<string | null>(null);
+  let discardTimer: ReturnType<typeof setTimeout> | undefined;
 
-  /** 拉 status + 默认全选（每次打开面板挂载即刷新，标签切换即重新挂载） */
   async function refresh(): Promise<void> {
     setLoading(true);
     try {
-      const s = await api.git.status();
-      setStatus(s);
-      setSelected(new Set(allPaths(s)));
+      setStatus(await api.git.status());
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -53,83 +33,219 @@ export function GitView() {
     }
   }
 
-  // 挂载 + gitRefreshTick（checkout/commit/刷新后 bump → 重拉 status；标签切走再切回即重新挂载 → 自动刷新）
+  // 挂载 + gitRefreshTick（checkout/createBranch/工具栏刷新后 bump → 重拉 status）
   createEffect(() => {
     gitRefreshTick();
     void refresh();
   });
+  onCleanup(() => clearTimeout(discardTimer));
 
-  async function handleCommit(): Promise<void> {
-    const msg = message().trim();
-    const paths = selectedPaths(status(), selected());
-    if (paths.length === 0 || msg === '') return;
-    setCommitting(true); // 提交中态：避免并发 commit（spec §6.2）
+  async function mutate(action: 'stage' | 'unstage' | 'discard', paths: string[]): Promise<void> {
+    if (paths.length === 0 || busy()) return;
+    setBusy(action);
+    setError(null);
+    setNotice(null);
     try {
-      await api.git.commit(paths, msg);
-      setMessage('');
+      await api.git[action](paths);
       await refresh();
     } catch (e) {
-      setError((e as Error).message); // 展示 git 原始错误（spec §6.1）
+      setError((e as Error).message); // git 原始错误（spec §6.1）
     } finally {
-      setCommitting(false);
+      setBusy(null);
     }
   }
 
-  const canCommit = () =>
-    !committing() && !loading() && message().trim() !== '' && selectedPaths(status(), selected()).length > 0;
+  async function runSync(action: SyncAction): Promise<void> {
+    if (busy()) return;
+    setBusy(action);
+    setError(null);
+    setNotice(null);
+    try {
+      const { output } = await api.git[action]();
+      setNotice(output || t('git.syncDone'));
+      await refresh(); // fetch 改变 ahead/behind，pull 改变工作区
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleCommit(): Promise<void> {
+    if (!canCommit(status(), message()) || busy()) return;
+    setBusy('commit');
+    setError(null);
+    setNotice(null);
+    try {
+      await api.git.commit([], message().trim(), amend());
+      setMessage('');
+      setAmend(false);
+      setNotice(t('git.commitDone'));
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** amend 勾选时用上一条提交信息预填输入框（仅在为空时），避免用户重打。 */
+  async function toggleAmend(checked: boolean): Promise<void> {
+    setAmend(checked);
+    if (!checked || message().trim() !== '') return;
+    try {
+      const log = await api.git.log({ limit: 1 });
+      const subject = log.commits[0]?.subject;
+      if (subject) setMessage(subject);
+    } catch { /* 读取失败就算了，用户自己输入 */ }
+  }
+
+  /** 丢弃是破坏性操作：第一次点击进入 3s 确认态，第二次才真正执行。 */
+  function onDiscard(change: GitChange): void {
+    if (busy()) return;
+    if (discardPath() !== change.path) {
+      setDiscardPath(change.path);
+      clearTimeout(discardTimer);
+      discardTimer = setTimeout(() => setDiscardPath(null), 3000);
+      return;
+    }
+    setDiscardPath(null);
+    clearTimeout(discardTimer);
+    void mutate('discard', [change.path]);
+  }
+
+  function commitOnEnter(e: KeyboardEvent): void {
+    if (e.key === 'Enter' && !e.isComposing) void handleCommit();
+  }
+
+  const canSync = () => !!status()?.isRepo && !busy();
 
   return (
     <div class="git-view">
+      <Show when={status()?.isRepo}>
+        <div class="git-sync-bar">
+          <div class="git-sync-meta">
+            <span class="git-sync-branch" title={t('git.branch')}>{status()?.branch ?? 'HEAD'}</span>
+            <Show when={status()?.upstream}>
+              <span class="git-sync-upstream" title={t('git.upstream')}>{status()!.upstream}</span>
+            </Show>
+            <Show when={(status()?.ahead ?? 0) > 0 || (status()?.behind ?? 0) > 0}>
+              <span class="git-sync-count" title={t('git.aheadBehind', { ahead: status()!.ahead, behind: status()!.behind })}>
+                <Show when={status()!.ahead > 0}>{`↑${status()!.ahead}`}</Show>
+                <Show when={status()!.behind > 0}>{`↓${status()!.behind}`}</Show>
+              </span>
+            </Show>
+          </div>
+          <div class="git-sync-actions">
+            <For each={['fetch', 'pull', 'push'] as const}>
+              {(action) => (
+                <button class="git-sync-btn" disabled={!canSync()} onClick={() => void runSync(action)}>
+                  {busy() === action ? t('loading') : t(`git.${action}`)}
+                </button>
+              )}
+            </For>
+          </div>
+        </div>
+      </Show>
+
       <div class="git-commit-bar">
         <input
           class="git-message"
           value={message()}
           onInput={(e) => setMessage(e.currentTarget.value)}
+          onKeyDown={commitOnEnter}
           placeholder={t('git.commitPlaceholder')}
         />
-        <button class="icon-btn git-commit-btn" disabled={!canCommit()} onClick={() => void handleCommit()}>
-          {committing() ? t('loading') : t('git.commit')}
+        <button class="icon-btn git-commit-btn" disabled={!canCommit(status(), message()) || !!busy()} onClick={() => void handleCommit()}>
+          {busy() === 'commit' ? t('loading') : t('git.commit')}
         </button>
       </div>
-      <div class="git-select-row">
-        <button class="link-btn" disabled={loading()} onClick={() => setSelected(new Set(allPaths(status())))}>
-          {t('git.selectAll')}
-        </button>
-        <button class="link-btn" disabled={loading()} onClick={() => setSelected(new Set())}>
-          {t('git.clearAll')}
-        </button>
+      <div class="git-commit-options">
+        <label class="git-amend">
+          <input type="checkbox" checked={amend()} disabled={!status()?.hasCommits || !!busy()}
+            onChange={(e) => void toggleAmend(e.currentTarget.checked)} />
+          {t('git.amend')}
+        </label>
+        <span class="git-staged-count">{t('git.stagedCount', { n: stagedChanges(status()).length })}</span>
       </div>
+
       <Show when={error()}>
         <div class="error-banner">{error()}</div>
+      </Show>
+      <Show when={notice()}>
+        <div class="git-notice">{notice()}</div>
       </Show>
       <Show when={!loading() && status()?.isRepo === false}>
         <div class="view-placeholder">{t('git.notRepo')}</div>
       </Show>
-      <Show when={!loading() && status()?.isRepo && allPaths(status()).length === 0}>
-        <div class="view-placeholder">{t('git.empty')}</div>
-      </Show>
       <Show when={loading()}>
         <div class="view-placeholder">{t('loading')}</div>
       </Show>
-      <ul class="git-list">
-        <For each={status()?.changes ?? []}>
-          {(c: GitChange) => (
-            <li class="git-row">
-              <button
-                class={`git-row-main ${selected().has(c.path) ? 'checked' : ''}`}
-                onClick={() => setSelected((prev) => togglePath(prev, c.path))}
-              >
-                <span class="git-check">{selected().has(c.path) ? '☑' : '☐'}</span>
-                <span class="git-path">{c.path}</span>
-                <span class={`git-status git-status-${statusClass(c.status)}`}>{c.status}</span>
-              </button>
-              <button class="icon-btn git-diff-btn" onClick={() => void openGitDiff(c.path)} title={t('git.viewDiff')}>
-                ↔
-              </button>
-            </li>
-          )}
-        </For>
-      </ul>
+      <Show when={!loading() && status()?.isRepo && status()!.changes.length === 0}>
+        <div class="view-placeholder">{t('git.empty')}</div>
+      </Show>
+
+      <div class="git-scroll">
+        <Show when={stagedChanges(status()).length > 0}>
+          <div class="git-group-head">
+            <span>{t('git.staged')}</span>
+            <span class="git-group-count">{stagedChanges(status()).length}</span>
+            <button class="link-btn git-group-action" disabled={!!busy()}
+              onClick={() => void mutate('unstage', stagedChanges(status()).map((c) => c.path))}>
+              {t('git.unstageAll')}
+            </button>
+          </div>
+          <ul class="git-list">
+            <For each={stagedChanges(status())}>
+              {(change) => (
+                <li class="git-row">
+                  <button class="git-row-main" onClick={() => void openGitDiff(change.path)} title={t('git.viewDiff')}>
+                    <span class="git-path">{change.path}</span>
+                    <span class={`git-status git-status-${statusClass(changeBadge(change, true))}`}>{changeBadge(change, true)}</span>
+                  </button>
+                  <button class="git-row-btn" title={t('git.unstage')} aria-label={`${t('git.unstage')} ${change.path}`}
+                    disabled={!!busy()} onClick={() => void mutate('unstage', [change.path])}>－</button>
+                  <button class={`git-row-btn ${discardPath() === change.path ? 'danger' : ''}`}
+                    title={discardPath() === change.path ? t('git.confirmDiscard') : t('git.discard')}
+                    aria-label={t('git.discard')} disabled={!!busy()} onClick={() => onDiscard(change)}>
+                    {discardPath() === change.path ? '!' : '↺'}
+                  </button>
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
+
+        <Show when={unstagedChanges(status()).length > 0}>
+          <div class="git-group-head">
+            <span>{t('git.changes')}</span>
+            <span class="git-group-count">{unstagedChanges(status()).length}</span>
+            <button class="link-btn git-group-action" disabled={!!busy()}
+              onClick={() => void mutate('stage', unstagedChanges(status()).map((c) => c.path))}>
+              {t('git.stageAll')}
+            </button>
+          </div>
+          <ul class="git-list">
+            <For each={unstagedChanges(status())}>
+              {(change) => (
+                <li class="git-row">
+                  <button class="git-row-main" onClick={() => void openGitDiff(change.path)} title={t('git.viewDiff')}>
+                    <span class="git-path">{change.path}</span>
+                    <span class={`git-status git-status-${statusClass(changeBadge(change, false))}`}>{changeBadge(change, false)}</span>
+                  </button>
+                  <button class="git-row-btn" title={t('git.stage')} aria-label={`${t('git.stage')} ${change.path}`}
+                    disabled={!!busy()} onClick={() => void mutate('stage', [change.path])}>＋</button>
+                  <button class={`git-row-btn ${discardPath() === change.path ? 'danger' : ''}`}
+                    title={discardPath() === change.path ? t('git.confirmDiscard') : t('git.discard')}
+                    aria-label={t('git.discard')} disabled={!!busy()} onClick={() => onDiscard(change)}>
+                    {discardPath() === change.path ? '!' : '↺'}
+                  </button>
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
+      </div>
     </div>
   );
 }

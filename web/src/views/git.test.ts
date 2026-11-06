@@ -1,72 +1,64 @@
 // web/src/views/git.test.ts
-// GitView 的 DOM 无关纯逻辑：勾选切换 / 全选路径集 / 状态着色映射。
-//
-// 注意：node:test 的 --experimental-transform-types 只能加载 .ts，无法加载 .tsx
-// （JSX 需完整编译，Node 24 不支持）。因此这里不从 './git.tsx' 做 ESM 导入，而是
-// 读取 git.tsx 源码文本、按名字提取 4 个纯函数（它们无 JSX、无运行时依赖），strip
-// 类型注解后求值拿到函数引用——测试的仍是 git.tsx 里的真实实现，仅绕过 ESM 绑定。
-// 若未来重构改了函数名/签名，extractFunction 会直接抛「找不到」让测试失败，不会静默失真。
+// GitView 的 DOM 无关纯逻辑：暂存/工作区分组、状态字母、提交可用性。
+// 纯函数已抽到 git-model.ts，node:test 可直接导入（.tsx 无法被 Node 直接加载）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { stripTypeScriptTypes } from 'node:module';
 import type { GitStatus } from '../api.ts';
-
-const FUNC_NAMES = ['togglePath', 'allPaths', 'selectedPaths', 'statusClass'] as const;
-
-/** 从 git.tsx 源码中按 `export function NAME(` 起、括号配平提取整个函数文本 */
-function extractFunction(src: string, name: string): string {
-  const marker = `export function ${name}(`;
-  const start = src.indexOf(marker);
-  assert.notEqual(start, -1, `git.tsx 中找不到纯函数 ${name}`);
-  const open = src.indexOf('{', start + marker.length);
-  let depth = 0;
-  let i = open;
-  for (; i < src.length; i++) {
-    if (src[i] === '{') depth++;
-    else if (src[i] === '}') {
-      depth--;
-      if (depth === 0) break;
-    }
-  }
-  return src.slice(start, i + 1);
-}
-
-const src = readFileSync(new URL('./git.tsx', import.meta.url), 'utf8');
-const code = stripTypeScriptTypes(FUNC_NAMES.map((n) => extractFunction(src, n)).join('\n')).replace(/\bexport\s+/g, '');
-const { togglePath, allPaths, selectedPaths, statusClass } = new Function(
-  `${code}; return { togglePath, allPaths, selectedPaths, statusClass };`,
-)() as {
-  togglePath: (selected: Set<string>, path: string) => Set<string>;
-  allPaths: (status: GitStatus | null) => string[];
-  selectedPaths: (status: GitStatus | null, selected: Set<string>) => string[];
-  statusClass: (status: string) => string;
-};
+import {
+  allPaths, canCommit, changeBadge, stagedChanges, statusClass, unstagedChanges,
+} from './git-model.ts';
 
 const status: GitStatus = {
   isRepo: true,
+  branch: 'main',
+  hasCommits: true,
+  upstream: 'origin/main',
+  ahead: 1,
+  behind: 0,
   changes: [
-    { path: 'a.ts', status: 'M' },
-    { path: 'b.ts', status: '??' },
-    { path: 'c.ts', status: 'D' },
+    { path: 'a.ts', status: 'M', index: 'M', worktree: ' ', staged: true },
+    { path: 'b.ts', status: 'M', index: 'M', worktree: 'M', staged: true },
+    { path: 'c.ts', status: '??', index: '?', worktree: '?', staged: false },
+    { path: 'd.ts', status: 'D', index: ' ', worktree: 'D', staged: false },
   ],
 };
 
-test('togglePath：点过的勾选取消，未点过的勾上', () => {
-  assert.deepEqual([...togglePath(new Set(['a.ts']), 'a.ts')], []);
-  assert.deepEqual([...togglePath(new Set(['a.ts']), 'b.ts')], ['a.ts', 'b.ts']);
+test('stagedChanges / unstagedChanges：按 index/worktree 两列分组', () => {
+  assert.deepEqual(stagedChanges(status).map((c) => c.path), ['a.ts', 'b.ts']);
+  // b.ts 两侧都有改动 → 两组都出现；c/d 只在工作区组
+  assert.deepEqual(unstagedChanges(status).map((c) => c.path), ['b.ts', 'c.ts', 'd.ts']);
+  assert.deepEqual(stagedChanges(null), []);
+  assert.deepEqual(unstagedChanges(null), []);
 });
 
-test('allPaths / selectedPaths：提交路径 = 勾选 ∩ 当前改动', () => {
-  assert.deepEqual(allPaths(status), ['a.ts', 'b.ts', 'c.ts']);
-  assert.deepEqual(selectedPaths(status, new Set(['a.ts', 'gone.ts'])), ['a.ts']);
-  assert.deepEqual(selectedPaths(status, new Set()), []);
+test('changeBadge：暂存组看 index，工作区组看 worktree，未跟踪显示 ??', () => {
+  const byPath = Object.fromEntries(status.changes.map((c) => [c.path, c]));
+  assert.equal(changeBadge(byPath['a.ts'], true), 'M');
+  assert.equal(changeBadge(byPath['a.ts'], false), ' '); // 工作区已干净
+  assert.equal(changeBadge(byPath['b.ts'], true), 'M');
+  assert.equal(changeBadge(byPath['b.ts'], false), 'M');
+  assert.equal(changeBadge(byPath['c.ts'], false), '??');
+  assert.equal(changeBadge(byPath['d.ts'], false), 'D');
+});
+
+test('canCommit：需要提交信息 + 至少一个已暂存改动', () => {
+  assert.equal(canCommit(status, 'feat: x'), true);
+  assert.equal(canCommit(status, '   '), false);
+  assert.equal(canCommit({ ...status, changes: status.changes.filter((c) => !c.staged) }, 'feat: x'), false);
+  assert.equal(canCommit(null, 'feat: x'), false);
 });
 
 test('statusClass：状态字母 → 着色类名', () => {
   assert.equal(statusClass('??'), 'untracked');
+  assert.equal(statusClass('?'), 'untracked');
   assert.equal(statusClass('M'), 'modified');
   assert.equal(statusClass('A'), 'added');
   assert.equal(statusClass('D'), 'deleted');
   assert.equal(statusClass('R'), 'renamed');
+  assert.equal(statusClass('C'), 'renamed');
+});
+
+test('allPaths：当前所有改动路径', () => {
+  assert.deepEqual(allPaths(status), ['a.ts', 'b.ts', 'c.ts', 'd.ts']);
+  assert.deepEqual(allPaths(null), []);
 });

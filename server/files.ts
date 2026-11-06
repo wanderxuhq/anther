@@ -244,10 +244,11 @@ export class FileStore {
     }
   }
 
-  async mkdir(relPath: string): Promise<void> {
+  /** 建目录；recursive=true 时按需创建父级（已存在视为成功），供文件夹上传用。 */
+  async mkdir(relPath: string, recursive = false): Promise<void> {
     const abs = await this.resolveSafe(relPath);
     try {
-      await fs.mkdir(abs);
+      await fs.mkdir(abs, recursive ? { recursive: true } : undefined);
     } catch (e: unknown) {
       throw this.mapFsError(e);
     }

@@ -54,8 +54,22 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 .markdown-body hr { border: 0; border-top: 1px solid var(--border); margin: 1.5em 0; }
 .markdown-body input[type='checkbox'] { margin-right: .5em; }
 
-/* 终端面板（Task 10）：填满主区域，xterm 自管滚动 */
-.terminal-view { height: 100%; min-height: 0; overflow: hidden; padding: 4px 0 0 4px; }
+/* 终端面板（Task 10）：填满主区域，xterm 自管滚动；移动端底部按键条 */
+.terminal-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.terminal-view { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: 4px 0 0 4px; }
+.terminal-keys {
+  display: none; flex: 0 0 auto; flex-direction: column; gap: 4px;
+  padding: 4px; border-top: 1px solid var(--border); background: var(--bg);
+}
+@media (pointer: coarse), (max-width: 599px) { .terminal-keys { display: flex; } }
+.terminal-key-row { display: flex; gap: 4px; overflow-x: auto; overscroll-behavior: contain; }
+.terminal-key {
+  flex: 0 0 auto; min-width: 40px; min-height: 40px; padding: 0 8px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: none; color: inherit; font-size: 13px; cursor: pointer;
+}
+.terminal-key.active { background: var(--accent); color: white; border-color: var(--accent); }
+.terminal-key-letters .terminal-key { min-width: 36px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 /* 最小 Toast（Task 13；完整系统留给 Task 14/15）：固定定位、3s 自动消失 */
 .toast {
@@ -116,6 +130,9 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 }
 .tree-row:hover { background: var(--row-hover); }
 .tree-row.active { background: var(--accent); color: white; }
+/* 拖拽上传：根区域与目标目录/文件行的高亮 */
+.filetree.drop-active { outline: 2px dashed var(--accent); outline-offset: 4px; border-radius: 6px; }
+.tree-row.drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--row-hover); }
 .tree-arrow { width: 14px; flex: 0 0 auto; text-align: center; color: var(--muted); }
 .tree-row.active .tree-arrow { color: inherit; }
 .tree-name { overflow: hidden; text-overflow: ellipsis; }
@@ -230,6 +247,23 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .dialog-actions .icon-btn:disabled { opacity: .5; }
 
+/* 服务器信息（抽屉 ⓘ）：比命名对话框宽，内容多时内部滚动 */
+.system-info-card { width: min(460px, 92vw); max-height: min(80vh, 640px); }
+.system-info-head { display: flex; align-items: center; gap: 4px; }
+.system-info-head .dialog-title { flex: 1; }
+.system-info-status { color: var(--muted); font-size: 13px; }
+.system-info-list {
+  margin: 0; padding: 0; flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 7px;
+}
+.system-info-row { display: flex; align-items: baseline; gap: 12px; }
+.system-info-row dt { flex: 0 0 96px; color: var(--muted); font-size: 12px; }
+.system-info-row dd {
+  margin: 0; flex: 1; min-width: 0; overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px;
+}
+.system-info-card .dialog-actions { flex: 0 0 auto; }
+
 /* ---- 全局搜索（Task 17） ---- */
 .search-view { font-size: 13px; display: flex; flex-direction: column; gap: 8px; }
 .search-inputs { display: flex; flex-direction: column; gap: 6px; }
@@ -265,24 +299,52 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 .search-match-text mark { background: #fde047; color: #000; border-radius: 2px; }
 :root[data-theme='dark'] .search-match-text mark { background: #a16207; color: #fff; }
 
-/* ---- Git 面板（2026-08-09） ---- */
-.git-view { font-size: 13px; display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; }
+/* ---- Git 面板（2026-08-09，2026-10 增加暂存/同步） ---- */
+.git-view { font-size: 13px; display: flex; flex-direction: column; gap: 6px; height: 100%; min-height: 0; }
+.git-sync-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 8px; border-bottom: 1px solid var(--border);
+}
+.git-sync-meta { display: flex; align-items: baseline; gap: 6px; min-width: 0; flex: 1; overflow: hidden; }
+.git-sync-branch { font-weight: 600; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-sync-upstream {
+  color: var(--muted); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.git-sync-count { color: var(--accent); font-size: 12px; display: inline-flex; gap: 6px; white-space: nowrap; }
+.git-sync-actions { display: flex; gap: 4px; }
+.git-sync-btn {
+  min-height: 36px; padding: 0 10px; font-size: 12px;
+  border: 1px solid var(--border); border-radius: 6px; background: none; color: inherit; cursor: pointer;
+}
+.git-sync-btn:disabled { opacity: .4; }
 .git-commit-bar { display: flex; gap: 6px; padding: 8px; border-bottom: 1px solid var(--border); }
 .git-message {
   flex: 1; min-height: 44px; font-size: 16px; padding: 0 10px;
   border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: inherit;
 }
-.git-select-row { display: flex; gap: 12px; padding: 0 8px; }
-.git-select-row .link-btn { min-height: 40px; display: inline-flex; align-items: center; }
-.git-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 0; }
+.git-commit-options {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 0 8px; color: var(--muted); font-size: 12px;
+}
+.git-amend { display: flex; align-items: center; gap: 6px; min-height: 32px; }
+.git-amend input { width: 16px; height: 16px; }
+.git-staged-count { white-space: nowrap; }
+.git-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.git-group-head {
+  display: flex; align-items: center; gap: 8px; padding: 4px 8px;
+  position: sticky; top: 0; z-index: 1; background: var(--bg);
+  font-size: 12px; font-weight: 600;
+}
+.git-group-count { color: var(--muted); font-weight: 400; }
+.git-group-action { margin-left: auto; font-size: 12px; }
+.git-list { list-style: none; margin: 0; padding: 0; }
 .git-row { display: flex; align-items: center; border-bottom: 1px solid var(--border); }
 .git-row-main {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
   background: none; border: none; text-align: left; cursor: pointer;
   padding: 4px 8px; min-height: 44px; color: inherit; font-size: 13px;
 }
-.git-row-main.checked .git-check { color: var(--accent); }
-.git-check { flex: 0 0 auto; font-size: 16px; }
 .git-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .git-status { flex: 0 0 auto; font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--border); }
 .git-status-untracked { color: #b45309; }
@@ -290,7 +352,14 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 .git-status-deleted { color: #b91c1c; }
 .git-status-renamed { color: #7c3aed; }
 .git-status-modified { color: #b45309; }
-.git-diff-btn { min-width: 40px; min-height: 44px; font-size: 16px; }
+.git-row-btn { min-width: 40px; min-height: 44px; background: none; border: none; color: inherit; cursor: pointer; font-size: 16px; }
+.git-row-btn.danger { color: #f87171; }
+.git-row-btn:disabled { opacity: .4; }
+.git-notice {
+  margin: 0 8px; padding: 8px 10px; border-radius: 6px;
+  background: var(--row-hover); color: var(--muted); font-size: 12px;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
 
 /* git-diff 标签：只读 CodeMirror 渲染 unified diff */
 .git-diff-view { height: 100%; min-height: 0; display: flex; flex-direction: column; }

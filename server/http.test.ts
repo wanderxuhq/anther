@@ -1,5 +1,5 @@
 // server/http.test.ts
-// 集成测试：/api/state 端点、PUT 无 body → 400、%zz 畸形路径 → 400。
+// 集成测试：PUT 无 body → 400、%zz 畸形路径 → 400。
 // 静态目录用临时目录（不测静态分支），仅锁动态路由与 serveStatic 的错误分支。
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -44,12 +44,6 @@ async function call(method: string, url: string, body?: unknown) {
   return { status: res.status, body: await res.json() };
 }
 
-test('GET /api/state 返回服务器运行模式（写入恒可用，由前端 ro 裁决）', async () => {
-  const { status, body } = await call('GET', '/api/state');
-  assert.equal(status, 200);
-  assert.deepEqual(body, { allowWrites: true });
-});
-
 test('PUT /api/file 无 body → 400（而非 500）', async () => {
   const { status } = await call('PUT', '/api/file?path=a.txt');
   assert.equal(status, 400);
@@ -77,6 +71,14 @@ test('POST /api/create 无 body → 400（而非 500）', async () => {
   const { status, body } = await call('POST', '/api/create');
   assert.equal(status, 400);
   assert.ok(body.error);
+});
+
+test('POST /api/mkdir recursive:true 一次创建多级目录', async () => {
+  assert.equal((await call('POST', '/api/mkdir', { path: 'upload/nested' })).status, 404);
+  assert.equal((await call('POST', '/api/mkdir', { path: 'upload/nested', recursive: true })).status, 200);
+  const list = await call('GET', '/api/list?path=upload/nested');
+  assert.equal(list.status, 200);
+  assert.deepEqual(list.body.entries, []);
 });
 
 test('取消上传大小限制后，普通 JSON 请求仍保留原限制', async () => {

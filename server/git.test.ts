@@ -1,7 +1,7 @@
 // server/git.test.ts
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, mkdir, readFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
@@ -292,4 +292,154 @@ test('show：合并提交 → --first-parent 标准 unified diff（非 combined�
   assert.doesNotMatch(diff, /diff --cc|diff --combined/); // 非 combined
   assert.match(diff, /\+dev/);                     // 含合并引入的 dev 侧新增
   assert.doesNotMatch(diff, /main\.txt/);          // 第一父（main）已有 main.txt → 不出现（第一父语义）
+});
+
+test('status：XY 两列、staged、分支与上游/领先落后字段', async () => {
+  await writeFile(path.join(repoDir, 'tracked.txt'), 'line1\nline2\n');
+  await gitCmd(['add', 'tracked.txt']);
+  await writeFile(path.join(repoDir, 'tracked.txt'), 'line1\nline2\nline3\n');
+  await writeFile(path.join(repoDir, 'new.txt'), 'x\n');
+  const st = await git.status();
+  assert.equal(st.branch, 'main');
+  assert.equal(st.hasCommits, true);
+  assert.equal(st.upstream, null);
+  assert.equal(st.ahead, 0);
+  assert.equal(st.behind, 0);
+  const tracked = st.changes.find((c) => c.path === 'tracked.txt')!;
+  assert.equal(tracked.index, 'M');
+  assert.equal(tracked.worktree, 'M');
+  assert.equal(tracked.staged, true);
+  const untracked = st.changes.find((c) => c.path === 'new.txt')!;
+  assert.equal(untracked.status, '??');
+  assert.equal(untracked.index, '?');
+  assert.equal(untracked.staged, false);
+});
+
+test('stage/unstage：修改 + 新增进入/退出暂存区', async () => {
+  await writeFile(path.join(repoDir, 'tracked.txt'), 'line1\nline2\n');
+  await writeFile(path.join(repoDir, 'new.txt'), 'x\n');
+  await git.stage(['tracked.txt', 'new.txt']);
+  let st = await git.status();
+  assert.equal(st.changes.find((c) => c.path === 'tracked.txt')!.index, 'M');
+  assert.equal(st.changes.find((c) => c.path === 'new.txt')!.index, 'A');
+
+  await git.unstage(['tracked.txt', 'new.txt']);
+  st = await git.status();
+  assert.equal(st.changes.find((c) => c.path === 'tracked.txt')!.index, ' ');
+  assert.equal(st.changes.find((c) => c.path === 'new.txt')!.status, '??');
+});
+
+test('stage：删除也进入暂存区', async () => {
+  await rm(path.join(repoDir, 'gone.txt'));
+  await git.stage(['gone.txt']);
+  const change = (await git.status()).changes.find((c) => c.path === 'gone.txt')!;
+  assert.equal(change.index, 'D');
+});
+
+test('discard：恢复已跟踪修改/删除，并清理未跟踪文件与目录', async () => {
+  await writeFile(path.join(repoDir, 'tracked.txt'), 'changed\n');
+  await rm(path.join(repoDir, 'gone.txt'));
+  await writeFile(path.join(repoDir, 'new.txt'), 'x\n');
+  await mkdir(path.join(repoDir, 'dir'));
+  await writeFile(path.join(repoDir, 'dir', 'inner.txt'), 'y\n');
+
+  await git.discard(['tracked.txt', 'gone.txt', 'new.txt', 'dir/']);
+
+  assert.equal(await readFile(path.join(repoDir, 'tracked.txt'), 'utf8'), 'line1\n');
+  assert.equal(await readFile(path.join(repoDir, 'gone.txt'), 'utf8'), 'delete me\n');
+  await assert.rejects(() => readFile(path.join(repoDir, 'new.txt')));
+  await assert.rejects(() => readFile(path.join(repoDir, 'dir', 'inner.txt')));
+  assert.deepEqual((await git.status()).changes, []);
+});
+
+test('discard：已暂存的新文件取消暂存并删除', async () => {
+  await writeFile(path.join(repoDir, 'new.txt'), 'x\n');
+  await git.stage(['new.txt']);
+  await git.discard(['new.txt']);
+  await assert.rejects(() => readFile(path.join(repoDir, 'new.txt')));
+  assert.deepEqual((await git.status()).changes, []);
+});
+
+test('commit：只提交已暂存内容，工作区其余改动保留', async () => {
+  await writeFile(path.join(repoDir, 'tracked.txt'), 'line1\nline2\n');
+  await writeFile(path.join(repoDir, 'new.txt'), 'x\n');
+  await git.stage(['tracked.txt']);
+  await git.commit([], 'staged change');
+  const st = await git.status();
+  assert.deepEqual(st.changes.map((c) => c.path), ['new.txt']);
+  const log = await git.log(null, 1, 0);
+  assert.equal(log.commits[0].subject, 'staged change');
+});
+
+test('commit amend：改写上一条提交且不新增提交', async () => {
+  await writeFile(path.join(repoDir, 'tracked.txt'), 'line1\nline2\n');
+  await git.stage(['tracked.txt']);
+  await git.commit([], 'second');
+  await writeFile(path.join(repoDir, 'tracked.txt'), 'line1\nline2\nline3\n');
+  await git.stage(['tracked.txt']);
+  await git.commit([], 'second amended', true);
+  const log = await git.log(null, 10, 0);
+  assert.equal(log.commits.length, 2); // init + 被改写的 second
+  assert.equal(log.commits[0].subject, 'second amended');
+  assert.equal((await git.status()).changes.length, 0);
+});
+
+test('commit：无暂存内容 → 400；unborn 仓库 amend → 400', async () => {
+  await assert.rejects(() => git.commit([], 'nothing'), (e: unknown) => (e as HttpError).status === 400);
+  const emptyDir = await mkdtemp(path.join(os.tmpdir(), 'anther-empty-'));
+  try {
+    await execFileP('git', ['init', '-q'], { cwd: emptyDir });
+    await assert.rejects(() => new Git(emptyDir).commit([], 'amend', true), (e: unknown) => (e as HttpError).status === 400);
+  } finally {
+    await rm(emptyDir, { recursive: true, force: true });
+  }
+});
+
+test('status/push/fetch/pull：上游领先落后与快进', async () => {
+  const remoteDir = await mkdtemp(path.join(os.tmpdir(), 'anther-git-remote-'));
+  const otherDir = await mkdtemp(path.join(os.tmpdir(), 'anther-git-other-'));
+  try {
+    await execFileP('git', ['init', '--bare', '-q', remoteDir], { cwd: repoDir });
+    await execFileP('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], { cwd: remoteDir });
+    await gitCmd(['remote', 'add', 'origin', remoteDir]);
+    await gitCmd(['push', '-q', '-u', 'origin', 'main']);
+
+    let st = await git.status();
+    assert.equal(st.upstream, 'origin/main');
+    assert.equal(st.ahead, 0);
+    assert.equal(st.behind, 0);
+
+    await writeFile(path.join(repoDir, 'tracked.txt'), 'line1\nlocal\n');
+    await git.commit(['tracked.txt'], 'local');
+    st = await git.status();
+    assert.equal(st.ahead, 1);
+    const pushed = await git.push();
+    assert.match(pushed.output, /main/);
+    st = await git.status();
+    assert.equal(st.ahead, 0);
+
+    await execFileP('git', ['clone', '-q', remoteDir, otherDir], { cwd: repoDir });
+    await execFileP('git', ['config', 'user.email', 'o@o'], { cwd: otherDir });
+    await execFileP('git', ['config', 'user.name', 'o'], { cwd: otherDir });
+    await writeFile(path.join(otherDir, 'tracked.txt'), 'line1\nremote\n');
+    await execFileP('git', ['commit', '-qam', 'remote'], { cwd: otherDir });
+    await execFileP('git', ['push', '-q', 'origin', 'main'], { cwd: otherDir });
+
+    const fetched = await git.fetch();
+    assert.equal(typeof fetched.output, 'string');
+    st = await git.status();
+    assert.equal(st.behind, 1);
+    await git.pull();
+    st = await git.status();
+    assert.equal(st.behind, 0);
+    assert.equal(await readFile(path.join(repoDir, 'tracked.txt'), 'utf8'), 'line1\nremote\n');
+  } finally {
+    await rm(remoteDir, { recursive: true, force: true });
+    await rm(otherDir, { recursive: true, force: true });
+  }
+});
+
+test('push/pull：没有上游 → 400', async () => {
+  await assert.rejects(() => git.push(), (e: unknown) => (e as HttpError).status === 400);
+  await assert.rejects(() => git.pull(), (e: unknown) => (e as HttpError).status === 400);
 });

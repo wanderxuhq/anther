@@ -54,6 +54,14 @@ test('mkdir/rename/del 生效', async () => {
   await assert.rejects(store.read('renamed.txt'));
 });
 
+test('mkdir recursive：一次创建多级目录，已存在不报错', async () => {
+  await store.mkdir('a/b/c', true);
+  assert.equal((await readdir(path.join(root, 'a', 'b', 'c'))).length, 0);
+  await store.mkdir('a/b/c', true); // 已存在 → 成功
+  await assert.rejects(store.mkdir('a/b/c'), (e: HttpError) => e.status === 409); // 非递归仍拒绝
+  await assert.rejects(store.mkdir('x/y'), (e: HttpError) => e.status === 404); // 父级不存在
+});
+
 test('create 新建文件：存在且内容为空', async () => {
   await store.create('new.txt');
   assert.equal((await store.read('new.txt')).content, '');

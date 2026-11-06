@@ -3,6 +3,20 @@ import type { HttpServer } from '../http.ts';
 import { HttpError } from '../http-error.ts';
 import type { Git } from '../git.ts';
 
+/** paths 缺省视为空数组（提交已暂存内容）；提供了就必须是字符串数组。 */
+function readPaths(body: unknown): string[] {
+  const raw = (typeof body === 'object' && body !== null ? (body as { paths?: unknown }).paths : undefined);
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw) || raw.some((p) => typeof p !== 'string')) throw new HttpError(400, 'invalid paths');
+  return raw as string[];
+}
+
+function requirePaths(body: unknown): string[] {
+  const paths = readPaths(body);
+  if (paths.length === 0) throw new HttpError(400, 'invalid paths');
+  return paths;
+}
+
 export function registerGitRoutes(http: HttpServer, git: Git): void {
   http.get('/api/git/status', async () => git.status());
 
@@ -13,14 +27,31 @@ export function registerGitRoutes(http: HttpServer, git: Git): void {
   });
 
   http.post('/api/git/commit', async (_req, body) => {
-    const b = (typeof body === 'object' && body !== null ? body : {}) as { paths?: unknown; message?: unknown };
-    if (!Array.isArray(b.paths) || b.paths.some((x) => typeof x !== 'string')) {
-      throw new HttpError(400, 'invalid paths');
-    }
+    const b = (typeof body === 'object' && body !== null ? body : {}) as { paths?: unknown; message?: unknown; amend?: unknown };
+    const paths = readPaths(body);
     if (typeof b.message !== 'string') throw new HttpError(400, 'invalid message');
-    await git.commit(b.paths as string[], b.message);
+    await git.commit(paths, b.message, b.amend === true);
     return { ok: true };
   });
+
+  http.post('/api/git/stage', async (_req, body) => {
+    await git.stage(requirePaths(body));
+    return { ok: true };
+  });
+
+  http.post('/api/git/unstage', async (_req, body) => {
+    await git.unstage(requirePaths(body));
+    return { ok: true };
+  });
+
+  http.post('/api/git/discard', async (_req, body) => {
+    await git.discard(requirePaths(body));
+    return { ok: true };
+  });
+
+  http.post('/api/git/fetch', async () => git.fetch());
+  http.post('/api/git/pull', async () => git.pull());
+  http.post('/api/git/push', async () => git.push());
 
   http.get('/api/git/branches', async () => git.branches());
 

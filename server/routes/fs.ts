@@ -10,8 +10,6 @@ import { ArchiveManager, type ArchiveOptions } from '../archives.ts';
 export function registerFsRoutes(http: HttpServer, files: FileStore, archiveOptions?: ArchiveOptions): ArchiveManager {
   const archives = new ArchiveManager(files, archiveOptions);
   http.onClose(() => archives.dispose());
-  // spec §5.1 API 表：服务器运行模式（只读/可写）等状态
-  http.get('/api/state', async () => ({ allowWrites: true }));
 
   http.get('/api/list', async (_req, _body, q) => {
     return { entries: await files.list(q.get('path') ?? '.') };
@@ -62,9 +60,9 @@ export function registerFsRoutes(http: HttpServer, files: FileStore, archiveOpti
   // undefined，直接解构抛 TypeError → 500；先判对象形态再解构 → 400。
   http.post('/api/mkdir', async (_req, body, q) => {
     if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
-    const { path: p } = body as { path?: string };
+    const { path: p, recursive } = body as { path?: string; recursive?: unknown };
     if (!p) throw new HttpError(400, 'missing path');
-    await files.mkdir(p);
+    await files.mkdir(p, recursive === true);
   });
 
   // 独占建文件（O_EXCL）：重名 → 409 already exists，不清空既有文件（与 mkdir 同裁决）

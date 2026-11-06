@@ -12,6 +12,8 @@ import { Git } from './git.ts';
 import { registerGitRoutes } from './routes/git.ts';
 import { LspManager } from './lsp-manager.ts';
 import { registerLspRoutes } from './routes/lsp.ts';
+import { registerSystemRoutes } from './routes/system.ts';
+import { registerIdentifyRoutes } from './routes/identify.ts';
 
 export type CliArgs = { dir: string; port: number };
 
@@ -73,6 +75,8 @@ export async function main(argv: string[]): Promise<void> {
   registerTabsRoutes(http, tabs);
   registerTerminalRoutes(http, terminals);
   registerGitRoutes(http, git);
+  registerSystemRoutes(http, dir);
+  registerIdentifyRoutes(http, dir);
   const lsp = new LspManager({ workspaceRoot: dir });
   registerLspRoutes(http, lsp);
 
