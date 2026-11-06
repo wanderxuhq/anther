@@ -48,6 +48,7 @@ export function TerminalView(props: { id: string }) {
   let send: ((data: string) => void) | undefined;
   let focusInput: (() => void) | undefined;
   let resizeObserver: ResizeObserver | undefined;
+  let resizeTimer: ReturnType<typeof setTimeout> | undefined;
   let renderFrame: number | undefined;
   let statusTimer: ReturnType<typeof setTimeout> | undefined;
   let composing = false;
@@ -116,6 +117,17 @@ export function TerminalView(props: { id: string }) {
     screen.resize(cols, rows);
     socket?.resize(cols, rows);
     scheduleRender();
+  };
+
+  // 手机软键盘弹出/收起会连续触发 ResizeObserver；防抖避免反复 stty + SIGWINCH
+  // 让 shell 重绘出多余行。
+  const scheduleResize = () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      resizeTimer = undefined;
+      updateSize();
+      scheduleRender();
+    }, 120);
   };
 
   const renderNow = () => {
@@ -241,7 +253,9 @@ export function TerminalView(props: { id: string }) {
       cols: 80,
       rows: 24,
       scrollbackLimit: MAX_SCROLLBACK_ROWS,
-      onResponse: (data) => sendText(data),
+      // 不主动回 DSR/DA1/DECRQM/窗口尺寸查询：浏览器→WS→PTY 的往返延迟会让
+      // readline 在查询超时后才收到回应，把回应当成输入回显到命令行。终端不
+      // 声明这些能力，readline/应用会走默认回退；需要时再由服务端低延迟回应。
     });
     screen = s;
 
@@ -257,7 +271,7 @@ export function TerminalView(props: { id: string }) {
     // 桌面端自动聚焦，手机端不主动弹软键盘。
     if (window.matchMedia('(pointer: fine)').matches) queueMicrotask(() => focusInput?.());
 
-    resizeObserver = new ResizeObserver(() => { updateSize(); scheduleRender(); });
+    resizeObserver = new ResizeObserver(scheduleResize);
     if (scrollEl) resizeObserver.observe(scrollEl);
     updateSize();
     scheduleRender();
@@ -265,6 +279,8 @@ export function TerminalView(props: { id: string }) {
     onCleanup(() => {
       if (renderFrame !== undefined) cancelAnimationFrame(renderFrame);
       renderFrame = undefined;
+      clearTimeout(resizeTimer);
+      resizeTimer = undefined;
       clearTimeout(statusTimer);
       resizeObserver?.disconnect();
       resizeObserver = undefined;
