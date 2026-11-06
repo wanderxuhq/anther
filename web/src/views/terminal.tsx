@@ -29,6 +29,21 @@ function blockKey(block: MarkdownBlock): string {
   }
 }
 
+function parseCssColor(value: string): { r: number; g: number; b: number } | null {
+  const v = value.trim();
+  const hex = v.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hex) {
+    const h = hex[1];
+    if (h.length === 3) {
+      return { r: parseInt(h[0] + h[0], 16), g: parseInt(h[1] + h[1], 16), b: parseInt(h[2] + h[2], 16) };
+    }
+    return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) };
+  }
+  const rgb = v.match(/^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i);
+  if (rgb) return { r: Number(rgb[1]), g: Number(rgb[2]), b: Number(rgb[3]) };
+  return null;
+}
+
 /** OSC 7 是 file:// URL；预览接口需要普通绝对路径。 */
 function cwdPath(value: string): string {
   if (!value) return '';
@@ -299,9 +314,17 @@ export function TerminalView(props: { id: string }) {
       cols: 80,
       rows: 24,
       scrollbackLimit: MAX_SCROLLBACK_ROWS,
-      // 不主动回 DSR/DA1/DECRQM/窗口尺寸查询：浏览器→WS→PTY 的往返延迟会让
-      // readline 在查询超时后才收到回应，把回应当成输入回显到命令行。终端不
-      // 声明这些能力，readline/应用会走默认回退；需要时再由服务端低延迟回应。
+      // 只回 OSC 10/11/12 颜色查询；DSR/DA1/DECRQM 继续不回，避免 readline 回显。
+      onResponse: (data) => { if (data.startsWith('\x1b]')) sendText(data); },
+      defaultColors: () => {
+        const style = scrollEl ? getComputedStyle(scrollEl) : null;
+        const root = getComputedStyle(document.documentElement);
+        return {
+          fg: style ? parseCssColor(style.color) : null,
+          bg: style ? parseCssColor(style.backgroundColor) : null,
+          cursor: parseCssColor(root.getPropertyValue('--term-cursor-bg')),
+        };
+      },
     });
     screen = s;
 

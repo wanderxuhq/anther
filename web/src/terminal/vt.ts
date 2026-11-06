@@ -40,8 +40,10 @@ export type TerminalScreenOptions = {
   cols?: number;
   rows?: number;
   scrollbackLimit?: number;
-  /** DA/DSR/DECRQM 等查询的回应，写回 PTY。 */
+  /** DA/DSR/DECRQM/OSC 等查询的回应，写回 PTY。 */
   onResponse?: (data: string) => void;
+  /** OSC 10/11/12 颜色查询的当前终端颜色。 */
+  defaultColors?: () => { fg?: RGB | null; bg?: RGB | null; cursor?: RGB | null };
 };
 
 type Pen = {
@@ -195,6 +197,11 @@ const DEC_GRAPHICS: Record<string, string> = {
   x: '│', y: '≤', z: '≥', '{': 'π', '|': '≠', '}': '£', '~': '·',
 };
 
+function oscColor(color: RGB): string {
+  const hex4 = (value: number) => Math.round((Math.max(0, Math.min(255, value)) / 255) * 65535).toString(16).padStart(4, '0');
+  return `rgb:${hex4(color.r)}/${hex4(color.g)}/${hex4(color.b)}`;
+}
+
 function parseColorSpec(spec: string): RGB | null {
   const value = spec.trim();
   if (/^#[0-9a-f]{6}$/i.test(value)) {
@@ -263,12 +270,14 @@ export class TerminalScreen {
   private emptyRow: ScreenCell[];
   private palette: RGB[] = buildPalette256();
   private readonly onResponse?: (data: string) => void;
+  private readonly defaultColors?: () => { fg?: RGB | null; bg?: RGB | null; cursor?: RGB | null };
 
   constructor(options: TerminalScreenOptions = {}) {
     this.cols = Math.max(2, options.cols ?? 80);
     const rows = Math.max(1, options.rows ?? 24);
     this.scrollbackLimit = Math.max(0, options.scrollbackLimit ?? DEFAULT_SCROLLBACK);
     this.onResponse = options.onResponse;
+    this.defaultColors = options.defaultColors;
     this.emptyRow = this.makeBlankRow();
     this.mainBuffer = this.makeRows(rows);
     this.altBuffer = this.makeRows(rows);
@@ -613,6 +622,14 @@ export class TerminalScreen {
         break;
       }
       case '4': this.applyPalette(rest); break;
+      case '10': case '11': case '12': {
+        if (rest.trim() === '?') {
+          const colors = this.defaultColors?.();
+          const color = code === '10' ? colors?.fg : code === '11' ? colors?.bg : colors?.cursor;
+          if (color) this.respond(`\x1b]${code};${oscColor(color)}\x1b\\`);
+        }
+        break;
+      }
       case '104': this.resetPalette(rest); break;
       default: break;
     }
