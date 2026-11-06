@@ -403,15 +403,14 @@ export class TerminalScreen {
     this.cols = cols;
     this.emptyRow = this.makeBlankRow();
 
-    let removed = 0;
     if (this.altActive) {
-      this.resizeBuffer(this.altBuffer, cols, rows, false);
+      const removedTop = this.resizeBuffer(this.altBuffer, cols, rows, false, this.cursor.row);
       this.buffer = this.altBuffer;
-      this.cursor.row = Math.min(this.cursor.row, rows - 1);
+      this.cursor.row = Math.max(0, this.cursor.row - removedTop);
     } else {
-      removed = this.resizeBuffer(this.mainBuffer, cols, rows, true);
+      const removedTop = this.resizeBuffer(this.mainBuffer, cols, rows, true, this.cursor.row);
       this.buffer = this.mainBuffer;
-      this.cursor.row = Math.max(0, this.cursor.row - removed);
+      this.cursor.row = Math.max(0, this.cursor.row - removedTop);
     }
     this.cursor.col = Math.min(this.cursor.col, cols - 1);
     this.cursor.row = Math.min(this.cursor.row, rows - 1);
@@ -1295,7 +1294,7 @@ export class TerminalScreen {
     };
     this.altActive = true;
     const rows = this.buffer.length;
-    this.resizeBuffer(this.altBuffer, this.cols, rows, false);
+    this.resizeBuffer(this.altBuffer, this.cols, rows, false, 0);
     if (clear) this.altBuffer = this.makeRows(rows);
     this.buffer = this.altBuffer;
     this.cursor = { col: 0, row: 0 };
@@ -1310,10 +1309,11 @@ export class TerminalScreen {
     const saved = this.savedMain;
     const rows = this.altBuffer.length;
     this.altActive = false;
-    const removed = this.resizeBuffer(this.mainBuffer, this.cols, rows, true);
+    const savedRow = saved?.cursor.row ?? 0;
+    const removedTop = this.resizeBuffer(this.mainBuffer, this.cols, rows, true, savedRow);
     this.buffer = this.mainBuffer;
     if (saved) {
-      this.cursor = { col: clamp(saved.cursor.col, 0, this.cols - 1), row: clamp(saved.cursor.row - removed, 0, rows - 1) };
+      this.cursor = { col: clamp(saved.cursor.col, 0, this.cols - 1), row: clamp(savedRow - removedTop, 0, rows - 1) };
       this.pen = clonePen(saved.pen);
       this.originMode = saved.originMode;
       this.autoWrap = saved.autoWrap;
@@ -1332,20 +1332,36 @@ export class TerminalScreen {
     this.markAllDirty();
   }
 
-  private resizeBuffer(buffer: ScreenCell[][], cols: number, rows: number, pushScrollback: boolean): number {
+  /**
+   * 行数变化时优先保住光标所在行：
+   * - 光标在底部区域（cursorRow >= remove）：从顶部移入回滚，光标随之上移；
+   * - 光标在顶部区域（cursorRow < remove）：裁掉底部行，光标/提示符原地不动。
+   * 旧实现无条件裁顶部，会把靠近顶部的提示符推进回滚区，shell 随后重画提示符，
+   * 造成“旧提示符在回滚里 + 新提示符在屏幕上”的重复行。
+   */
+  private resizeBuffer(
+    buffer: ScreenCell[][],
+    cols: number,
+    rows: number,
+    pushScrollback: boolean,
+    cursorRow: number,
+  ): number {
     for (const line of buffer) this.resizeLine(line, cols);
-    let removed = 0;
     if (buffer.length > rows) {
-      removed = buffer.length - rows;
-      if (pushScrollback) {
-        for (let i = 0; i < removed; i++) this.pushScrollback(buffer.shift()!);
-      } else {
-        buffer.splice(0, removed);
+      const remove = buffer.length - rows;
+      if (cursorRow >= remove) {
+        for (let i = 0; i < remove; i++) {
+          const line = buffer.shift()!;
+          if (pushScrollback) this.pushScrollback(line);
+        }
+        return remove;
       }
-    } else {
-      while (buffer.length < rows) buffer.push(this.makeBlankRow());
+      // 光标在顶部：保留顶部内容和光标行，裁掉底部。
+      buffer.length = rows;
+      return 0;
     }
-    return removed;
+    while (buffer.length < rows) buffer.push(this.makeBlankRow());
+    return 0;
   }
 
   private resizeLine(line: ScreenCell[], cols: number): void {

@@ -57,13 +57,6 @@ export function TerminalView(props: { id: string }) {
   let lastRows = 0;
   let cellWidth = 0;
   let cellHeight = 0;
-  // 键盘未弹出时的稳定尺寸。手机软键盘只遮挡可视区，不改变终端逻辑行列。
-  let stableWidth = 0;
-  let stableHeight = 0;
-  let stableCols = 0;
-  let stableRows = 0;
-  let keyboardOpen = false;
-  let lastAltMode = false;
   let lastMode: 'html' | 'text' = 'html';
   let lastAlt = false;
   let renderedStart = -1;
@@ -120,37 +113,6 @@ export function TerminalView(props: { id: string }) {
     const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
     const cols = Math.max(20, Math.floor((paneWidth - padX) / width));
     const rows = Math.max(5, Math.floor((paneHeight - padY) / height));
-
-    // 手机普通 shell：高度变化（软键盘弹出/收起、地址栏伸缩）一律不改变终端尺寸，
-    // 避免 stty/SIGWINCH 让 readline 重画提示符。只有宽度变化（旋转）或 alt screen
-    // 才真正 resize；全屏 TUI 需要按可视高度重排。
-    const coarse = window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
-    const alt = screen.getMode('altScreen') === true;
-    const widthChanged = Math.abs(paneWidth - stableWidth) > 40;
-
-    if (coarse && !alt && !widthChanged && stableCols > 0) {
-      if (paneHeight < stableHeight - 80 && !keyboardOpen) {
-        keyboardOpen = true;
-        requestAnimationFrame(() => {
-          if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
-        });
-      } else if (paneHeight >= stableHeight - 20) {
-        keyboardOpen = false;
-      }
-      // 如果刚退出 alt screen，恢复到稳定尺寸。
-      if (screen.cols !== stableCols || screen.screenRows() !== stableRows) {
-        screen.resize(stableCols, stableRows);
-        socket?.resize(stableCols, stableRows);
-        scheduleRender();
-      }
-      return;
-    }
-
-    keyboardOpen = false;
-    stableWidth = paneWidth;
-    stableHeight = paneHeight;
-    stableCols = cols;
-    stableRows = rows;
     if (cols === lastCols && rows === lastRows) return;
     lastCols = cols;
     lastRows = rows;
@@ -159,8 +121,8 @@ export function TerminalView(props: { id: string }) {
     scheduleRender();
   };
 
-  // 手机软键盘弹出/收起会连续触发 ResizeObserver；防抖避免反复 stty + SIGWINCH
-  // 让 shell 重绘出多余行。
+  // 软键盘动画/地址栏伸缩会连续触发 ResizeObserver；防抖合并成一次 resize，
+  // 避免动画期间反复 stty + SIGWINCH。
   const scheduleResize = () => {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
@@ -286,12 +248,6 @@ export function TerminalView(props: { id: string }) {
     setCtrlArmed(false);
     lastCols = 0;
     lastRows = 0;
-    stableWidth = 0;
-    stableHeight = 0;
-    stableCols = 0;
-    stableRows = 0;
-    keyboardOpen = false;
-    lastAltMode = false;
     lastMode = terminalRenderMode();
     lastAlt = false;
 
@@ -341,12 +297,6 @@ export function TerminalView(props: { id: string }) {
       textCache = [];
       lastFirst = -1;
       lastCursorAbs = -1;
-      stableWidth = 0;
-      stableHeight = 0;
-      stableCols = 0;
-      stableRows = 0;
-      keyboardOpen = false;
-      lastAltMode = false;
     });
   }));
 
@@ -354,14 +304,7 @@ export function TerminalView(props: { id: string }) {
   createEffect(() => {
     terminalRenderMode();
     tick();
-    if (!screen) return;
-    const alt = screen.getMode('altScreen') === true;
-    if (alt !== lastAltMode) {
-      lastAltMode = alt;
-      // 进入/退出全屏 TUI 时重新按当前可视高度决定是否 resize。
-      scheduleResize();
-    }
-    scheduleRender();
+    if (screen) scheduleRender();
   });
 
   // 字号跟随全局设置；重新测量列宽/行高后回发 resize。

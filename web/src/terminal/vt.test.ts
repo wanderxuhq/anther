@@ -149,6 +149,33 @@ test('resize：列截断、行收缩进入回滚缓冲', () => {
   assert.equal(text(s.getRowAbsolute(0)), 'abcd');
 });
 
+test('resize：光标在顶部时收缩高度不把提示符推进回滚区', () => {
+  const s = screen(20, 10, 100);
+  s.process('$ ');
+  s.resize(20, 5);
+  assert.equal(s.getScrollbackLength(), 0);
+  assert.equal(s.getCursor().row, 0);
+  assert.equal(text(s.getRow(0)), '$');
+  s.resize(20, 3);
+  assert.equal(s.getScrollbackLength(), 0);
+  assert.equal(text(s.getRow(0)), '$');
+  assert.equal(s.getText().split('\n').filter((line) => line.trim() === '$').length, 1);
+});
+
+test('resize：光标在底部时从顶部进回滚，提示符保留且不重复', () => {
+  const s = screen(20, 6, 100);
+  s.process('1\r\n2\r\n3\r\n4\r\n5\r\n$ ');
+  s.resize(20, 3);
+  assert.equal(s.getCursor().row, 2);
+  assert.equal(text(s.getRow(2)), '$');
+  assert.ok(s.getScrollbackLength() >= 3);
+  assert.equal(s.getText().split('\n').filter((line) => line.trim() === '$').length, 1);
+  s.resize(20, 6);
+  assert.equal(s.getCursor().row, 2);
+  assert.equal(text(s.getRow(2)), '$');
+  assert.equal(s.getText().split('\n').filter((line) => line.trim() === '$').length, 1);
+});
+
 test('插入/删除字符、制表符', () => {
   const s = screen(20, 2);
   s.process('abc\x1b[2G\x1b[2@');
