@@ -121,22 +121,23 @@ export function TerminalView(props: { id: string }) {
     const cols = Math.max(20, Math.floor((paneWidth - padX) / width));
     const rows = Math.max(5, Math.floor((paneHeight - padY) / height));
 
-    // 软键盘只缩小可视区：普通 shell 保持终端行列不变，避免 SIGWINCH/readline 重画；
-    // 全屏 TUI（alt screen）仍按可视高度 resize，让它自己重排。
-    const coarse = window.matchMedia('(pointer: coarse)').matches;
+    // 手机普通 shell：高度变化（软键盘弹出/收起、地址栏伸缩）一律不改变终端尺寸，
+    // 避免 stty/SIGWINCH 让 readline 重画提示符。只有宽度变化（旋转）或 alt screen
+    // 才真正 resize；全屏 TUI 需要按可视高度重排。
+    const coarse = window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
     const alt = screen.getMode('altScreen') === true;
     const widthChanged = Math.abs(paneWidth - stableWidth) > 40;
-    const heightShrank = stableHeight > 0 && paneHeight < stableHeight - 80;
-    const keyboard = coarse && !widthChanged && heightShrank;
 
-    if (keyboard && !alt) {
-      if (!keyboardOpen) {
+    if (coarse && !alt && !widthChanged && stableCols > 0) {
+      if (paneHeight < stableHeight - 80 && !keyboardOpen) {
         keyboardOpen = true;
         requestAnimationFrame(() => {
           if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
         });
+      } else if (paneHeight >= stableHeight - 20) {
+        keyboardOpen = false;
       }
-      // 如果刚退出 alt screen，恢复到键盘未弹出时的稳定尺寸。
+      // 如果刚退出 alt screen，恢复到稳定尺寸。
       if (screen.cols !== stableCols || screen.screenRows() !== stableRows) {
         screen.resize(stableCols, stableRows);
         socket?.resize(stableCols, stableRows);
@@ -146,12 +147,10 @@ export function TerminalView(props: { id: string }) {
     }
 
     keyboardOpen = false;
-    if (!keyboard) {
-      stableWidth = paneWidth;
-      stableHeight = paneHeight;
-      stableCols = cols;
-      stableRows = rows;
-    }
+    stableWidth = paneWidth;
+    stableHeight = paneHeight;
+    stableCols = cols;
+    stableRows = rows;
     if (cols === lastCols && rows === lastRows) return;
     lastCols = cols;
     lastRows = rows;
