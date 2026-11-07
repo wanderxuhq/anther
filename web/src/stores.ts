@@ -339,13 +339,7 @@ export async function openPreviewTab(path: string, line: LineRange | null = null
 export async function closePreviewTab(): Promise<void> {
   const tab = activeTab();
   if (tab?.kind !== 'file') return;
-  const origin = filePreviewOrigin;
-  filePreviewOrigin = null;
-  await closeTab(tab.path);
-  if (origin && tabs().some((item) => item.id === origin)) {
-    setCurrentTabId(origin);
-    pushState();
-  }
+  await closeAnyTab(tab.id);
 }
 
 /** 打开/切换压缩包内部文件；通过 openTab 只写入一次导航历史。 */
@@ -501,7 +495,17 @@ export function updateDatabaseNavigation(id: string, patch: Pick<DatabaseTarget,
 export async function closeAnyTab(id: string): Promise<void> {
   const tab = tabs().find((item) => item.id === id);
   if (!tab) return;
-  if (tab.kind === 'file') { await closeTab(tab.path); return; }
+  if (tab.kind === 'file') {
+    // 终端里点开的文件预览：关闭后回到来源终端（与预览关闭按钮一致）。
+    const origin = id === currentTabId() ? filePreviewOrigin : null;
+    filePreviewOrigin = null;
+    await closeTab(tab.path);
+    if (origin && tabs().some((item) => item.id === origin)) {
+      setCurrentTabId(origin);
+      pushState();
+    }
+    return;
+  }
   if (tab.kind === 'terminal') { await closeTerminal(id); return; }
   if (tab.kind === 'database') forgetDatabaseSnapshot(id);
   closeGitTab(id);

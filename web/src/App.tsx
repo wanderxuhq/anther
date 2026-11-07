@@ -12,7 +12,7 @@ import { BranchView } from './views/branch.tsx';
 import { CommitView } from './views/commit.tsx';
 import { api } from './api.ts';
 import {
-  activeTab, currentTabId, setCurrentTabId, openTerminal, closePreviewTab,
+  activeTab, currentTabId, setCurrentTabId, openTerminal, closeAnyTab,
   readingLocationFor, readerRestoreRequest, updateReadingLocation,
   openGit, openDatabaseTab, closeTab,
   archiveChain, archiveEntry, openArchiveEntry, activeArchiveRoot,
@@ -156,6 +156,13 @@ export function App() {
     } catch (e) {
       showToast(t('toast.terminalCreateFail', { msg: (e as Error).message }), 'error');
     }
+  }
+
+  // 面板右上角关闭：与标签页列表的 × 走同一套关闭逻辑（终端杀进程、数据库释放、归档取消等）。
+  function handleCloseActivePanel() {
+    const tab = activeTab();
+    if (!tab) return;
+    void closeAnyTab(tab.id).catch(() => { /* 关闭失败时保留面板 */ });
   }
 
   // 桌面端 Ctrl+Shift+F → 全局搜索（打开抽屉 + 切到搜索视图；SearchView 挂载时自动聚焦）
@@ -524,16 +531,6 @@ export function App() {
             <Icon name="search" />
           </button>
           <span class="toolbar-path" title={browsingArchive() ? [currentFile(), ...archiveChain(), archiveEntry()].filter(Boolean).join(' › ') : undefined}>{toolbarPathLabel()}</span>
-          <Show when={activeTab()?.kind === 'file'}>
-            <button
-              class="icon-btn preview-close"
-              onClick={() => void closePreviewTab().catch(() => { /* 关闭失败时保留预览 */ })}
-              title={t('preview.close')}
-              aria-label={t('preview.close')}
-            >
-              <Icon name="close" />
-            </button>
-          </Show>
           <Show when={canPreviewMarkdown() || canPreviewTable()}>
             <button
               class="icon-btn markdown-toggle"
@@ -574,6 +571,16 @@ export function App() {
             aria-label={browsingArchive() ? t('archive.readonly') : roMode() ? t('switchEdit') : t('switchReadonly')}
           >
             <Icon name="edit" />
+          </button>
+        </Show>
+        <Show when={activeTab()}>
+          <button
+            class="icon-btn panel-close"
+            onClick={handleCloseActivePanel}
+            title={t('panel.close')}
+            aria-label={t('panel.close')}
+          >
+            <Icon name="close" />
           </button>
         </Show>
       </header>

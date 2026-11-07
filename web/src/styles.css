@@ -14,6 +14,8 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   flex: 0 0 auto;
 }
 .toolbar-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+/* 面板关闭按钮固定在工具栏最右侧；git 工具栏没有弹性路径，用 auto 外边距靠右。 */
+.panel-close { margin-left: auto; flex: 0 0 auto; }
 .icon-btn {
   background: none; border: none; font-size: 20px;
   padding: 6px 10px; border-radius: 6px; cursor: pointer;
