@@ -10,7 +10,7 @@ import { RemoteTerminalScreen } from '../terminal/remote.ts';
 import { api, connectTerminal, type TerminalSocket } from '../api.ts';
 import { fontScale, openPreviewTab, removeTerminalTab, theme } from '../stores.ts';
 import { t } from '../i18n.ts';
-import { CONTROL_LETTERS, TERMINAL_KEYS, controlChar, keySequence } from '../terminal-keys.ts';
+import { CONTROL_LETTERS, TERMINAL_KEYS, applyTerminalModifiers, controlChar, keySequence, type TerminalKey } from '../terminal-keys.ts';
 import { setTerminalRenderMode, terminalRenderMode } from '../terminal/settings.ts';
 import { classifyMarkdownRows, joinWrappedRows, type MarkdownBlock } from '../terminal/markdown-blocks.ts';
 import { firstContentCell, joinLogicalCells } from '../terminal/logical.ts';
@@ -20,6 +20,13 @@ import { revealDirectory } from './filetree.tsx';
 
 const MAX_SCROLLBACK_ROWS = DEFAULT_SCROLLBACK;
 const FONT_SCALE_TO_PX = 0.14;
+
+// 两排按键：第二排的第 6 个格子是 Down，第一排第 6 个格子是 Up，保持上下对齐。
+const TOP_KEYS: TerminalKey[] = [TERMINAL_KEYS[2], TERMINAL_KEYS[6], TERMINAL_KEYS[7]];
+const BOTTOM_KEYS: TerminalKey[] = [
+  TERMINAL_KEYS[8], TERMINAL_KEYS[9], TERMINAL_KEYS[10], TERMINAL_KEYS[11],
+  TERMINAL_KEYS[4], TERMINAL_KEYS[3], TERMINAL_KEYS[5],
+];
 
 function blockKey(block: MarkdownBlock): string {
   switch (block.kind) {
@@ -100,6 +107,8 @@ export function TerminalView(props: { id: string }) {
   let lastCursorAbs = -1;
 
   const [ctrlArmed, setCtrlArmed] = createSignal(false);
+  const [shiftArmed, setShiftArmed] = createSignal(false);
+  const [altArmed, setAltArmed] = createSignal(false);
   const [cwd, setCwd] = createSignal('');
   const [tick, setTick] = createSignal(0);
 
@@ -599,15 +608,45 @@ export function TerminalView(props: { id: string }) {
     return keySequence(id);
   };
 
-  const press = (data: string | null) => {
+  const toggleModifier = (mod: 'ctrl' | 'shift' | 'alt') => {
+    if (mod === 'ctrl') {
+      setCtrlArmed((value) => !value);
+      setShiftArmed(false);
+      setAltArmed(false);
+    } else if (mod === 'shift') {
+      setShiftArmed((value) => !value);
+      setCtrlArmed(false);
+      setAltArmed(false);
+    } else {
+      setAltArmed((value) => !value);
+      setCtrlArmed(false);
+      setShiftArmed(false);
+    }
+    focusInput?.();
+  };
+
+  // Shift/Alt 是粘性修饰键：只作用于下一次输入或按键，发送后自动取消。
+  const applyModifiers = (data: string): string => {
+    const shift = shiftArmed();
+    const alt = altArmed();
+    if (!shift && !alt) return data;
+    setShiftArmed(false);
+    setAltArmed(false);
+    return applyTerminalModifiers(data, shift, alt);
+  };
+
+  const pressKey = (id: string) => {
+    const data = barSequence(id);
     if (data === null) return;
-    sendText(data);
+    sendText(applyModifiers(data));
     focusInput?.();
   };
 
   const pressCtrl = (letter: string) => {
-    press(controlChar(letter));
+    const data = controlChar(letter);
+    if (data !== null) sendText(data);
     setCtrlArmed(false);
+    focusInput?.();
   };
 
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -642,7 +681,7 @@ export function TerminalView(props: { id: string }) {
     const sequence = keyToSequence(event, screen?.getMode('applicationCursor') === true);
     if (sequence !== null) {
       event.preventDefault();
-      sendText(sequence);
+      sendText(applyModifiers(sequence));
     }
   };
 
@@ -650,31 +689,37 @@ export function TerminalView(props: { id: string }) {
     if (composing || skipInput || !inputEl) return;
     const value = inputEl.value;
     inputEl.value = '';
-    if (value) sendText(value.replace(/\n/g, '\r'));
+    if (value) sendText(applyModifiers(value.replace(/\n/g, '\r')));
   };
 
   const handleBeforeInput = (event: InputEvent) => {
     if (composing) return;
     if (event.inputType === 'deleteContentBackward') {
       event.preventDefault();
-      sendText('\x7f');
+      sendText(applyModifiers('\x7f'));
     } else if (event.inputType === 'deleteContentForward') {
       event.preventDefault();
-      sendText('\x1b[3~');
+      sendText(applyModifiers('\x1b[3~'));
     } else if (event.inputType === 'insertLineBreak' || event.inputType === 'insertParagraph') {
       event.preventDefault();
-      sendText('\r');
+      sendText(applyModifiers('\r'));
     }
   };
 
   const handlePaste = (event: ClipboardEvent) => {
     event.preventDefault();
+    setCtrlArmed(false);
+    setShiftArmed(false);
+    setAltArmed(false);
     const text = event.clipboardData?.getData('text/plain') ?? '';
     if (text) sendText(pasteInput(text, screen?.getMode('bracketedPaste') === true));
   };
 
   const handleCompositionEnd = (event: CompositionEvent) => {
     composing = false;
+    setCtrlArmed(false);
+    setShiftArmed(false);
+    setAltArmed(false);
     const text = event.data || inputEl?.value || '';
     if (inputEl) inputEl.value = '';
     if (text) sendText(text);
@@ -747,6 +792,46 @@ export function TerminalView(props: { id: string }) {
     })();
   };
 
+  const renderKey = (key: TerminalKey) => (
+    <button class="terminal-key" title={key.aria} aria-label={key.aria} onClick={() => pressKey(key.id)}>
+      {key.label}
+    </button>
+  );
+
+  const topKeys = () => (
+    <>
+      <button class="terminal-key" title="Escape" aria-label="Escape" onClick={() => pressKey('esc')}>Esc</button>
+      <button class="terminal-key" title="Tab" aria-label="Tab" onClick={() => pressKey('tab')}>Tab</button>
+      <button
+        class="terminal-key terminal-key-ctrl"
+        classList={{ active: ctrlArmed() }}
+        aria-pressed={ctrlArmed()}
+        title={t('terminal.armCtrl')}
+        aria-label={t('terminal.armCtrl')}
+        onClick={() => toggleModifier('ctrl')}
+      >Ctrl</button>
+      <button
+        class="terminal-key"
+        classList={{ active: shiftArmed() }}
+        aria-pressed={shiftArmed()}
+        title={t('terminal.armShift')}
+        aria-label={t('terminal.armShift')}
+        onClick={() => toggleModifier('shift')}
+      >Shift</button>
+      <button
+        class="terminal-key"
+        classList={{ active: altArmed() }}
+        aria-pressed={altArmed()}
+        title={t('terminal.armAlt')}
+        aria-label={t('terminal.armAlt')}
+        onClick={() => toggleModifier('alt')}
+      >Alt</button>
+      <For each={TOP_KEYS}>{renderKey}</For>
+    </>
+  );
+
+  const bottomKeys = () => <For each={BOTTOM_KEYS}>{renderKey}</For>;
+
   return (
     <div class="terminal-pane" ref={(el) => (paneEl = el)} onClick={focusOnPaneClick}>
       <div class="terminal-toolbar">
@@ -801,44 +886,25 @@ export function TerminalView(props: { id: string }) {
       />
 
       <div class="terminal-keys" role="toolbar" aria-label={t('terminal.keys')}>
-        <div class="terminal-key-row">
-          <button class="terminal-key" title="Escape" aria-label="Escape" onClick={() => press(barSequence('esc'))}>Esc</button>
-          <button class="terminal-key" title="Tab" aria-label="Tab" onClick={() => press(barSequence('tab'))}>Tab</button>
-          <button
-            class="terminal-key terminal-key-ctrl"
-            classList={{ active: ctrlArmed() }}
-            aria-pressed={ctrlArmed()}
-            title={t('terminal.armCtrl')}
-            aria-label={t('terminal.armCtrl')}
-            onClick={() => { setCtrlArmed((armed) => !armed); focusInput?.(); }}
-          >Ctrl</button>
-          <For each={TERMINAL_KEYS.slice(2, 6)}>
-            {(key) => (
-              <button class="terminal-key" title={key.aria} aria-label={key.aria} onClick={() => press(barSequence(key.id))}>
-                {key.label}
-              </button>
-            )}
-          </For>
-        </div>
-        <Show when={ctrlArmed()} fallback={
-          <div class="terminal-key-row">
-            <For each={TERMINAL_KEYS.slice(6)}>
-              {(key) => (
-                <button class="terminal-key" title={key.aria} aria-label={key.aria} onClick={() => press(barSequence(key.id))}>
-                  {key.label}
-                </button>
-              )}
-            </For>
-          </div>
+        <Show when={!ctrlArmed()} fallback={
+          <>
+            <div class="terminal-key-row">{topKeys()}</div>
+            <div class="terminal-key-row terminal-key-letters">
+              <For each={CONTROL_LETTERS}>
+                {(letter) => (
+                  <button class="terminal-key" title={`Ctrl+${letter}`} aria-label={`Ctrl+${letter}`} onClick={() => pressCtrl(letter)}>
+                    ^{letter}
+                  </button>
+                )}
+              </For>
+            </div>
+          </>
         }>
-          <div class="terminal-key-row terminal-key-letters">
-            <For each={CONTROL_LETTERS}>
-              {(letter) => (
-                <button class="terminal-key" title={`Ctrl+${letter}`} aria-label={`Ctrl+${letter}`} onClick={() => pressCtrl(letter)}>
-                  ^{letter}
-                </button>
-              )}
-            </For>
+          <div class="terminal-key-scroll">
+            <div class="terminal-key-grid">
+              {topKeys()}
+              {bottomKeys()}
+            </div>
           </div>
         </Show>
       </div>

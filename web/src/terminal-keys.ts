@@ -42,6 +42,17 @@ export function keySequence(id: string): string | null {
   return SEQUENCES[id] ?? null;
 }
 
+/** 粘性 Shift/Alt：把修饰符应用到下一次按键/输入。 */
+export function applyTerminalModifiers(data: string, shift: boolean, alt: boolean): string {
+  if (!shift && !alt) return data;
+  const arrow = data.match(/^\x1b(?:\[|O)([ABCDHF])$/);
+  if (alt) return arrow ? `\x1b[1;3${arrow[1]}` : `\x1b${data}`;
+  if (data === '\t') return '\x1b[Z';
+  if (arrow) return `\x1b[1;2${arrow[1]}`;
+  if (/^[a-z]$/.test(data)) return data.toUpperCase();
+  return data;
+}
+
 /** A–Z → 0x01–0x1A（Ctrl+C → \u0003）。其它输入返回 null。 */
 export function controlChar(letter: string): string | null {
   if (typeof letter !== 'string' || letter.length !== 1) return null;
