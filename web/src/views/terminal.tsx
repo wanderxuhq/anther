@@ -13,7 +13,8 @@ import { t } from '../i18n.ts';
 import { CONTROL_LETTERS, TERMINAL_KEYS, controlChar, keySequence } from '../terminal-keys.ts';
 import { setTerminalRenderMode, terminalRenderMode } from '../terminal/settings.ts';
 import { classifyMarkdownRows, joinWrappedRows, type MarkdownBlock } from '../terminal/markdown-blocks.ts';
-import { renderRow, rowClass, rowRawText, rowText } from '../terminal/render.ts';
+import { firstContentCell, joinLogicalCells } from '../terminal/logical.ts';
+import { renderRow, rowClass, rowRawText, type CursorInfo } from '../terminal/render.ts';
 import { keyToSequence, pasteInput } from '../terminal/input.ts';
 import { revealDirectory } from './filetree.tsx';
 
@@ -29,6 +30,13 @@ function blockKey(block: MarkdownBlock): string {
     case 'table': return block.role === 'start' ? `t:${block.source}` : 't:body';
     default: return block.kind;
   }
+}
+
+/** 把一条逻辑行覆盖的多个终端物理行拼成一份单元格数组。 */
+function joinedCells(screen: RemoteTerminalScreen, start: number, from: number, to: number): ScreenCell[] {
+  const rows: ScreenCell[][] = [];
+  for (let index = from; index < to; index++) rows.push(screen.getRowAbsolute(start + index));
+  return joinLogicalCells(rows);
 }
 
 function parseCssColor(value: string): { r: number; g: number; b: number } | null {
@@ -77,8 +85,9 @@ export function TerminalView(props: { id: string }) {
   let cellHeight = 0;
   // 终端逻辑行数按“最大可用高度”算；视觉高度按内容行数收缩，超过上限再滚动。
   let logicalRows = 0;
-  let lastContentRows = 0;
-  let lastRenderedContentRows = 0;
+  let lastContentLarge = false;
+  let lastAvailableHeight = 0;
+  let lastPadY = 0;
   let keepBottom = false;
   let lastMeta = '';
   let lastMode: 'html' | 'text' = 'html';
@@ -142,7 +151,6 @@ export function TerminalView(props: { id: string }) {
     const available = Math.max(1, (parent?.clientHeight ?? 0) - (toolbar?.offsetHeight ?? 0) - (keys?.offsetHeight ?? 0));
     const cols = Math.max(20, Math.floor((paneWidth - padX) / cellW));
 
-    const alt = screen.getMode('altScreen') === true;
     // 逻辑行列跟随当前可用高度；内容高度只影响视觉盒高度，不触发 PTY resize。
     const rows = Math.max(5, Math.floor((available - padY) / cellH));
 
@@ -153,24 +161,11 @@ export function TerminalView(props: { id: string }) {
       socket?.resize(cols, rows);
     }
 
-    // 内容行数：没有回滚且不在 alt screen 时，只显示实际用到的行；有回滚/全屏 TUI
-    // 则用满最大高度，出现滚动条。
-    const scrollback = screen.getScrollbackLength();
-    let contentRows = rows;
-    if (!alt && scrollback === 0) {
-      let last = 0;
-      for (let i = 0; i < screen.screenRows(); i++) {
-        if (rowText(screen.getRow(i)).trim() !== '') last = i;
-      }
-      contentRows = Math.min(rows, Math.max(1, last + 1, screen.getCursor().row + 1));
-    }
     logicalRows = rows;
-    lastContentRows = contentRows;
-    const contentHeight = contentRows * cellH + padY;
+    lastAvailableHeight = available;
+    lastPadY = padY;
     const wasAtBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 8;
-    const visualHeight = Math.max(cellH + padY, Math.min(contentHeight, available));
-    scroller.style.height = `${visualHeight}px`;
-    if (contentRows >= rows && wasAtBottom) keepBottom = true;
+    if (wasAtBottom) keepBottom = true;
     scheduleRender();
     sendMeta();
   };
@@ -286,52 +281,205 @@ export function TerminalView(props: { id: string }) {
     for (let absolute = start; absolute < end; absolute++) texts.push(textCache[absolute] ?? '');
     const blocks = classifyMarkdownRows(texts);
 
-    // 终端自动换行会把一条 Markdown 表格行拆成多个终端行。按服务端的 wrapped
-    // 标记拼回逻辑行，只在逻辑行上识别表格，避免表格在换行处被截断。
-    const { texts: logicalTexts, starts: logicalStart } = joinWrappedRows(
-      texts,
-      (index) => s.isRowAbsoluteWrapped(start + index),
-    );
-
-    // 逻辑表格块 → 终端行范围。首行渲染整张表，其余行（含自动换行续行）隐藏。
+    // 自动换行会把一条逻辑行拆成多个终端物理行。HTML 模式下按服务端的 wrapped
+    // 标记拼回逻辑行：整行只渲染一次、续行隐藏，行内 Markdown/链接就不会在
+    // 换行处被截断。纯文字和备用屏幕仍保持经典终端网格。
+    const useLogical = mode === 'html' && !alt;
+    let logicalTexts: string[] = [];
+    let logicalStart: number[] = [];
+    let logicalEnd: number[] = [];
+    let logicalOfPhysical: number[] = [];
+    let logicalBlocks: MarkdownBlock[] = [];
+    let logicalDirty: boolean[] = [];
     const tableRowBlocks = new Array<MarkdownBlock | undefined>(count);
-    for (const block of classifyMarkdownRows(logicalTexts)) {
-      if (block.kind !== 'table' || block.role !== 'start') continue;
-      const first = logicalStart[block.start];
-      const tableEnd = block.end < logicalStart.length ? logicalStart[block.end] : count;
-      for (let index = first; index < tableEnd; index++) {
-        tableRowBlocks[index] = index === first
-          ? { kind: 'table', role: 'start', source: block.source, start: first, end: tableEnd }
-          : { kind: 'table', role: 'body', start: first, end: tableEnd };
+
+    if (useLogical) {
+      // 宽字符放不下时行尾会留下占位空格；拼逻辑行前先去掉。
+      const logicalInput = texts.slice();
+      for (let index = 0; index + 1 < count; index++) {
+        const absolute = start + index;
+        if (!s.isRowAbsoluteWrapped(absolute + 1)) continue;
+        if (firstContentCell(s.getRowAbsolute(absolute + 1))?.wide) {
+          logicalInput[index] = logicalInput[index].replace(/ +$/, '');
+        }
+      }
+      const joined = joinWrappedRows(logicalInput, (index) => s.isRowAbsoluteWrapped(start + index));
+      logicalTexts = joined.texts;
+      logicalStart = joined.starts;
+      logicalEnd = logicalStart.map((value, index) =>
+        index + 1 < logicalStart.length ? logicalStart[index + 1] : count);
+      logicalOfPhysical = new Array<number>(count).fill(0);
+      for (let index = 0; index < logicalStart.length; index++) {
+        for (let row = logicalStart[index]; row < logicalEnd[index]; row++) logicalOfPhysical[row] = index;
+      }
+      logicalBlocks = classifyMarkdownRows(logicalTexts);
+
+      // 表格只有在完全位于光标上方时才渲染成表格；碰到输入区就按普通逻辑行显示。
+      for (const block of logicalBlocks) {
+        if (block.kind !== 'table' || block.role !== 'start') continue;
+        const first = logicalStart[block.start];
+        const tableEnd = block.end < logicalStart.length ? logicalStart[block.end] : count;
+        if (cursorAbs < start + tableEnd) continue;
+        for (let row = first; row < tableEnd; row++) {
+          tableRowBlocks[row] = row === first
+            ? { kind: 'table', role: 'start', source: block.source, start: first, end: tableEnd }
+            : { kind: 'table', role: 'body', start: first, end: tableEnd };
+        }
+      }
+
+      logicalDirty = new Array<boolean>(logicalStart.length).fill(forceAll);
+      if (!forceAll) {
+        for (const absolute of dirtyRows) {
+          const row = absolute - start;
+          if (row >= 0 && row < count) logicalDirty[logicalOfPhysical[row]] = true;
+        }
+        // 表格任一行变化都要重绘首行（整张表在首行输出）。
+        for (let index = 0; index < count; index++) {
+          const block = tableRowBlocks[index];
+          if (!block || block.kind !== 'table' || block.role !== 'start') continue;
+          for (let row = block.start; row < block.end; row++) {
+            if (dirtyRows.has(start + row)) {
+              logicalDirty[logicalOfPhysical[block.start]] = true;
+              break;
+            }
+          }
+        }
       }
     }
 
-    // 表格碰到活动输入区（光标所在行及之后）时整组退回普通单元格渲染。
-    const tableDisabled = new Array<boolean>(count).fill(false);
-    if (mode === 'html') {
-      for (const block of tableRowBlocks) {
-        if (!block || block.kind !== 'table' || block.role !== 'start') continue;
-        if (alt || cursorAbs < start + block.end) {
-          for (let row = block.start; row < block.end; row++) tableDisabled[row] = true;
-        }
+    const cursorPhysical = cursorAbs - start;
+    const cursorLogical = useLogical && cursorPhysical >= 0 && cursorPhysical < count
+      ? logicalOfPhysical[cursorPhysical]
+      : -1;
+    const hiddenClass = 'term-row term-row-hidden';
+
+    // 没有回滚且不在备用屏幕时，只显示到最后一个有内容的逻辑行（含光标行），
+    // 让内容框按实际内容收缩；有回滚/全屏 TUI 时显示全部行并滚动。
+    let contentEnd = count;
+    if (!alt && s.getScrollbackLength() === 0) {
+      let last = 0;
+      for (let index = 0; index < count; index++) {
+        if (rowRawText(s.getRowAbsolute(start + index)).trim() !== '') last = index;
+      }
+      const lastContent = Math.max(1, last + 1, cursorPhysical + 1);
+      if (useLogical) {
+        const logicalIndex = logicalOfPhysical[Math.min(lastContent - 1, count - 1)];
+        contentEnd = Math.min(count, logicalEnd[logicalIndex]);
+      } else {
+        contentEnd = Math.min(count, lastContent);
       }
     }
 
     for (let index = 0; index < count; index++) {
       const absolute = start + index;
-      const active = alt || absolute >= cursorAbs;
-      const markdown = mode === 'html' && !active && !tableDisabled[index];
-      const block: MarkdownBlock = markdown ? (tableRowBlocks[index] ?? blocks[index]) : { kind: 'normal' };
-      const cursorInfo = absolute === cursorAbs && cursorVisible
-        ? { col: cursor.col, visible: true, shape: cursorShape, blinking: cursorBlinking }
-        : undefined;
-      const options = { mode, markdown, linkify: mode === 'html', cursor: cursorInfo, block };
-      const className = rowClass(block, options);
-      const key = blockKey(block);
       const el = rowEls[index];
-      const needs = forceAll || dirtyRows.has(absolute) || rowHtml[index] === '\u0000' || rowBlockKeys[index] !== key || el.className !== className;
+
+      if (index >= contentEnd) {
+        const key = 'hidden';
+        if (!forceAll && el.className === hiddenClass && rowBlockKeys[index] === key) continue;
+        if (el.className !== hiddenClass) el.className = hiddenClass;
+        if (rowHtml[index] !== '') {
+          el.innerHTML = '';
+          rowHtml[index] = '';
+        }
+        rowBlockKeys[index] = key;
+        continue;
+      }
+
+      if (!useLogical) {
+        // 纯文字/备用屏幕：一行一个物理行，保持经典终端网格。
+        const active = alt || absolute >= cursorAbs;
+        const markdown = mode === 'html' && !active;
+        const block: MarkdownBlock = markdown ? blocks[index] : { kind: 'normal' };
+        const cursorInfo = absolute === cursorAbs && cursorVisible
+          ? { col: cursor.col, visible: true, shape: cursorShape, blinking: cursorBlinking }
+          : undefined;
+        const options = { mode, markdown, linkify: mode === 'html', cursor: cursorInfo, block };
+        const className = rowClass(block, options);
+        const key = blockKey(block);
+        const needs = forceAll || dirtyRows.has(absolute) || rowHtml[index] === '\u0000' || rowBlockKeys[index] !== key || el.className !== className;
+        if (!needs) continue;
+        const html = renderRow(freshCells.get(absolute) ?? s.getRowAbsolute(absolute), options);
+        if (el.className !== className) el.className = className;
+        if (rowHtml[index] !== html) {
+          el.innerHTML = html;
+          rowHtml[index] = html;
+        }
+        rowBlockKeys[index] = key;
+        continue;
+      }
+
+      const tableBlock = tableRowBlocks[index];
+      if (tableBlock && tableBlock.kind === 'table' && tableBlock.role === 'body') {
+        const key = 'hidden';
+        if (!forceAll && el.className === hiddenClass && rowBlockKeys[index] === key) continue;
+        if (el.className !== hiddenClass) el.className = hiddenClass;
+        if (rowHtml[index] !== '') {
+          el.innerHTML = '';
+          rowHtml[index] = '';
+        }
+        rowBlockKeys[index] = key;
+        continue;
+      }
+
+      if (tableBlock && tableBlock.kind === 'table') {
+        const options = { mode, markdown: true, linkify: true, block: tableBlock };
+        const className = rowClass(tableBlock, options);
+        const key = blockKey(tableBlock);
+        const logicalIndex = logicalOfPhysical[index];
+        const needs = forceAll || logicalDirty[logicalIndex] || rowHtml[index] === '\u0000' || rowBlockKeys[index] !== key || el.className !== className;
+        if (!needs) continue;
+        const html = renderRow(s.getRowAbsolute(absolute), options);
+        if (el.className !== className) el.className = className;
+        if (rowHtml[index] !== html) {
+          el.innerHTML = html;
+          rowHtml[index] = html;
+        }
+        rowBlockKeys[index] = key;
+        continue;
+      }
+
+      const logicalIndex = logicalOfPhysical[index];
+      if (logicalStart[logicalIndex] !== index) {
+        // 非表格逻辑行的续行：内容已经在首行渲染，这里隐藏。
+        const key = 'hidden';
+        if (!forceAll && el.className === hiddenClass && rowBlockKeys[index] === key) continue;
+        if (el.className !== hiddenClass) el.className = hiddenClass;
+        if (rowHtml[index] !== '') {
+          el.innerHTML = '';
+          rowHtml[index] = '';
+        }
+        rowBlockKeys[index] = key;
+        continue;
+      }
+
+      // 一条逻辑行的首行：整行渲染一次。
+      const logicalEndAbs = start + logicalEnd[logicalIndex];
+      const active = logicalEndAbs > cursorAbs;
+      const sourceBlock = logicalBlocks[logicalIndex];
+      const markdown = !active;
+      const block: MarkdownBlock = markdown && sourceBlock.kind !== 'table'
+        ? sourceBlock
+        : { kind: 'normal' };
+      let cursorInfo: CursorInfo | undefined;
+      if (logicalIndex === cursorLogical && cursorVisible) {
+        const offset = cursorPhysical - logicalStart[logicalIndex];
+        cursorInfo = {
+          col: offset * s.cols + cursor.col,
+          visible: true,
+          shape: cursorShape,
+          blinking: cursorBlinking,
+        };
+      }
+      const options = { mode, markdown, linkify: true, cursor: cursorInfo, block };
+      let className = rowClass(block, options);
+      if (block.kind === 'normal') className = 'term-row term-row-html';
+      else if (block.kind === 'code') className += ' term-row-logical';
+      const key = block.kind === 'normal' ? `n:${logicalTexts[logicalIndex]}` : blockKey(block);
+      const needs = forceAll || logicalDirty[logicalIndex] || rowHtml[index] === '\u0000' || rowBlockKeys[index] !== key || el.className !== className;
       if (!needs) continue;
-      const html = renderRow(freshCells.get(absolute) ?? s.getRowAbsolute(absolute), options);
+      const cells = joinedCells(s, start, logicalStart[logicalIndex], logicalEnd[logicalIndex]);
+      const html = renderRow(cells, options);
       if (el.className !== className) el.className = className;
       if (rowHtml[index] !== html) {
         el.innerHTML = html;
@@ -340,15 +488,22 @@ export function TerminalView(props: { id: string }) {
       rowBlockKeys[index] = key;
     }
 
-    // 内容少：框高就是内容高，滚到顶部；内容多：保持底部跟随，用户上滚后保持位置。
-    const contentLarge = lastContentRows >= logicalRows;
-    const becameLarge = contentLarge && lastRenderedContentRows < logicalRows;
+    // 逻辑行由多行拼成，实际高度只能渲染后量；用真实 DOM 高度决定内容框和滚动位置。
+    const measuredHeight = container.getBoundingClientRect().height;
+    const contentHeight = measuredHeight + lastPadY;
+    const available = lastAvailableHeight > 0 ? lastAvailableHeight : contentHeight;
+    const contentLarge = contentHeight >= available - 1;
+    const becameLarge = contentLarge && !lastContentLarge;
+    const visualHeight = Math.max(cellHeight + lastPadY, Math.min(contentHeight, available));
+    if (Math.abs(scroller.getBoundingClientRect().height - visualHeight) > 0.5) {
+      scroller.style.height = `${visualHeight}px`;
+    }
     if (!contentLarge) scroller.scrollTop = 0;
     else if (atBottom || keepBottom || becameLarge) scroller.scrollTop = scroller.scrollHeight;
     else if (structureChanged && oldScrollHeight > 0) scroller.scrollTop = oldScrollTop * (scroller.scrollHeight / oldScrollHeight);
     else scroller.scrollTop = oldScrollTop;
     keepBottom = false;
-    lastRenderedContentRows = lastContentRows;
+    lastContentLarge = contentLarge;
   };
 
   // 每个终端 id 一套 VT 缓冲区 + WS；渲染模式变化不会进入这里。
@@ -358,8 +513,7 @@ export function TerminalView(props: { id: string }) {
     lastCols = 0;
     lastRows = 0;
     logicalRows = 0;
-    lastContentRows = 0;
-    lastRenderedContentRows = 0;
+    lastContentLarge = false;
     keepBottom = false;
     lastMeta = '';
     lastMode = terminalRenderMode();
@@ -410,8 +564,7 @@ export function TerminalView(props: { id: string }) {
       lastFirst = -1;
       lastCursorAbs = -1;
       logicalRows = 0;
-      lastContentRows = 0;
-      lastRenderedContentRows = 0;
+      lastContentLarge = false;
       keepBottom = false;
       lastMeta = '';
     });

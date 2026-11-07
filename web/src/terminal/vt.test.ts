@@ -138,15 +138,67 @@ test('脏行追踪：只报告变化的行', () => {
   assert.equal((third.rows as Set<number>).has(1), true);
 });
 
-test('resize：列截断、行收缩进入回滚缓冲', () => {
+test('resize：列宽变化重排自动换行，行收缩进入回滚缓冲', () => {
   const s = screen(10, 3);
   s.process('abcde\r\nsecond\r\nthird');
   s.resize(4, 2);
   assert.equal(s.cols, 4);
   assert.equal(s.screenRows(), 2);
-  assert.equal(text(s.getRow(0)), 'seco');
-  assert.equal(s.getScrollbackLength(), 1);
+  assert.equal(s.getScrollbackLength(), 4);
   assert.equal(text(s.getRowAbsolute(0)), 'abcd');
+  assert.equal(text(s.getRowAbsolute(1)), 'e');
+  assert.equal(text(s.getRowAbsolute(2)), 'seco');
+  assert.equal(text(s.getRowAbsolute(3)), 'nd');
+  assert.equal(text(s.getRow(0)), 'thir');
+  assert.equal(text(s.getRow(1)), 'd');
+  assert.deepEqual(s.getCursor(), { row: 1, col: 1 });
+});
+
+test('resize：窄屏重排不丢自动换行处的字符', () => {
+  const line = 'Links preserve the current file, Git view, and display settings across refresh and browser Back/Forward navigation.';
+  const s = screen(44, 10);
+  s.process(line + '\r\n');
+  s.resize(42, 10);
+
+  // 按 wrapped 标记拼回逻辑行，末尾空白不算内容。
+  let joined = '';
+  for (let row = 0; row < s.screenRows(); row++) {
+    const rowText = s.getRow(row).map((cell) => cell.char).join('');
+    if (row > 0 && s.isRowWrapped(row)) joined += rowText;
+    else joined += '\n' + rowText;
+  }
+  assert.ok(joined.includes(line), `重排后丢了字符：${JSON.stringify(joined.slice(0, 140))}`);
+});
+
+test('resize：宽字符重排不拆开宽字符', () => {
+  const s = screen(10, 4);
+  s.process('中文中文中文');
+  s.resize(7, 6);
+
+  let joined = '';
+  for (let row = 0; row < s.screenRows(); row++) {
+    for (const cell of s.getRow(row)) if (cell.char !== '') joined += cell.char;
+  }
+  // 奇数宽度下宽字符行尾会补空格，比较时忽略这些占位空格。
+  assert.ok(joined.replace(/ +/g, '').includes('中文中文中文'));
+
+  for (let row = 0; row < s.screenRows(); row++) {
+    const line = s.getRow(row);
+    for (let col = 0; col < line.length; col++) {
+      if (line[col].wide) assert.equal(line[col + 1]?.char, '');
+    }
+  }
+});
+
+test('resize：当前行跨自动换行时提示符不会被推进回滚区', () => {
+  const s = screen(49, 36);
+  const prompt = "root@localhost:~/projects/anther# printf '";
+  s.process(prompt + '中');
+  s.resize(44, 36);
+  assert.equal(s.getScrollbackLength(), 0);
+  assert.ok(text(s.getRow(0)).includes('root@localhost'));
+  s.process("文中文中文\\n'");
+  assert.equal(s.getText().split('\n').filter((line) => line.includes('root@localhost')).length, 1);
 });
 
 test('resize：光标在顶部时收缩高度不把提示符推进回滚区', () => {

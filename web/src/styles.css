@@ -166,6 +166,10 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 .term-row-md-code { background: var(--row-hover); border-left: 2px solid var(--border); padding-left: .5em; }
 .terminal-html .term-row-md-code { white-space: pre; }
 .term-row-md-fence { display: none; }
+/* HTML 模式下自动换行续行已并入首行，物理续行隐藏。 */
+.term-row-hidden { display: none; }
+/* 拼回的代码逻辑行需要允许自然换行，不能沿用代码块的 pre。 */
+.terminal-html .term-row-logical { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* 表格：整张表在首行渲染，后续占位行隐藏，避免留下空白行。 */
 /* 需要覆盖 .terminal-html .term-row-md 的 pre-wrap，否则表格标签间的换行会变成空隙。 */
 .terminal-html .term-row-md-table { white-space: normal; overflow-wrap: normal; }

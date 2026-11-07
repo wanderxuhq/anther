@@ -126,6 +126,24 @@ function blankCell(bg: Color = null): ScreenCell {
   };
 }
 
+/** 只去掉真正无意义的行尾空白；带背景/样式/链接的空白必须保留。 */
+export function isPlainBlankCell(cell: ScreenCell): boolean {
+  return cell.char === ' ' && !cell.fg && !cell.bg && cell.underline === 'none' &&
+    !cell.underlineColor && !cell.bold && !cell.faint && !cell.italic && !cell.overline &&
+    !cell.strikethrough && !cell.inverse && !cell.hidden && !cell.blink && !cell.protected && !cell.url;
+}
+
+function firstContentCell(row: readonly ScreenCell[]): ScreenCell | undefined {
+  for (const cell of row) if (cell.char !== '') return cell;
+  return undefined;
+}
+
+function trimTrailingPlainBlanks(row: readonly ScreenCell[]): readonly ScreenCell[] {
+  let end = row.length;
+  while (end > 0 && isPlainBlankCell(row[end - 1])) end--;
+  return end === row.length ? row : row.slice(0, end);
+}
+
 function clamp(value: number, min: number, max: number): number {
   return value < min ? min : value > max ? max : value;
 }
@@ -413,13 +431,18 @@ export class TerminalScreen {
     cols = Math.max(2, Math.floor(cols));
     rows = Math.max(1, Math.floor(rows));
     if (cols === this.cols && rows === this.screenRows()) return;
+    const colsChanged = cols !== this.cols;
     this.cols = cols;
     this.emptyRow = this.makeBlankRow();
 
     if (this.altActive) {
+      // 备用屏幕由 TUI 自己在 SIGWINCH 后重绘，保持原来的裁切/补齐行为。
       const removedTop = this.resizeBuffer(this.altBuffer, cols, rows, false, this.cursor.row);
       this.buffer = this.altBuffer;
       this.cursor.row = Math.max(0, this.cursor.row - removedTop);
+    } else if (colsChanged) {
+      // 列宽变化必须重排自动换行，否则窄屏会把宽行末尾的字符直接截掉。
+      this.reflowMain(cols, rows);
     } else {
       const removedTop = this.resizeBuffer(this.mainBuffer, cols, rows, true, this.cursor.row);
       this.buffer = this.mainBuffer;
@@ -432,6 +455,131 @@ export class TerminalScreen {
     this.scrollBottom = rows - 1;
     this.tabStops = defaultTabStops(cols);
     this.markAllDirty();
+  }
+
+  /** 列宽变化时重排主屏和回滚区的逻辑行，保住自动换行处的字符。 */
+  private reflowMain(cols: number, rows: number): void {
+    // 主屏第一行如果是回滚区逻辑行的续行，把它的开头也移回主屏再一起重排。
+    while (this.mainBuffer.length > 0 && this.wrappedRows.has(this.mainBuffer[0]) && this.scrollback.length > 0) {
+      this.mainBuffer.unshift(this.scrollback.pop()!);
+      this.cursor.row++;
+    }
+
+    this.scrollback = this.reflowRows(this.scrollback, cols).rows;
+    this.trimScrollback();
+
+    const result = this.reflowRows(this.mainBuffer, cols, this.cursor);
+    this.mainBuffer = result.rows;
+    this.buffer = this.mainBuffer;
+    this.cursor.row = result.cursorRow;
+    this.cursor.col = result.cursorCol;
+
+    this.cursor.row -= this.fitRows(this.mainBuffer, rows, this.cursor.row, true);
+    this.trimScrollback();
+  }
+
+  private trimScrollback(): void {
+    while (this.scrollback.length > this.scrollbackLimit) {
+      this.scrollback.shift();
+      this.trimmed++;
+      this.dirtyRows = 'all';
+    }
+  }
+
+  /**
+   * 把物理行按 wrapped 标记拼回逻辑行，再按新列宽重新换行。
+   * 返回新的行数组和光标在新数组中的位置。
+   */
+  private reflowRows(
+    buffer: ScreenCell[][],
+    cols: number,
+    cursor?: Cursor,
+  ): { rows: ScreenCell[][]; cursorRow: number; cursorCol: number } {
+    const rows: ScreenCell[][] = [];
+    let cursorRow = cursor?.row ?? 0;
+    let cursorCol = cursor?.col ?? 0;
+    let logical: ScreenCell[] = [];
+    let logicalIndex = -1;
+    let cursorLogical = -1;
+    let cursorCell = -1;
+
+    const flush = () => {
+      if (logicalIndex < 0) return;
+      let end = logical.length;
+      if (logicalIndex === cursorLogical) {
+        // 光标可能落在宽字符占位格上，映射回宽字符本体。
+        while (cursorCell > 0 && logical[cursorCell]?.char === '') cursorCell--;
+        while (end > cursorCell + 1 && isPlainBlankCell(logical[end - 1])) end--;
+      } else {
+        while (end > 0 && isPlainBlankCell(logical[end - 1])) end--;
+      }
+
+      const startRow = rows.length;
+      let row: ScreenCell[] = [];
+      let cursorRowInLine = 0;
+      let cursorColInLine = 0;
+      const pushRow = () => {
+        while (row.length < cols) row.push(blankCell(null));
+        rows.push(row);
+        // 逻辑行除第一行外都是上一行的自动换行续行（包括最后一行）。
+        if (rows.length - startRow > 1) this.wrappedRows.add(row);
+        row = [];
+      };
+
+      for (let i = 0; i < end; i++) {
+        const cell = logical[i];
+        if (cell.char === '') continue;
+        const width = cell.wide ? 2 : 1;
+        if (row.length + width > cols) pushRow();
+        const col = row.length;
+        row.push(cell);
+        if (cell.wide) {
+          const next = logical[i + 1];
+          if (next && next.char === '') {
+            row.push(next);
+            i++;
+          } else {
+            row.push(this.continuationFor(cell));
+          }
+        }
+        if (logicalIndex === cursorLogical && i === cursorCell) {
+          cursorRowInLine = rows.length - startRow;
+          cursorColInLine = col;
+        }
+      }
+      if (row.length > 0 || rows.length === startRow) pushRow();
+      if (logicalIndex === cursorLogical) {
+        cursorRow = startRow + cursorRowInLine;
+        cursorCol = cursorColInLine;
+      }
+    };
+
+    for (let index = 0; index < buffer.length; index++) {
+      const row = buffer[index];
+      if (index === 0 || !this.wrappedRows.has(row)) {
+        flush();
+        logical = [];
+        logicalIndex++;
+      }
+      if (cursor && index === cursor.row) {
+        cursorLogical = logicalIndex;
+        cursorCell = logical.length + Math.min(cursor.col, Math.max(0, row.length - 1));
+      }
+      // 下一行是宽字符续行时，本行末尾的空格是“宽字符放不下”留下的占位，
+      // 拼回逻辑行时要丢掉，否则会凭空多出一个空格。
+      const next = buffer[index + 1];
+      const nextStartsWide = !!next && this.wrappedRows.has(next) && firstContentCell(next)?.wide === true;
+      const cells = nextStartsWide ? trimTrailingPlainBlanks(row) : row;
+      for (const cell of cells) logical.push(cell);
+    }
+    flush();
+
+    if (rows.length === 0 && buffer.length > 0) rows.push(this.makeBlankRow());
+    return { rows, cursorRow, cursorCol };
+  }
+
+  private continuationFor(cell: ScreenCell): ScreenCell {
+    return { ...cell, char: '', wide: false };
   }
 
   // ---- 输入 ----
@@ -1365,18 +1513,46 @@ export class TerminalScreen {
     cursorRow: number,
   ): number {
     for (const line of buffer) this.resizeLine(line, cols);
+    return this.fitRows(buffer, rows, cursorRow, pushScrollback);
+  }
+
+  /**
+   * 把 buffer 裁到 rows 行，尽量保证光标所在逻辑行完整可见：
+   * - 光标行整体在底部窗口内 → 顶部行进回滚；
+   * - 光标行靠近顶部 → 裁掉底部；
+   * - 光标行跨过顶部边界（自动换行续行）→ 保住整条逻辑行，裁掉底部。
+   */
+  private fitRows(
+    buffer: ScreenCell[][],
+    rows: number,
+    cursorRow: number,
+    pushScrollback: boolean,
+  ): number {
     if (buffer.length > rows) {
       const remove = buffer.length - rows;
-      if (cursorRow >= remove) {
+      let lineStart = cursorRow;
+      while (lineStart > 0 && buffer[lineStart] && this.wrappedRows.has(buffer[lineStart])) lineStart--;
+
+      if (cursorRow >= remove && lineStart >= remove) {
         for (let i = 0; i < remove; i++) {
           const line = buffer.shift()!;
           if (pushScrollback) this.pushScrollback(line);
         }
         return remove;
       }
-      // 光标在顶部：保留顶部内容和光标行，裁掉底部。
-      buffer.length = rows;
-      return 0;
+      if (cursorRow < rows) {
+        // 光标行靠近顶部：保留顶部内容和光标行，裁掉底部。
+        buffer.length = rows;
+        return 0;
+      }
+      // 光标行比屏幕还高：至少让光标留在窗口内。
+      const keepTop = Math.max(0, Math.min(remove, cursorRow - (rows - 1)));
+      for (let i = 0; i < keepTop; i++) {
+        const line = buffer.shift()!;
+        if (pushScrollback) this.pushScrollback(line);
+      }
+      buffer.length = Math.min(buffer.length, rows);
+      return keepTop;
     }
     while (buffer.length < rows) buffer.push(this.makeBlankRow());
     return 0;
