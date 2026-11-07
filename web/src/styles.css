@@ -188,16 +188,26 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   margin-top: auto; padding: 4px; border-top: 1px solid var(--border); background: var(--bg);
 }
 @media (pointer: coarse), (max-width: 599px) { .terminal-keys { display: flex; } }
-.terminal-key-row { display: flex; gap: 4px; overflow-x: auto; overscroll-behavior: contain; }
 .terminal-key-scroll { overflow-x: auto; overscroll-behavior: contain; }
-.terminal-key-grid { display: grid; grid-template-columns: repeat(8, 44px); gap: 4px; width: max-content; }
+.terminal-key-grid {
+  display: grid;
+  /* 第 3/4 列（Ctrl/Shift 与 /、-）稍宽，其余列拉伸填满整行。 */
+  grid-template-columns:
+    minmax(38px, 1fr) minmax(38px, 1fr)
+    minmax(42px, 1.4fr) minmax(42px, 1.4fr)
+    minmax(38px, 1fr) minmax(38px, 1fr) minmax(38px, 1fr) minmax(38px, 1fr);
+  gap: 4px;
+  width: 100%;
+  min-width: max-content;
+}
+.terminal-key-grid-letters { grid-template-columns: repeat(10, minmax(34px, 1fr)); }
 .terminal-key {
-  flex: 0 0 44px; width: 44px; min-width: 44px; min-height: 40px; padding: 0;
+  width: 100%; min-height: 40px; padding: 0;
   border: 1px solid var(--border); border-radius: 6px;
   background: none; color: inherit; font-size: 13px; cursor: pointer;
 }
 .terminal-key.active { background: var(--accent); color: white; border-color: var(--accent); }
-.terminal-key-letters .terminal-key { flex-basis: 34px; width: 34px; min-width: 34px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.terminal-key-grid-letters .terminal-key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 /* 最小 Toast（Task 13；完整系统留给 Task 14/15）：固定定位、3s 自动消失 */
 .toast {

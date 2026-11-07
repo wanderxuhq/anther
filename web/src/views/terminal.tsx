@@ -622,7 +622,7 @@ export function TerminalView(props: { id: string }) {
       setCtrlArmed(false);
       setShiftArmed(false);
     }
-    focusInput?.();
+    inputEl?.blur();
   };
 
   // Shift/Alt 是粘性修饰键：只作用于下一次输入或按键，发送后自动取消。
@@ -639,14 +639,14 @@ export function TerminalView(props: { id: string }) {
     const data = barSequence(id);
     if (data === null) return;
     sendText(applyModifiers(data));
-    focusInput?.();
+    inputEl?.blur();
   };
 
   const pressCtrl = (letter: string) => {
     const data = controlChar(letter);
     if (data !== null) sendText(data);
     setCtrlArmed(false);
-    focusInput?.();
+    inputEl?.blur();
   };
 
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -888,15 +888,19 @@ export function TerminalView(props: { id: string }) {
       <div class="terminal-keys" role="toolbar" aria-label={t('terminal.keys')}>
         <Show when={!ctrlArmed()} fallback={
           <>
-            <div class="terminal-key-row">{topKeys()}</div>
-            <div class="terminal-key-row terminal-key-letters">
-              <For each={CONTROL_LETTERS}>
-                {(letter) => (
-                  <button class="terminal-key" title={`Ctrl+${letter}`} aria-label={`Ctrl+${letter}`} onClick={() => pressCtrl(letter)}>
-                    ^{letter}
-                  </button>
-                )}
-              </For>
+            <div class="terminal-key-scroll">
+              <div class="terminal-key-grid">{topKeys()}</div>
+            </div>
+            <div class="terminal-key-scroll">
+              <div class="terminal-key-grid terminal-key-grid-letters">
+                <For each={CONTROL_LETTERS}>
+                  {(letter) => (
+                    <button class="terminal-key" title={`Ctrl+${letter}`} aria-label={`Ctrl+${letter}`} onClick={() => pressCtrl(letter)}>
+                      ^{letter}
+                    </button>
+                  )}
+                </For>
+              </div>
             </div>
           </>
         }>
