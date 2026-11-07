@@ -16,6 +16,7 @@ test('keySequence：特殊键与光标键映射到标准转义序列', () => {
   assert.equal(keySequence('~'), '~');
   assert.equal(keySequence('/'), '/');
   assert.equal(keySequence('-'), '-');
+  assert.equal(keySequence('enter'), '\r');
   assert.equal(keySequence('nope'), null);
 });
 
@@ -50,6 +51,7 @@ test('applyTerminalModifiers：Shift/Alt 作用于下一次按键', () => {
   assert.equal(applyTerminalModifiers('\u001bOB', true, false), '\u001b[1;2B');
   assert.equal(applyTerminalModifiers('\u001b[A', false, true), '\u001b[1;3A');
   assert.equal(applyTerminalModifiers('b', false, true), '\u001bb');
+  assert.equal(applyTerminalModifiers('\r', false, true), '\u001b\r');
   assert.equal(applyTerminalModifiers('|', true, false), '|');
   assert.equal(applyTerminalModifiers('a', false, false), 'a');
 });

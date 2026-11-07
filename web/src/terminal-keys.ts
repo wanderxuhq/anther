@@ -18,6 +18,7 @@ export const TERMINAL_KEYS: readonly TerminalKey[] = [
   { id: '~', label: '~', aria: 'Tilde' },
   { id: '/', label: '/', aria: 'Slash' },
   { id: '-', label: '-', aria: 'Hyphen' },
+  { id: 'enter', label: 'Enter', aria: 'Enter' },
 ];
 
 const SEQUENCES: Record<string, string> = {
@@ -33,6 +34,7 @@ const SEQUENCES: Record<string, string> = {
   '~': '~',
   '/': '/',
   '-': '-',
+  enter: '\r',
 };
 
 /** Ctrl 组合键可选字母（C / D / Z / L 最常用，其余兼顾 shell 与编辑器）。 */
