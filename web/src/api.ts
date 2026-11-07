@@ -88,6 +88,7 @@ export type GitLog = { isRepo: boolean; commits: GitCommit[] };
 export type GitShow = { commit: GitCommit; diff: string };
 export type SystemInfo = {
   hostname: string;
+  addresses: { interface: string; address: string; family: 'IPv4' | 'IPv6'; internal: boolean }[];
   type: string;
   platform: string;
   release: string;

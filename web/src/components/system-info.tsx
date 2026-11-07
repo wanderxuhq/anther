@@ -1,7 +1,7 @@
 // web/src/components/system-info.tsx
 // 服务器信息对话框：点击后现取 /api/system，展示主机、硬件、磁盘、运行时长与版本。
 // 可刷新；Esc / 点遮罩 / 关闭按钮退出。
-import { createSignal, onCleanup, onMount, Show } from 'solid-js';
+import { createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { api, type SystemInfo } from '../api.ts';
 import { t } from '../i18n.ts';
 import { Icon } from './icons.tsx';
@@ -74,6 +74,19 @@ export function SystemInfoDialog(props: { onClose: () => void }) {
           {(data) => (
             <dl class="system-info-list">
               <div class="system-info-row"><dt>{t('system.address')}</dt><dd>{window.location.origin}</dd></div>
+              <div class="system-info-row system-info-addresses">
+                <dt>{t('system.addresses')}</dt>
+                <dd>
+                  <Show when={data().addresses.length} fallback={<span class="system-info-address-meta">{t('system.unavailable')}</span>}>
+                    <For each={data().addresses}>{(item) => (
+                      <span class="system-info-address">
+                        <span class="system-info-address-value">{item.address}</span>
+                        <span class="system-info-address-meta">{item.interface} · {item.family}{item.internal ? ` · ${t('system.loopback')}` : ''}</span>
+                      </span>
+                    )}</For>
+                  </Show>
+                </dd>
+              </div>
               <div class="system-info-row"><dt>{t('system.hostname')}</dt><dd>{data().hostname}</dd></div>
               <div class="system-info-row"><dt>{t('system.platform')}</dt><dd>{`${data().type} ${data().release}`}</dd></div>
               <div class="system-info-row"><dt>{t('system.arch')}</dt><dd>{data().arch}</dd></div>

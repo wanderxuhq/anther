@@ -395,6 +395,10 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   margin: 0; flex: 1; min-width: 0; overflow-wrap: anywhere;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px;
 }
+.system-info-addresses { align-items: flex-start; }
+.system-info-addresses dd { display: flex; flex-direction: column; gap: 4px; }
+.system-info-address { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.system-info-address-meta { color: var(--muted); font-size: 11px; }
 .system-info-card .dialog-actions { flex: 0 0 auto; }
 
 /* ---- 全局搜索（Task 17） ---- */

@@ -6,8 +6,19 @@ import path from 'node:path';
 import { statfs } from 'node:fs/promises';
 import { appVersion } from './app-info.ts';
 
+export type SystemAddress = {
+  /** 网络接口名，如 eth0 / wlan0 / lo */
+  interface: string;
+  address: string;
+  family: 'IPv4' | 'IPv6';
+  /** 回环地址（127.0.0.1 / ::1） */
+  internal: boolean;
+};
+
 export type SystemInfo = {
   hostname: string;
+  /** 所有本机网络地址，非回环地址排在前面 */
+  addresses: SystemAddress[];
   /** os.type()，如 Linux / Darwin / Windows_NT */
   type: string;
   /** os.platform()，如 linux / darwin / win32 */
@@ -32,6 +43,32 @@ export type SystemInfo = {
   disk: { total: number; free: number } | null;
 };
 
+/** 枚举所有网络接口地址；受限环境（无权限/无接口）返回空数组。 */
+function readAddresses(): SystemAddress[] {
+  let interfaces: NodeJS.Dict<os.NetworkInterfaceInfo[]>;
+  try {
+    interfaces = os.networkInterfaces();
+  } catch {
+    return [];
+  }
+  const result: SystemAddress[] = [];
+  for (const [name, infos] of Object.entries(interfaces)) {
+    for (const info of infos ?? []) {
+      const rawFamily = String(info.family);
+      const family = rawFamily === 'IPv4' || rawFamily === '4' ? 'IPv4'
+        : rawFamily === 'IPv6' || rawFamily === '6' ? 'IPv6' : null;
+      if (!family) continue;
+      result.push({ interface: name, address: info.address, family, internal: info.internal });
+    }
+  }
+  // 非回环优先，其次 IPv4 优先，再按接口名/地址稳定排序。
+  return result.sort((a, b) =>
+    Number(a.internal) - Number(b.internal)
+    || (a.family === b.family ? 0 : a.family === 'IPv4' ? -1 : 1)
+    || a.interface.localeCompare(b.interface)
+    || a.address.localeCompare(b.address));
+}
+
 async function readDisk(root: string): Promise<{ total: number; free: number } | null> {
   try {
     const stats = await statfs(root);
@@ -49,6 +86,7 @@ export async function collectSystemInfo(workspaceRoot: string): Promise<SystemIn
   const rawModel = cpus[0]?.model.trim() ?? '';
   return {
     hostname: os.hostname(),
+    addresses: readAddresses(),
     type: os.type(),
     platform: os.platform(),
     release: os.release(),

@@ -14,6 +14,7 @@ test('GET /api/system：返回服务器系统信息', async () => {
     assert.equal(res.status, 200);
     const body = (await res.json()) as Record<string, unknown>;
     assert.equal(typeof body.hostname, 'string');
+    assert.ok(Array.isArray(body.addresses));
     assert.equal(typeof body.platform, 'string');
     assert.equal(typeof body.node, 'string');
     assert.equal(typeof body.workspace, 'string');

@@ -28,7 +28,7 @@ Open `http://localhost:3000` by default. The startup log also shows a LAN addres
 - Files, database objects, and terminals share a tab bar, with independent tabs for each. Refreshing reconnects terminals and restores their full screen and scrollback; closing a terminal tab ends its process. On touch screens the terminal shows a key bar with Esc, Tab, arrows and Ctrl combinations.
 - The terminal renders as HTML by default: file and directory paths in output are clickable and open the existing file preview (full screen on phones, in the main pane on desktop), and Markdown output (including tables) is rendered with the project's Markdown viewer. Use the eye/code button in the main toolbar to switch to the classic plain-text grid; switching only changes rendering, never the shell session, scrollback, or running process. The panel close button in the top-right returns to the terminal.
 - The terminal box grows with its content and only takes the height it needs; once the content exceeds the available area it keeps a fixed height with a scrollbar.
-- Click ⓘ at the bottom of the drawer for server information: host, OS, CPU, memory, disk, uptime, Node.js and Anther versions, and the workspace path. The dialog can refresh in place.
+- Click ⓘ at the bottom of the drawer for server information: host, all local network addresses, OS, CPU, memory, disk, uptime, Node.js and Anther versions, and the workspace path. The dialog can refresh in place.
 - On desktop, the file list and editor scroll independently.
 
 ## Detection API
