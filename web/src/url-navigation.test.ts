@@ -389,9 +389,9 @@ test('图片深链直接预览并可下载，不解码为文本；加载失败�
   assert.equal(s.editorHandle(), null);
   assert.equal(w.document.querySelector('.cm-editor'), null);
   assert.equal(w.document.querySelector('.complete-btn'), null);
-  assert.equal(w.document.querySelector('button[title="查找"]').disabled, true);
+  assert.equal(w.document.querySelector('button[title="查找"]'), null);
+  assert.equal(w.document.querySelector('button[title="切换为编辑模式"]'), null);
   const download = w.document.querySelector('.file-download');
-  assert.equal(download.nextElementSibling.disabled, true);
   assert.equal(download.disabled, false);
   assert.equal(calls.some((call) => call.url.pathname === '/api/file'), false);
   const downloads: string[] = [];
@@ -526,7 +526,7 @@ test('音视频与不支持的二进制不进入编辑器；媒体退出后停�
   } });
   await until(() => !!w.document.querySelector('.pdf-preview'));
   assert.equal(w.document.querySelector('iframe'), null);
-  assert.equal(w.document.querySelector('.file-download').nextElementSibling.disabled, true);
+  assert.equal(w.document.querySelector('button[title="切换为编辑模式"]'), null);
   await s.openTab('song.mp3');
   await until(() => !!w.document.querySelector('audio'));
   const audio = w.document.querySelector('audio');
@@ -788,7 +788,7 @@ test('压缩包内部文件复用主工具栏和查看组件，源码只读且�
   w.document.querySelector('.markdown-toggle').click();
   assert.equal(editor().state.doc.toString(), '# Inside\n\n**Archive**');
   assert.equal(editor().state.readOnly, true);
-  assert.equal(w.document.querySelector('.file-download').nextElementSibling.disabled, true);
+  assert.equal(w.document.querySelector('button[title="切换为编辑模式"]'), null);
   assert.equal(w.document.querySelector('.complete-btn'), null);
   const url = w.location.href;
   editor().dispatch({ selection: { anchor: 2 }, userEvent: 'select' });
@@ -1037,7 +1037,7 @@ test('数据库树区分表和视图，同库不同表可同时打开，下载�
   assert.equal(s.tabs().length, 2);
   assert.equal(s.activeTab().object.type, 'view');
   assert.equal(w.document.querySelector('.file-download')!.disabled, false);
-  assert.equal(w.document.querySelector('[title="切换为编辑模式"]')!.disabled, true);
+  assert.equal(w.document.querySelector('[title="切换为编辑模式"]'), null);
 });
 
 test('重命名和删除数据库时同步所有对象标签，不影响其他数据库', async (test) => {

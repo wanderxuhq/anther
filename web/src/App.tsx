@@ -527,9 +527,12 @@ export function App() {
             </>
           }
         >
-          <button class="icon-btn" onClick={() => editorHandle()?.openSearch()} title={t('find')} aria-label={t('find')} disabled={!currentFile() || docLoadedPath() !== currentFile()}>
-            <Icon name="search" />
-          </button>
+          {/* 编辑器搜索只对可编辑/可搜索的文本文件有意义；预览、图片、数据库、终端等直接隐藏。 */}
+          <Show when={activeKind() === 'file' && (!browsingArchive() || !!archiveEntry()) && !currentPreview() && !showImagePreview() && !isBinaryImage(documentPath()) && !showRenderedDocument()}>
+            <button class="icon-btn" onClick={() => editorHandle()?.openSearch()} title={t('find')} aria-label={t('find')} disabled={!currentFile() || docLoadedPath() !== currentFile()}>
+              <Icon name="search" />
+            </button>
+          </Show>
           <span class="toolbar-path" title={browsingArchive() ? [currentFile(), ...archiveChain(), archiveEntry()].filter(Boolean).join(' › ') : undefined}>{toolbarPathLabel()}</span>
           <Show when={canPreviewMarkdown() || canPreviewTable()}>
             <button
@@ -552,26 +555,32 @@ export function App() {
             </Show>
             <button class="icon-btn" onClick={() => databaseController()?.refresh()} aria-label={t('database.refresh')} title={t('database.refresh')}><DatabaseIcon kind="refresh"/></button>
           </>}</Show>
-          <button class="icon-btn file-download" onClick={() => void handleDownload()}
-            disabled={!downloadPath() || preparingDownload() || (browsingArchive() ? !!(archiveEntry() || archiveChain().length) && archiveBusy(currentFile()!) : !!currentFile() && !showImagePreview() && !currentPreview() && docLoadedPath() !== currentFile())}
-            title={t('download.file')} aria-label={t('download.file')} aria-busy={preparingDownload()}>
-            <Icon name="download" />
-          </button>
-          <button
-            class={`icon-btn ${!activeDatabase() && !documentReadOnly() && !isBinaryImage(documentPath()) && !currentPreview() ? 'active' : ''}`}
-            disabled={!!activeDatabase() || browsingArchive() || isBinaryImage(documentPath()) || (!!currentFile() && docLoadedPath() !== currentFile() && !showImagePreview())}
-            onClick={() => {
-              // 编辑→只读：先把防抖中的修改立即落盘（切换前保存，改动不丢）
-              if (!roMode()) flushSave();
-              const next = !roMode();
-              setRoMode(next);
-              pushState();
-            }}
-            title={browsingArchive() ? t('archive.readonly') : roMode() ? t('switchEdit') : t('switchReadonly')}
-            aria-label={browsingArchive() ? t('archive.readonly') : roMode() ? t('switchEdit') : t('switchReadonly')}
-          >
-            <Icon name="edit" />
-          </button>
+          {/* 终端、Git 等没有可下载文件的面板不显示下载按钮。 */}
+          <Show when={downloadPath()}>
+            <button class="icon-btn file-download" onClick={() => void handleDownload()}
+              disabled={preparingDownload() || (browsingArchive() ? !!(archiveEntry() || archiveChain().length) && archiveBusy(currentFile()!) : !!currentFile() && !showImagePreview() && !currentPreview() && docLoadedPath() !== currentFile())}
+              title={t('download.file')} aria-label={t('download.file')} aria-busy={preparingDownload()}>
+              <Icon name="download" />
+            </button>
+          </Show>
+          {/* 只读/编辑切换只适用于可编辑文本文件；归档、图片、PDF/媒体预览、数据库等隐藏。 */}
+          <Show when={activeKind() === 'file' && !!currentFile() && !browsingArchive() && !isBinaryImage(documentPath()) && !currentPreview()}>
+            <button
+              class={`icon-btn ${!documentReadOnly() ? 'active' : ''}`}
+              disabled={!!currentFile() && docLoadedPath() !== currentFile() && !showImagePreview()}
+              onClick={() => {
+                // 编辑→只读：先把防抖中的修改立即落盘（切换前保存，改动不丢）
+                if (!roMode()) flushSave();
+                const next = !roMode();
+                setRoMode(next);
+                pushState();
+              }}
+              title={roMode() ? t('switchEdit') : t('switchReadonly')}
+              aria-label={roMode() ? t('switchEdit') : t('switchReadonly')}
+            >
+              <Icon name="edit" />
+            </button>
+          </Show>
         </Show>
         <Show when={activeTab()}>
           <button
