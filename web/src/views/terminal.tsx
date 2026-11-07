@@ -11,7 +11,7 @@ import { api, connectTerminal, type TerminalSocket } from '../api.ts';
 import { fontScale, openPreviewTab, removeTerminalTab, theme } from '../stores.ts';
 import { t } from '../i18n.ts';
 import { CONTROL_LETTERS, TERMINAL_KEYS, applyTerminalModifiers, controlChar, keySequence, type TerminalKey } from '../terminal-keys.ts';
-import { terminalRenderMode } from '../terminal/settings.ts';
+import { terminalKeyBarOpen, terminalRenderMode } from '../terminal/settings.ts';
 import { classifyMarkdownRows, joinWrappedRows, type MarkdownBlock } from '../terminal/markdown-blocks.ts';
 import { firstContentCell, joinLogicalCells } from '../terminal/logical.ts';
 import { renderRow, rowClass, rowRawText, type CursorInfo } from '../terminal/render.ts';
@@ -109,7 +109,7 @@ export function TerminalView(props: { id: string }) {
   const [ctrlArmed, setCtrlArmed] = createSignal(false);
   const [shiftArmed, setShiftArmed] = createSignal(false);
   const [altArmed, setAltArmed] = createSignal(false);
-  const [cwd, setCwd] = createSignal('');
+
   const [tick, setTick] = createSignal(0);
 
   const sendText = (data: string) => {
@@ -152,10 +152,9 @@ export function TerminalView(props: { id: string }) {
     const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
     const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
     const paneWidth = scroller.clientWidth;
-    const toolbar = pane.querySelector<HTMLElement>('.terminal-toolbar');
     const keys = pane.querySelector<HTMLElement>('.terminal-keys');
     const parent = pane.parentElement;
-    const available = Math.max(1, (parent?.clientHeight ?? 0) - (toolbar?.offsetHeight ?? 0) - (keys?.offsetHeight ?? 0));
+    const available = Math.max(1, (parent?.clientHeight ?? 0) - (keys?.offsetHeight ?? 0));
     const cols = Math.max(20, Math.floor((paneWidth - padX) / cellW));
 
     // 逻辑行列跟随当前可用高度；内容高度只影响视觉盒高度，不触发 PTY resize。
@@ -228,7 +227,6 @@ export function TerminalView(props: { id: string }) {
     const cursorShape = s.getCursorShape();
     const cursorBlinking = s.getCursorBlinking();
     const cursorAbs = screenStart + Math.max(0, Math.min(cursor.row, screenRows - 1));
-    setCwd(cwdPath(s.getCwd()));
 
     const dirty = s.takeDirty();
     const structureChanged = renderedStart !== start || lastMode !== mode || lastAlt !== alt || lastFirst !== first;
@@ -597,6 +595,17 @@ export function TerminalView(props: { id: string }) {
     sendMeta();
   });
 
+  // 按键条开合会改变可用高度：等 DOM 更新后重新测量并触发 PTY resize。
+  // 收起后修饰键按钮不可见，同时清掉待发的 Ctrl/Shift/Alt。
+  createEffect(on(terminalKeyBarOpen, (open) => {
+    if (!open) {
+      setCtrlArmed(false);
+      setShiftArmed(false);
+      setAltArmed(false);
+    }
+    scheduleResize();
+  }, { defer: true }));
+
   // 字号跟随全局设置；重新测量列宽/行高后回发 resize。
   createEffect(() => {
     const size = Math.round(fontScale() * FONT_SCALE_TO_PX);
@@ -839,12 +848,6 @@ export function TerminalView(props: { id: string }) {
 
   return (
     <div class="terminal-pane" ref={(el) => (paneEl = el)} onClick={focusOnPaneClick}>
-      <div class="terminal-toolbar">
-        <Show when={cwd()}>
-          <span class="terminal-cwd" title={`${t('terminal.cwd')}: ${cwd()}`}>{cwd()}</span>
-        </Show>
-      </div>
-
       <div
         class="terminal-scroll"
         classList={{ 'terminal-html': terminalRenderMode() === 'html', 'terminal-text': terminalRenderMode() === 'text' }}
@@ -876,7 +879,7 @@ export function TerminalView(props: { id: string }) {
         onBlur={() => { if (screen?.getMode('focusTracking') === true) sendText('\x1b[O'); }}
       />
 
-      <div class="terminal-keys" role="toolbar" aria-label={t('terminal.keys')}>
+      <div class="terminal-keys" classList={{ open: terminalKeyBarOpen() }} role="toolbar" aria-label={t('terminal.keys')}>
         <Show when={!ctrlArmed()} fallback={
           <>
             <div class="terminal-key-scroll">

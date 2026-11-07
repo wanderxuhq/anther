@@ -25,7 +25,7 @@ import {
 import { createEditor, type EditorHandle } from './editor/index.ts';
 import { describeLanguage, loadLanguage } from './editor/language.ts';
 import { t } from './i18n.ts';
-import { setTerminalRenderMode, terminalRenderMode } from './terminal/settings.ts';
+import { setTerminalKeyBarOpen, setTerminalRenderMode, terminalKeyBarOpen, terminalRenderMode } from './terminal/settings.ts';
 import { isMarkdownFile, parseMarkdownDocument } from './markdown.ts';
 import { MarkdownPreview } from './components/markdown-preview.tsx';
 import { Icon } from './components/icons.tsx';
@@ -537,6 +537,16 @@ export function App() {
           <span class="toolbar-path" title={browsingArchive() ? [currentFile(), ...archiveChain(), archiveEntry()].filter(Boolean).join(' › ') : undefined}>{toolbarPathLabel()}</span>
           {/* 终端渲染切换与 Markdown 预览共用同一个眼睛/代码按钮。 */}
           <Show when={activeKind() === 'terminal'}>
+            <button
+              class="icon-btn"
+              classList={{ active: terminalKeyBarOpen() }}
+              aria-pressed={terminalKeyBarOpen()}
+              title={terminalKeyBarOpen() ? t('terminal.hideKeys') : t('terminal.showKeys')}
+              aria-label={terminalKeyBarOpen() ? t('terminal.hideKeys') : t('terminal.showKeys')}
+              onClick={() => setTerminalKeyBarOpen(!terminalKeyBarOpen())}
+            >
+              <Icon name="keyboard" />
+            </button>
             <button
               class="icon-btn markdown-toggle"
               aria-pressed={terminalRenderMode() === 'html'}

@@ -8,7 +8,7 @@ export type IconName =
   | 'chevron-right' | 'chevron-down' | 'chevron-left'
   | 'refresh' | 'info' | 'sparkles' | 'edit' | 'eye' | 'code'
   | 'download' | 'check' | 'alert' | 'undo' | 'lock'
-  | 'terminal' | 'terminal-plus' | 'files' | 'file' | 'tabs' | 'instances'
+  | 'terminal' | 'terminal-plus' | 'files' | 'file' | 'tabs' | 'instances' | 'keyboard'
   | 'git-branch' | 'git-changes' | 'git-history' | 'commit' | 'diff'
   | 'archive' | 'database' | 'table' | 'structure'
   | 'sliders' | 'fit' | 'fit-width' | 'zoom-in' | 'zoom-out' | 'actual-size'
@@ -53,6 +53,10 @@ const icons: Record<IconName, IconPath> = {
     <rect x="3" y="4" width="18" height="6" rx="2" />
     <rect x="3" y="14" width="18" height="6" rx="2" />
     <path d="M7 7h.01M7 17h.01" />
+  </>,
+  keyboard: () => <>
+    <rect x="3" y="6" width="18" height="12" rx="2" />
+    <path d="M7 10h.01M10 10h.01M13 10h.01M16 10h.01M7 14h.01M10 14h6M18 14h.01" />
   </>,
   'git-branch': () => <>
     <circle cx="6" cy="5" r="2" /><circle cx="6" cy="19" r="2" /><circle cx="18" cy="7" r="2" />
