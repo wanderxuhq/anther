@@ -812,7 +812,7 @@ export function TerminalView(props: { id: string }) {
             aria-label={t('terminal.armCtrl')}
             onClick={() => { setCtrlArmed((armed) => !armed); focusInput?.(); }}
           >Ctrl</button>
-          <For each={TERMINAL_KEYS.slice(2)}>
+          <For each={TERMINAL_KEYS.slice(2, 6)}>
             {(key) => (
               <button class="terminal-key" title={key.aria} aria-label={key.aria} onClick={() => press(barSequence(key.id))}>
                 {key.label}
@@ -820,7 +820,17 @@ export function TerminalView(props: { id: string }) {
             )}
           </For>
         </div>
-        <Show when={ctrlArmed()}>
+        <Show when={ctrlArmed()} fallback={
+          <div class="terminal-key-row">
+            <For each={TERMINAL_KEYS.slice(6)}>
+              {(key) => (
+                <button class="terminal-key" title={key.aria} aria-label={key.aria} onClick={() => press(barSequence(key.id))}>
+                  {key.label}
+                </button>
+              )}
+            </For>
+          </div>
+        }>
           <div class="terminal-key-row terminal-key-letters">
             <For each={CONTROL_LETTERS}>
               {(letter) => (

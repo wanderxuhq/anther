@@ -195,7 +195,7 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   background: none; color: inherit; font-size: 13px; cursor: pointer;
 }
 .terminal-key.active { background: var(--accent); color: white; border-color: var(--accent); }
-.terminal-key-letters .terminal-key { min-width: 36px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.terminal-key-letters .terminal-key { min-width: 34px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 /* 最小 Toast（Task 13；完整系统留给 Task 14/15）：固定定位、3s 自动消失 */
 .toast {
