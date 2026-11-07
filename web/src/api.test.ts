@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { api, getUserId, fallbackUuid, searchStream, connectTerminal, type SearchFile } from './api.ts';
+import { setBasePath } from './base.ts';
 
 // Node 无 localStorage —— 用内存桩（测试前全局注入）
 const store = new Map<string, string>();
@@ -68,6 +69,23 @@ test('writeFile 不带 ro 参数并携带 x-user-id 头', async () => {
   const [call] = fetchCalls;
   assert.equal(call.url, '/api/file?path=a.ts'); // 只读仅前端控制，URL 不再携带 ro
   assert.ok((call.init.headers as Record<string, string>)['x-user-id']);
+});
+
+test('挂载 base：REST、上传和下载 URL 都加前缀', async () => {
+  setBasePath('/-/qlang');
+  try {
+    mockFetch(200, { entries: [] });
+    await api.list('.');
+    assert.equal(fetchCalls[0].url, '/-/qlang/api/list?path=.');
+    assert.equal(api.downloadUrl('a b.txt'), '/-/qlang/api/download?path=a%20b.txt');
+    assert.equal(api.imageUrl('x.png'), '/-/qlang/api/image?path=x.png');
+    assert.equal(api.previewUrl('x.pdf'), '/-/qlang/api/preview?path=x.pdf');
+    mockFetch(200, { ok: true });
+    await api.writeFile('a.ts', 'x');
+    assert.equal(fetchCalls.at(-1)!.url, '/-/qlang/api/file?path=a.ts');
+  } finally {
+    setBasePath('');
+  }
 });
 
 test('getUserId 生成并持久化', () => {

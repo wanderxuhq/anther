@@ -1,8 +1,16 @@
 // web/src/api.ts
 import type { ScreenDiff, ScreenSnapshot } from '../../shared/terminal/serialize.ts';
+import type { MountInfo } from './mount-list.ts';
+import { basePath, withBase } from './base.ts';
 
 const USER_KEY = 'anther:userId';
 const TABS_KEY = 'anther:tabsSnapshot';
+
+/** 标签快照按挂载隔离，避免 anther 与 qlang 互相恢复对方的文件。 */
+function tabsStorageKey(): string {
+  const base = basePath();
+  return base ? `${TABS_KEY}:${base}` : TABS_KEY;
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -33,11 +41,11 @@ export function fallbackUuid(): string {
 }
 
 export function saveTabsSnapshot(paths: string[]): void {
-  localStorage.setItem(TABS_KEY, JSON.stringify(paths));
+  localStorage.setItem(tabsStorageKey(), JSON.stringify(paths));
 }
 export function loadTabsSnapshot(): string[] | null {
   try {
-    const raw = localStorage.getItem(TABS_KEY);
+    const raw = localStorage.getItem(tabsStorageKey());
     if (!raw) return null;
     const parsed = JSON.parse(raw) as unknown;
     return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : null;
@@ -48,7 +56,7 @@ export function loadTabsSnapshot(): string[] | null {
 
 async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const binary = body instanceof Blob;
-  const res = await fetch(path, {
+  const res = await fetch(withBase(path), {
     method, signal,
     headers: {
       'Content-Type': binary ? 'application/octet-stream' : 'application/json',
@@ -86,6 +94,14 @@ export type GitBranch = { name: string; current: boolean; tip: string };
 export type GitBranches = { isRepo: boolean; current: string | null; branches: GitBranch[] };
 export type GitLog = { isRepo: boolean; commits: GitCommit[] };
 export type GitShow = { commit: GitCommit; diff: string };
+export type AntherIdentity = {
+  name: string;
+  workspace: string;
+  instanceId: string;
+  attach?: { available: boolean };
+  mounts?: MountInfo[];
+};
+
 export type SystemInfo = {
   hostname: string;
   addresses: { interface: string; address: string; family: 'IPv4' | 'IPv6'; internal: boolean }[];
@@ -115,9 +131,9 @@ export type ArchiveDownload = {
 export const api = {
   list: (path: string) => request<{ entries: DirEntry[] }>('GET', `/api/list?path=${encodeURIComponent(path)}`),
   readFile: (path: string, signal?: AbortSignal) => request<{ content: string; utf8: boolean }>('GET', `/api/file?path=${encodeURIComponent(path)}`, undefined, signal),
-  downloadUrl: (path: string) => `/api/download?path=${encodeURIComponent(path)}`,
-  imageUrl: (path: string) => `/api/image?path=${encodeURIComponent(path)}`,
-  previewUrl: (path: string) => `/api/preview?path=${encodeURIComponent(path)}`,
+  downloadUrl: (path: string) => withBase(`/api/download?path=${encodeURIComponent(path)}`),
+  imageUrl: (path: string) => withBase(`/api/image?path=${encodeURIComponent(path)}`),
+  previewUrl: (path: string) => withBase(`/api/preview?path=${encodeURIComponent(path)}`),
   fileInfo: (path: string) => request<FileInfo>('GET', `/api/file-info?path=${encodeURIComponent(path)}`),
   prepareDownload: (path: string, signal?: AbortSignal) => request<ArchiveDownload | { kind: 'file'; url: string; filename: string }>('POST', '/api/download/prepare', { path }, signal),
   downloadStatus: (id: string, signal?: AbortSignal) => request<ArchiveDownload>('GET', `/api/download/status?id=${encodeURIComponent(id)}`, undefined, signal),
@@ -129,6 +145,7 @@ export const api = {
   rename: (path: string, to: string) => request('POST', '/api/rename', { path, to }),
   del: (path: string) => request('POST', '/api/delete', { path }),
   system: () => request<SystemInfo>('GET', '/api/system'),
+  anther: () => request<AntherIdentity>('GET', '/api/anther'),
   tabs: {
     list: () => request<{ tabs: string[] }>('GET', '/api/tabs'),
     open: (path: string) => request('PUT', '/api/tabs/open', { path }),
@@ -192,7 +209,7 @@ export function searchStream(
   if (params.exclude) query.set('exclude', params.exclude);
   void (async () => {
     try {
-      const res = await fetch(`/api/search?${query}`, {
+      const res = await fetch(withBase(`/api/search?${query}`), {
         headers: { 'x-user-id': getUserId() },
         signal: ctrl.signal,
       });
@@ -299,7 +316,7 @@ export function connectTerminal(id: string, handlers: TerminalHandlers, urlOverr
 
   const open = () => {
     if (disposed || dead) return;
-    const socket = new WebSocket(urlOverride ?? `/api/terminal?term=${encodeURIComponent(id)}&user=${encodeURIComponent(user)}`);
+    const socket = new WebSocket(urlOverride ?? withBase(`/api/terminal?term=${encodeURIComponent(id)}&user=${encodeURIComponent(user)}`));
     ws = socket;
     // 重连后旧 socket 仍可能投递已排队的消息；只认当前 socket，避免把服务端
     // 快照/diff 处理两次（表现为本地多出一行重复提示符）。

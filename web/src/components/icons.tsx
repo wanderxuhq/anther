@@ -8,7 +8,7 @@ export type IconName =
   | 'chevron-right' | 'chevron-down' | 'chevron-left'
   | 'refresh' | 'info' | 'sparkles' | 'edit' | 'eye' | 'code'
   | 'download' | 'check' | 'alert' | 'undo' | 'lock'
-  | 'terminal' | 'terminal-plus' | 'files' | 'file' | 'tabs'
+  | 'terminal' | 'terminal-plus' | 'files' | 'file' | 'tabs' | 'instances'
   | 'git-branch' | 'git-changes' | 'git-history' | 'commit' | 'diff'
   | 'archive' | 'database' | 'table' | 'structure'
   | 'sliders' | 'fit' | 'fit-width' | 'zoom-in' | 'zoom-out' | 'actual-size'
@@ -49,6 +49,11 @@ const icons: Record<IconName, IconPath> = {
   files: () => <><path d="M3 6h6l2 2h10v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6Z" /><path d="M8 13h8M8 17h5" /></>,
   file: () => <><path d="M6 3h8l4 4v14H6z" /><path d="M14 3v4h4" /></>,
   tabs: () => <><rect x="3" y="5" width="18" height="15" rx="2" /><path d="M3 9h18M8 5v4" /></>,
+  instances: () => <>
+    <rect x="3" y="4" width="18" height="6" rx="2" />
+    <rect x="3" y="14" width="18" height="6" rx="2" />
+    <path d="M7 7h.01M7 17h.01" />
+  </>,
   'git-branch': () => <>
     <circle cx="6" cy="5" r="2" /><circle cx="6" cy="19" r="2" /><circle cx="18" cy="7" r="2" />
     <path d="M6 7v10M8 7h5a5 5 0 0 1 5 5v3" />

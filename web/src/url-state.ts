@@ -38,8 +38,10 @@ export const DEFAULT_STATE: UrlState = {
 
 const TERM_RE = /^t_[\w-]+$/;
 const COMMIT_RE = /^[0-9a-f]{4,64}$/i;
-const GIT_ROUTE = '-/git';
-const FILE_ROUTE = '-/file/';
+// 前端内部路由使用 `_` 前缀，`/-/` 整个留给多工作区挂载。
+const GIT_ROUTE = '_/git';
+const FILE_ROUTE = '_/file/';
+const DATABASE_ROUTE = '_/database/';
 const ARCHIVE_EXT = /\.(?:zip|jar|war|apk|xpi|cbz|7z|rar|tar|gz|tgz|bz2|tbz|tbz2|xz|txz)$/i;
 
 function isValidArchiveEntry(entry: string): boolean {
@@ -65,13 +67,19 @@ function parseLine(value: string | null): LineRange | null {
 }
 
 /** 统一解析所有地址栏状态；非法参数回退，互斥资源只保留有效目标。 */
-export function parseUrl(href: string): UrlState {
+export function parseUrl(href: string, base = ''): UrlState {
   const url = new URL(href);
   const q = url.searchParams;
   const position = parseFragment(url.hash);
   const s = { ...DEFAULT_STATE };
+  // base 是编码后的地址前缀；先按原始 pathname 剥离，再 decode，避免目录名编码差异。
+  let pathname = url.pathname;
+  if (base) {
+    if (pathname === base) pathname = '/';
+    else if (pathname.startsWith(`${base}/`)) pathname = pathname.slice(base.length);
+  }
   try {
-    s.path = decodeURIComponent(url.pathname).slice(1) || null;
+    s.path = decodeURIComponent(pathname).slice(1) || null;
   } catch { /* 畸形编码 → 空态，其余参数仍可恢复 */ }
   const term = q.get('term');
   s.term = term && TERM_RE.test(term) ? term : null;
@@ -79,8 +87,8 @@ export function parseUrl(href: string): UrlState {
   if (s.path?.startsWith(FILE_ROUTE)) {
     // 显式文件路由只解包一次，连名为 -/file/... 的文件也能无歧义表示。
     s.path = s.path.slice(FILE_ROUTE.length) || null;
-  } else if (s.path?.startsWith('-/database/')) {
-    s.path = s.path.slice('-/database/'.length) || null;
+  } else if (s.path?.startsWith(DATABASE_ROUTE)) {
+    s.path = s.path.slice(DATABASE_ROUTE.length) || null;
     s.view = 'database';
     const name = q.get('object');
     const column = q.get('sort');
@@ -151,7 +159,7 @@ export function parseUrl(href: string): UrlState {
   return s;
 }
 
-export function serializeUrl(state: UrlState): string {
+export function serializeUrl(state: UrlState, base = ''): string {
   const params = new URLSearchParams(), position = new URLSearchParams();
   const view = state.term ? 'file' : state.view;
   if (state.term) params.set('term', state.term);
@@ -198,10 +206,11 @@ export function serializeUrl(state: UrlState): string {
   }
   let pathname = '/';
   if (view === 'file' && path) {
-    // 普通文件保持原有路径；保留命名空间中的文件使用显式文件路由。
-    pathname = `/${path.startsWith('-/') ? FILE_ROUTE : ''}${encodePath(path)}`;
+    // 普通文件保持原有路径；`-`/`-/`（挂载命名空间与实例列表页）和 `_/`（内部路由）使用显式文件路由。
+    const reserved = path === '-' || path.startsWith('-/') || path.startsWith('_/');
+    pathname = `/${reserved ? FILE_ROUTE : ''}${encodePath(path)}`;
   } else if (view === 'database' && path) {
-    pathname = `/-/database/${encodePath(path)}`;
+    pathname = `/${DATABASE_ROUTE}${encodePath(path)}`;
   } else if (view !== 'file') {
     pathname = `/${GIT_ROUTE}`;
     if (view === 'history' || view === 'branches') pathname += `/${view}`;
@@ -209,5 +218,5 @@ export function serializeUrl(state: UrlState): string {
     else if (view === 'commit' && state.commit && COMMIT_RE.test(state.commit)) pathname += `/commit/${state.commit}`;
   }
   const qs = params.toString();
-  return `${pathname}${qs ? `?${qs}` : ''}${serializeFragment(position)}`;
+  return `${base}${pathname}${qs ? `?${qs}` : ''}${serializeFragment(position)}`;
 }

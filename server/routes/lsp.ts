@@ -4,7 +4,7 @@
 // 服务端→客户端：响应 { id, ok, items?, error? } 与推送 { type: diagnostics|restarted|unavailable, ... }。
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { HttpServer } from '../http.ts';
+import type { Router } from '../http.ts';
 import type { LspManager } from '../lsp-manager.ts';
 import { WebSocket } from 'ws';
 
@@ -21,7 +21,7 @@ export function canonicalUriFor(workspaceRoot: string, relPath: string): string 
 
 type Conn = { ws: WebSocket; open: Map<string, string> }; // uri → engineId
 
-export function registerLspRoutes(http: HttpServer, manager: LspManager): void {
+export function registerLspRoutes(http: Router, manager: LspManager): void {
   const connections = new Set<Conn>();
 
   const sendJson = (ws: WebSocket, obj: unknown) => {

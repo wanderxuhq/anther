@@ -2,7 +2,6 @@
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { HttpError } from './http-error.ts';
 
@@ -37,38 +36,14 @@ const MIME: Record<string, string> = {
   '.map': 'application/json; charset=utf-8',
 };
 
-export class HttpServer {
+/** 每个工作区一套路由表；HttpServer 自身是宿主工作区的路由表。 */
+export class Router {
   private routes = new Map<string, Map<string, Handler>>();
   private binaryPosts = new Set<string>();
   private sseRoutes = new Map<string, SseHandler>();
   private streamRoutes = new Map<string, SseHandler>();
   private wsRoutes = new Map<string, WsHandler>();
-  private wss = new WebSocketServer({ noServer: true });
-  private server = createServer((req, res) => void this.handle(req, res));
-  private staticDir: string;
   private disposers: (() => Promise<void>)[] = [];
-
-  constructor(opts: { staticDir: string }) {
-    this.staticDir = opts.staticDir;
-    // async 守卫：handler 是 void|Promise<void>，.catch 无法直接挂（void 无 .catch）；
-    // 用 async 回调 + try/catch，与 SSE 路径（await + catch 写错误）同款。
-    this.wss.on('connection', async (ws, req) => {
-      const url = new URL(req.url ?? '/', 'http://localhost');
-      const h = this.wsRoutes.get(url.pathname);
-      try {
-        if (h) await h(ws, req, url.searchParams);
-        else ws.close();
-      } catch (e) {
-        console.error(`ws handler ${url.pathname}:`, e);
-        ws.close();
-      }
-    });
-    this.server.on('upgrade', (req, socket, head) => {
-      const url = new URL(req.url ?? '/', 'http://localhost');
-      if (!this.wsRoutes.has(url.pathname)) { socket.destroy(); return; }
-      this.wss.handleUpgrade(req, socket, head, (ws) => this.wss.emit('connection', ws, req));
-    });
-  }
 
   get(pattern: string, h: Handler) { this.add('GET', pattern, h); }
   put(pattern: string, h: Handler) { this.add('PUT', pattern, h); }
@@ -86,44 +61,193 @@ export class HttpServer {
 
   ws(pattern: string, h: WsHandler) { this.wsRoutes.set(pattern, h); }
 
+  onClose(dispose: () => Promise<void>) { this.disposers.push(dispose); }
+
   private add(method: string, pattern: string, h: Handler) {
     if (!this.routes.has(method)) this.routes.set(method, new Map());
     this.routes.get(method)!.set(pattern, h);
   }
 
-  async listen(port: number, host: string) {
-    return new Promise<void>((resolve) => this.server.listen(port, host, resolve));
+  handler(method: string, pathname: string): Handler | undefined {
+    return this.routes.get(method)?.get(pathname);
   }
-  onClose(dispose: () => Promise<void>) { this.disposers.push(dispose); }
+  isBinaryPost(pathname: string): boolean { return this.binaryPosts.has(pathname); }
+  sseHandler(pathname: string): SseHandler | undefined { return this.sseRoutes.get(pathname); }
+  streamHandler(pathname: string): SseHandler | undefined { return this.streamRoutes.get(pathname); }
+  wsHandler(pathname: string): WsHandler | undefined { return this.wsRoutes.get(pathname); }
+
+  async dispose(): Promise<void> {
+    await Promise.all(this.disposers.map((dispose) => dispose()));
+  }
+}
+
+type Resolved = {
+  router: Router;
+  base: string;
+  /** 原始 pathname，用于静态文件查找。 */
+  pathname: string;
+  /** 去掉挂载前缀后的 pathname，用于路由匹配。 */
+  restPath: string;
+  /** 去掉挂载前缀后的 pathname + query，写回 req.url，路由无需感知挂载。 */
+  restUrl: string;
+  search: string;
+  reserved: boolean;
+};
+
+const requestRouters = new WeakMap<IncomingMessage, Router>();
+
+function normalizeBase(base: string): string {
+  if (base === '') return '';
+  if (!base.startsWith('/')) throw new Error(`mount base must start with /: ${base}`);
+  const trimmed = base.replace(/\/+$/, '');
+  return trimmed === '' || trimmed === '/' ? '' : trimmed;
+}
+
+/** `/-/` 是挂载命名空间；未注册的 `/-/...` 不能回落到普通文件路径。 */
+function reservedRest(restPath: string): boolean {
+  return restPath === '/-/' || restPath.startsWith('/-/');
+}
+
+function injectBase(html: string, base: string): string {
+  // 根路径不注入：前端默认 base 为空，保持既有静态响应完全不变。
+  if (!base || html.includes('__ANTHER_BASE__') || !html.includes('</head>')) return html;
+  const tag = `<script>window.__ANTHER_BASE__=${JSON.stringify(base)};</script>`;
+  return html.replace('</head>', `${tag}</head>`);
+}
+
+export class HttpServer extends Router {
+  private wss = new WebSocketServer({ noServer: true });
+  private server = createServer((req, res) => void this.handle(req, res));
+  private staticDir: string;
+  private mounts = new Map<string, Router>();
+  private bases: string[] = [];
+
+  constructor(opts: { staticDir: string }) {
+    super();
+    this.staticDir = opts.staticDir;
+    this.mount('', this);
+
+    // async 守卫：handler 是 void|Promise<void>，.catch 无法直接挂（void 无 .catch）；
+    // 用 async 回调 + try/catch，与 SSE 路径（await + catch 写错误）同款。
+    this.wss.on('connection', async (ws, req) => {
+      const router = requestRouters.get(req) ?? this;
+      const url = new URL(req.url ?? '/', 'http://localhost');
+      const h = router.wsHandler(url.pathname);
+      try {
+        if (h) await h(ws, req, url.searchParams);
+        else ws.close();
+      } catch (e) {
+        console.error(`ws handler ${url.pathname}:`, e);
+        ws.close();
+      }
+    });
+
+    this.server.on('upgrade', (req, socket, head) => {
+      const resolved = this.resolve(req.url ?? '/');
+      if (resolved.reserved || !resolved.router.wsHandler(resolved.restPath)) {
+        socket.destroy();
+        return;
+      }
+      requestRouters.set(req, resolved.router);
+      req.url = resolved.restUrl;
+      this.wss.handleUpgrade(req, socket, head, (ws) => this.wss.emit('connection', ws, req));
+    });
+  }
+
+  /** 把一个 Router 挂到一个或多个 URL 前缀；'' 表示宿主根路径。 */
+  mount(bases: string | string[], router: Router) {
+    for (const raw of Array.isArray(bases) ? bases : [bases]) {
+      const base = normalizeBase(raw);
+      if (this.mounts.has(base)) throw new Error(`mount already exists: ${base || '/'}`);
+      this.mounts.set(base, router);
+    }
+    this.bases = [...this.mounts.keys()].filter(Boolean).sort((a, b) => b.length - a.length);
+  }
+
+  async listen(port: number, host: string) {
+    return new Promise<void>((resolve, reject) => {
+      const onError = (e: Error) => {
+        this.server.off('listening', onListening);
+        reject(e);
+      };
+      const onListening = () => {
+        this.server.off('error', onError);
+        resolve();
+      };
+      this.server.once('error', onError);
+      this.server.once('listening', onListening);
+      this.server.listen(port, host);
+    });
+  }
 
   async close() {
     for (const c of this.wss.clients) c.close();
     this.wss.close();
-    await new Promise<void>((resolve, reject) =>
-      this.server.close((e) => (e ? reject(e) : resolve())),
-    );
-    await Promise.all(this.disposers.map((dispose) => dispose()));
+    if (this.server.listening) {
+      await new Promise<void>((resolve, reject) =>
+        this.server.close((e) => (e ? reject(e) : resolve())),
+      );
+    }
+    const routers = new Set<Router>([this, ...this.mounts.values()]);
+    await Promise.all([...routers].map((router) => router.dispose()));
   }
+
   address() { return this.server.address(); }
+
+  private resolve(rawUrl: string): Resolved {
+    const url = new URL(rawUrl, 'http://localhost');
+    const pathname = url.pathname;
+    const search = url.search;
+
+    let matched = '';
+    for (const base of this.bases) {
+      if (pathname === base || pathname.startsWith(`${base}/`)) {
+        matched = base;
+        break;
+      }
+    }
+
+    if (matched) {
+      const restPath = pathname.slice(matched.length) || '/';
+      return {
+        router: this.mounts.get(matched)!,
+        base: matched,
+        pathname,
+        restPath,
+        restUrl: restPath + search,
+        search,
+        reserved: reservedRest(restPath),
+      };
+    }
+
+    // `/-` 和 `/-/` 是实例列表页；其余未注册的 `/-/...` 仍是保留命名空间。
+    if (pathname !== '/-/' && reservedRest(pathname)) {
+      return { router: this, base: '', pathname, restPath: pathname, restUrl: rawUrl, search, reserved: true };
+    }
+
+    return { router: this, base: '', pathname, restPath: pathname, restUrl: rawUrl, search, reserved: false };
+  }
 
   private async handle(req: IncomingMessage, res: ServerResponse) {
     try {
-      const url = new URL(req.url ?? '/', 'http://localhost');
-      // HEAD 与 GET 同走静态服务（curl -I、链接预览工具会发 HEAD；无 body 响应）
-      if ((req.method === 'GET' || req.method === 'HEAD') && !url.pathname.startsWith('/api/')) {
-        await this.serveStatic(url.pathname, res, req.method === 'HEAD');
-        return;
-      }
+      const resolved = this.resolve(req.url ?? '/');
+      if (resolved.reserved) throw new HttpError(404, 'not found');
+
+      req.url = resolved.restUrl;
+      const { router, restPath } = resolved;
+      const query = new URL(resolved.restUrl, 'http://localhost').searchParams;
+
       if (req.method === 'GET' || req.method === 'HEAD') {
-        const streamHandler = this.streamRoutes.get(url.pathname);
+        const streamHandler = router.streamHandler(restPath);
         if (streamHandler) {
-          await streamHandler(req, res, url.searchParams);
+          await streamHandler(req, res, query);
           return;
         }
       }
+
       // SSE 路由：handler 直接拿 res 写流；错误也写在流里。
       if (req.method === 'GET') {
-        const sseHandler = this.sseRoutes.get(url.pathname);
+        const sseHandler = router.sseHandler(restPath);
         if (sseHandler) {
           res.writeHead(200, {
             'Content-Type': 'text/event-stream',
@@ -131,7 +255,7 @@ export class HttpServer {
             Connection: 'keep-alive',
           });
           try {
-            await sseHandler(req, res, url.searchParams);
+            await sseHandler(req, res, query);
           } catch (e) {
             if (!res.writableEnded) {
               const msg = e instanceof HttpError ? e.message : 'internal error';
@@ -142,11 +266,21 @@ export class HttpServer {
           return;
         }
       }
-      const handler = this.routes.get(req.method ?? '')?.get(url.pathname);
-      if (!handler) throw new HttpError(404, 'not found');
-      const binary = req.method === 'POST' && this.binaryPosts.has(url.pathname);
+
+      const handler = router.handler(req.method ?? '', restPath);
+      if (!handler) {
+        // 未知 API 永远返回 JSON 404，不能落到 SPA fallback。
+        if (restPath.startsWith('/api/')) throw new HttpError(404, 'not found');
+        if (req.method === 'GET' || req.method === 'HEAD') {
+          await this.serveStatic(resolved.pathname, res, req.method === 'HEAD', resolved.base);
+          return;
+        }
+        throw new HttpError(404, 'not found');
+      }
+
+      const binary = req.method === 'POST' && router.isBinaryPost(restPath);
       const body = await readBody(req, binary);
-      const result = await handler(req, body, url.searchParams);
+      const result = await handler(req, body, query);
       res.json(result ?? { ok: true });
     } catch (e: unknown) {
       // 已开始的下载失败或被取消时终止流，不能再追加 JSON 响应。
@@ -161,7 +295,7 @@ export class HttpServer {
   }
 
   /** 静态资源 + SPA fallback：存在则返回文件，否则返回 index.html；headOnly 时只发头不发 body */
-  private async serveStatic(urlPath: string, res: ServerResponse, headOnly = false) {
+  private async serveStatic(urlPath: string, res: ServerResponse, headOnly = false, base = '') {
     let rel: string;
     try {
       rel = urlPath === '/' ? 'index.html' : decodeURIComponent(urlPath.slice(1));
@@ -186,6 +320,7 @@ export class HttpServer {
       content = await readFile(path.join(this.staticDir, 'index.html'));
       ext = '.html';
     }
+    if (ext === '.html') content = Buffer.from(injectBase(content.toString('utf8'), base));
     res.writeHead(200, {
       'Content-Type': MIME[ext] ?? 'application/octet-stream',
       'Content-Length': content.length,

@@ -7,6 +7,7 @@ import type { ReadingLocation } from './readers/location.ts';
 import { batch, createSignal, createMemo } from 'solid-js';
 import { DEFAULT_STATE, DEFAULT_EXCLUDE, parseUrl, serializeUrl, type UrlState, type Panel, type LineRange } from './url-state.ts';
 import { api, loadTabsSnapshot, saveTabsSnapshot, type TerminalInfo } from './api.ts';
+import { basePath } from './base.ts';
 import type { EditorHandle } from './editor/index.ts';
 import {
   addFileTab, removeTabById, fileTabPaths, currentFilePath, nextActiveTabId,
@@ -99,7 +100,7 @@ export function pushState(mode: 'push' | 'replace' = 'push'): void {
   // Native hash navigation changes location before hashchange is delivered.
   // A queued scroll/selection notification must not replace that destination.
   if (mode === 'replace' && lastNavigationHref && window.location.href !== lastNavigationHref) {
-    restoreUrl(parseUrl(window.location.href));
+    restoreUrl(parseUrl(window.location.href, basePath()));
     return;
   }
   const state: UrlState = {
@@ -126,7 +127,7 @@ export function pushState(mode: 'push' | 'replace' = 'push'): void {
   else if (tab?.kind === 'git-commit') { state.view = 'commit'; state.commit = tab.commit; }
   else if (!tab) state.term = pendingTerminal();
   saveDatabaseTabs();
-  const url = serializeUrl(state);
+  const url = serializeUrl(state, basePath());
   if (window.location.pathname + window.location.search + window.location.hash !== url) {
     if (mode === 'replace') window.history.replaceState(null, '', url);
     else window.history.pushState(null, '', url);
@@ -170,7 +171,7 @@ async function registerFile(path: string): Promise<void> {
 /** 初始加载、直接链接、前进/后退共用；先补齐本地标签再激活，网络响应不改变导航目标。 */
 export function restoreUrl(state: UrlState, syncServer = true): void {
   // 解析会丢弃不属于当前视图的参数；同步修正地址，避免刷新后 URL 与页面不一致。
-  const url = serializeUrl(state);
+  const url = serializeUrl(state, basePath());
   if (window.location.pathname + window.location.search + window.location.hash !== url) {
     window.history.replaceState(null, '', url);
   }
@@ -234,12 +235,12 @@ export async function startSync(): Promise<void> {
   started = true;
 
   restoreDatabaseTabs();
-  const s = parseUrl(window.location.href);
+  const s = parseUrl(window.location.href, basePath());
   restoreUrl(s, false);
 
   // 浏览器前进/后退：popstate → 重解析 URL → 覆盖状态（term 按当前终端标签校验存在性）
   const restoreLocation = () => {
-    if (window.location.href !== lastNavigationHref) restoreUrl(parseUrl(window.location.href));
+    if (window.location.href !== lastNavigationHref) restoreUrl(parseUrl(window.location.href, basePath()));
   };
   window.addEventListener('popstate', restoreLocation);
   window.addEventListener('hashchange', restoreLocation);
@@ -272,7 +273,7 @@ export async function startSync(): Promise<void> {
 
   // 前台：term 指向的终端还在 → 设为前台；不存在（他人/失效/服务器重启）→ 静默降级（空态）
   // 列表加载期间也可能发生 popstate；只解析此刻的 URL，不重新激活启动时的旧目标。
-  const term = parseUrl(window.location.href).term;
+  const term = parseUrl(window.location.href, basePath()).term;
   if (term && terminalExists(tabs(), term)) setCurrentTabId(term);
   setPendingTerminal(null);
   if (currentFile()) void registerFile(currentFile()!).catch(() => {});
@@ -461,13 +462,16 @@ export async function createBranch(name: string): Promise<void> {
 }
 
 
-const DATABASE_TABS_KEY = 'anther:databaseTabs';
+function databaseTabsKey(): string {
+  const base = basePath();
+  return base ? `anther:databaseTabs:${base}` : 'anther:databaseTabs';
+}
 function saveDatabaseTabs() {
-  try { localStorage.setItem(DATABASE_TABS_KEY, JSON.stringify(tabs().filter((tab) => tab.kind === 'database'))); } catch { /* Private mode or storage full. */ }
+  try { localStorage.setItem(databaseTabsKey(), JSON.stringify(tabs().filter((tab) => tab.kind === 'database'))); } catch { /* Private mode or storage full. */ }
 }
 function restoreDatabaseTabs() {
   try {
-    const saved = JSON.parse(localStorage.getItem(DATABASE_TABS_KEY) ?? '[]');
+    const saved = JSON.parse(localStorage.getItem(databaseTabsKey()) ?? '[]');
     if (!Array.isArray(saved)) return;
     for (const value of saved.slice(0, 100)) {
       if (!value || typeof value.path !== 'string' || !value.path || !['data', 'structure'].includes(value.mode)) continue;
@@ -517,8 +521,8 @@ export async function relocateFileTabs(from: string, to?: string) {
   const move = (path: string) => to! + path.slice(from.length);
   const moveKey = (key: string): string | null => {
     if (pathWithin(key, from)) return to ? move(key) : null;
-    if (key.startsWith('/-/entry/')) {
-      const [path, chain, entry] = JSON.parse(key.slice('/-/entry/'.length));
+    if (key.startsWith('/_/entry/')) {
+      const [path, chain, entry] = JSON.parse(key.slice('/_/entry/'.length));
       if (pathWithin(path, from)) return to ? fileTargetKey({ path: move(path), archive: { chain, entry } }) : null;
     }
     return key;

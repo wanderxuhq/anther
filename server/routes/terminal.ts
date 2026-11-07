@@ -3,7 +3,7 @@
 // 自定义 header → 用 ?user= 查询参数（与 x-user-id 同值）。
 // 关闭用 POST /api/terminals/close + body {id}（HttpServer 精确路径匹配无路径
 // 参数，与既有 PUT /api/tabs/close {path} 同风格）。
-import type { HttpServer } from '../http.ts';
+import type { Router } from '../http.ts';
 import { HttpError } from '../http-error.ts';
 import type { TerminalManager, TerminalScreenMessage } from '../terminal.ts';
 import type { FileStore } from '../files.ts';
@@ -26,7 +26,7 @@ const isRgb = (value: unknown): value is RGB => {
 const isPositive = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value > 0;
 
-export function registerTerminalRoutes(http: HttpServer, terminals: TerminalManager, files?: FileStore): void {
+export function registerTerminalRoutes(http: Router, terminals: TerminalManager, files?: FileStore): void {
   // 终端输出里的路径 → 工作区文件/目录。cwd 来自 OSC 7（shell 当前目录）。
   http.get('/api/terminal/resolve', async (req) => {
     if (!files) throw new HttpError(404, 'not found');

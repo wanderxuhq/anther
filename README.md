@@ -20,6 +20,24 @@ anther /path/to/project
 
 Open `http://localhost:3000` by default. The startup log also shows a LAN address.
 
+If the port is already served by anther, running `anther` in another directory attaches that directory to the existing server instead of failing. Use `--no-attach` to force a normal port-conflict error. `npm run dev` runs with `--no-attach` because development mode is not supported for mounts.
+
+## Multiple workspaces
+
+The first instance owns the port and keeps its legacy URLs:
+
+- `/path/to/file` is the host workspace.
+- `/-/<name>/...` and `/-/<name>/-/0/...` are the host's mount aliases.
+
+Starting anther in another directory on the same port attaches it:
+
+- first workspace named `qlang`: `/-/qlang/...` and `/-/qlang/-/0/...`
+- second workspace named `qlang`: `/-/qlang/-/1/...`
+
+Shorthands only point to index 0. Indexes are kept in memory and reset when the host exits. Starting in a directory that is already mounted reuses the existing URL and does not create another mount. Attaching uses a loopback-only HTTP request to the existing server; LAN clients cannot call it. Attached workspaces share the host process and its frontend build.
+
+`/-` (also `/-/`) lists the host and every attached workspace. Each entry links to the shortest URL: `/` for the host, `/-/<name>/` for index 0, and `/-/<name>/-/<index>/` otherwise. The instances button at the bottom of the sidebar opens this page.
+
 ## Usage
 
 - Files open read-only. Click the pencil icon in the toolbar to edit.
@@ -43,11 +61,24 @@ Open `http://localhost:3000` by default. The startup log also shows a LAN addres
   "apiVersion": 1,
   "workspace": "/path/to/workspace",
   "instanceId": "0f9c…",
-  "startedAt": 1760000000000
+  "startedAt": 1760000000000,
+  "attach": { "available": true },
+  "mounts": [
+    {
+      "name": "anther",
+      "index": 0,
+      "workspace": "/path/to/workspace",
+      "base": "/-/anther/-/0",
+      "shorthand": "/-/anther",
+      "legacyRoot": true
+    }
+  ]
 }
 ```
 
-It returns identity and instance context only, not host or hardware details. A launcher can use `name`/`apiVersion` to recognize anther, and `workspace` to check whether a port that is already in use belongs to the same workspace before reusing that instance.
+It returns identity and instance context only, not host or hardware details. A launcher can use `name`/`apiVersion` to recognize anther, and `workspace` to check whether a port that is already in use belongs to the same workspace before reusing that instance. `mounts` lists the host and every attached workspace; `attach.available` reports whether `--no-attach` left attaching disabled.
+
+This endpoint is read-only. Attaching is a loopback-only `POST /api/anther/attach` with `{ "workspace": "/absolute/path" }`; LAN clients cannot call it because the server checks the socket's remote address. `--no-attach` disables the route's effect.
 
 ## File previews
 
@@ -96,14 +127,15 @@ All file positions and preview states use `#field:value;field:value`. Field orde
 | Media time / speed | `/movie.mp4#time:90.5;rate:1.5` |
 | CSV/TSV position / details | `/data.csv#at:30;across:4;row:35;expanded:1`, `/data.csv#row:20;column:3` |
 | Edit mode, theme, font size | `/src/main.ts?ro=0&theme=dark&fs=110` |
-| Git changes / branches | `/-/git`, `/-/git/branches` |
-| File diff | `/-/git/diff/src/main.ts` |
-| History / commit | `/-/git/history?branch=main`, `/-/git/commit/abc1234` |
+| Git changes / branches | `/_/git`, `/_/git/branches` |
+| File diff | `/_/git/diff/src/main.ts` |
+| History / commit | `/_/git/history?branch=main`, `/_/git/commit/abc1234` |
 | Sidebar / search | `/?panel=tabs`, `/?panel=search&q=TODO&case=1&exclude=dist` |
+| Instances list | `/-` |
 | Archive entry / nested archive | `/books.zip?entry=readme.md`, `/books.zip?inside=inner.zip&entry=readme.md` |
-| Archive database | `/-/database/data.zip?inside=inner.zip&entry=app.db&object=users` |
-| Database table / structure | `/-/database/app.db?object=users`, `/-/database/app.db?object=users&mode=structure` |
-| Database filter / sort / page | `/-/database/app.db?object=users&filter=name&value=Alice&sort=id&order=desc#offset:100` |
+| Archive database | `/_/database/data.zip?inside=inner.zip&entry=app.db&object=users` |
+| Database table / structure | `/_/database/app.db?object=users`, `/_/database/app.db?object=users&mode=structure` |
+| Database filter / sort / page | `/_/database/app.db?object=users&filter=name&value=Alice&sort=id&order=desc#offset:100` |
 | Terminal | `/?term=t_…` |
 | Language | `?lang=zh`, `?lang=en` |
 
@@ -111,7 +143,7 @@ Parameters can be combined. Defaults are read-only mode, system theme, browser l
 
 Reading updates replace the current URL without adding history entries for continuous scrolling. Positions survive refresh, sharing and Back/Forward, including documents inside archives. EPUB reuses [Leaf Reader](https://github.com/wanderxuhq/leaf-reader)'s LBP coordinates: `spineIndex@elementPath#UTF-16Offset`, with zero-based indices; the URL path and archive parameters identify the book. Text coordinates survive changes in viewport width; edited content may fall back to an ancestor element or chapter start. `zoom` is a reader percentage; omitting it fits PDF to width and uses 100% for EPUB. Markdown records the current heading, without persisting the source/rendered toggle.
 
-Git uses the `/-/git` route. File paths starting with `-/` use the `/-/file/` prefix, for example `/-/file/-/git/history`.
+Git uses the `/_/git` route. `/-/` is reserved for workspace mounts, and `/_/` is reserved for internal views. File paths starting with `-/` or `_/` use the `/_/file/` prefix, for example `/_/file/-/git/history`. For a mounted workspace, prefix the same paths with its base, for example `/-/qlang/src/main.ts`, `/-/qlang/_/git`, and `/-/qlang/api/list?path=.`.
 
 Image `x/y` specify the center as fractions of the original dimensions (0–1); omitting `zoom` fits the window. Media `time` is in seconds; restoration leaves playback paused. Table `at/across` identify the first visible row/column, and `row/column` identify inspected data, all one-based; `expanded:1` expands row details. SQLite uses the same table parameters, plus a result `offset` and an optional `cursor` for sequential paging. These states and text `line` selections also work inside archives.
 

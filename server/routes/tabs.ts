@@ -1,9 +1,9 @@
 // server/routes/tabs.ts
-import type { HttpServer, Handler } from '../http.ts';
+import type { Router, Handler } from '../http.ts';
 import { HttpError } from '../http-error.ts';
 import type { TabStore } from '../tab-store.ts';
 
-export function registerTabsRoutes(http: HttpServer, tabs: TabStore): void {
+export function registerTabsRoutes(http: Router, tabs: TabStore): void {
   const userId = (req: import('node:http').IncomingMessage): string => {
     const h = req.headers['x-user-id'];
     return typeof h === 'string' ? h : 'anon';

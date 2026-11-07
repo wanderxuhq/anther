@@ -1,5 +1,5 @@
 // server/routes/git.ts
-import type { HttpServer } from '../http.ts';
+import type { Router } from '../http.ts';
 import { HttpError } from '../http-error.ts';
 import type { Git } from '../git.ts';
 
@@ -17,7 +17,7 @@ function requirePaths(body: unknown): string[] {
   return paths;
 }
 
-export function registerGitRoutes(http: HttpServer, git: Git): void {
+export function registerGitRoutes(http: Router, git: Git): void {
   http.get('/api/git/status', async () => git.status());
 
   http.get('/api/git/diff', async (_req, _body, query) => {

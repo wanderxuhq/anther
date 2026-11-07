@@ -3,6 +3,7 @@
 // JS 字符串索引天然 = UTF-16 码元 → LSP position 直接映射，无需逐字符换算。
 import type { Completion } from '@codemirror/autocomplete';
 import type { Diagnostic as CmDiagnostic } from '@codemirror/lint';
+import { withBase } from '../base.ts';
 
 export type Position = { line: number; character: number };
 export type LspDiagnostic = {
@@ -114,7 +115,7 @@ export function connectLsp(handlers: LspHandlers): LspSocket {
 
   const open = () => {
     if (disposed) return;
-    ws = new WebSocket(`/api/lsp`);
+    ws = new WebSocket(withBase('/api/lsp'));
     ws.onopen = () => { attempt = 0; handlers.onOpen(); };
     ws.onmessage = (e) => {
       let msg: Record<string, unknown>;

@@ -17,6 +17,17 @@ test('解析目录、端口', () => {
   const a = parseArgs(['/tmp/foo', '--port', '8080']);
   assert.equal(a.dir, '/tmp/foo');
   assert.equal(a.port, 8080);
+  assert.equal(a.attach, true);
+});
+
+test('--no-attach 关闭附加，--attach 恢复默认', () => {
+  assert.equal(parseArgs(['--no-attach']).attach, false);
+  assert.equal(parseArgs(['--attach', '--no-attach']).attach, false);
+  assert.equal(parseArgs(['--no-attach', '--attach']).attach, true);
+});
+
+test('未知选项报错', () => {
+  assert.throws(() => parseArgs(['--unknown']), /unknown option/);
 });
 
 test('非法端口报错', () => {

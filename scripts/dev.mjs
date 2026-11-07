@@ -7,6 +7,9 @@
 import { spawn } from 'node:child_process';
 
 const backendArgs = process.argv.slice(2);
+// 开发模式由 Vite 提供前端，不保证挂载 base；显式关闭附加，避免第二个 dev 实例
+// 的后端挂上去了但前端 5173 仍然冲突。生产 CLI 默认开启。
+if (!backendArgs.includes('--no-attach')) backendArgs.push('--no-attach');
 const frontendArgs = ['node_modules/vite/bin/vite.js', '--config', 'web/vite.config.ts'];
 
 const children = [];

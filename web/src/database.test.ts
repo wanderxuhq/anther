@@ -29,7 +29,7 @@ test('database URLs round-trip arbitrary names, modes and sort without colliding
   }
   const ordinary = { ...DEFAULT_STATE, path: '-/database/a.db' };
   assert.deepEqual(parseUrl('http://localhost' + serializeUrl(ordinary)), ordinary);
-  assert.equal(parseUrl('http://localhost/-/database/a.db?term=t_1&object=users').database, null);
+  assert.equal(parseUrl('http://localhost/_/database/a.db?term=t_1&object=users').database, null);
   assert.equal(parseUrl('http://localhost/a.txt?object=users').database, null);
 });
 

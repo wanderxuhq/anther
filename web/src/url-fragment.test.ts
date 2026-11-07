@@ -21,7 +21,7 @@ test('fragment order is irrelevant, the last duplicate wins, malformed fields ar
 test('position fields only use fragments; query remains resource/configuration state', () => {
   assert.equal(serializeUrl(parseUrl('http://host/a.txt?line=9#line:3')), '/a.txt#line:3');
   assert.equal(serializeUrl(parseUrl('http://host/movie.mp4?t=9&rate=2')), '/movie.mp4');
-  const value = parseUrl('http://host/-/database/a.zip?entry=data.db&object=users&filter=name&value=A%3BB#offset:100;row:103;expanded:1');
+  const value = parseUrl('http://host/_/database/a.zip?entry=data.db&object=users&filter=name&value=A%3BB#offset:100;row:103;expanded:1');
   assert.equal(value.database?.filter?.value, 'A;B');
   assert.equal(value.database?.offset, 100);
   assert.equal(value.database?.table?.row, 103);

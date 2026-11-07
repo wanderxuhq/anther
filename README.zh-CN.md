@@ -20,6 +20,24 @@ anther /path/to/project
 
 默认访问 `http://localhost:3000`，启动日志也会显示局域网地址。
 
+如果端口已经由 anther 提供服务，在另一个目录运行 `anther` 会附加到现有服务器，而不是报端口冲突。用 `--no-attach` 可强制按普通端口冲突报错。`npm run dev` 会带 `--no-attach`，开发模式不支持挂载。
+
+## 多工作区
+
+第一个实例占用端口，并保留原来的地址：
+
+- `/path/to/file` 是宿主工作区。
+- `/-/<name>/...` 和 `/-/<name>/-/0/...` 是宿主的挂载别名。
+
+在同一端口的另一个目录启动 anther 会附加：
+
+- 第一个名为 `qlang` 的工作区：`/-/qlang/...` 和 `/-/qlang/-/0/...`
+- 第二个名为 `qlang` 的工作区：`/-/qlang/-/1/...`
+
+简写只指向 index 0。索引保存在内存中，宿主退出后重置。在已经挂载的目录再次启动会复用已有地址，不会新建挂载。附加使用对现有服务器的 loopback-only HTTP 请求，局域网客户端无法调用。附加的工作区共享宿主进程和前端构建。
+
+`/-`（以及 `/-/`）列出宿主和所有已附加工作区；每一项链接到最短地址：宿主 `/`，index 0 为 `/-/<name>/`，其余为 `/-/<name>/-/<index>/`。侧边栏最下面的实例按钮会打开这个页面。
+
 ## 使用
 
 - 默认只读，点击工具栏的铅笔图标切换编辑模式。
@@ -43,11 +61,24 @@ anther /path/to/project
   "apiVersion": 1,
   "workspace": "/path/to/workspace",
   "instanceId": "0f9c…",
-  "startedAt": 1760000000000
+  "startedAt": 1760000000000,
+  "attach": { "available": true },
+  "mounts": [
+    {
+      "name": "anther",
+      "index": 0,
+      "workspace": "/path/to/workspace",
+      "base": "/-/anther/-/0",
+      "shorthand": "/-/anther",
+      "legacyRoot": true
+    }
+  ]
 }
 ```
 
-只返回身份与实例上下文，不包含主机名、硬件等系统细节。启动器可用 `name`/`apiVersion` 确认对面是 anther，再用 `workspace` 判断占用端口的实例是否服务同一目录，决定能否直接复用。
+只返回身份与实例上下文，不包含主机名、硬件等系统细节。启动器可用 `name`/`apiVersion` 确认对面是 anther，再用 `workspace` 判断占用端口的实例是否服务同一目录，决定能否直接复用。`mounts` 列出宿主和所有已附加工作区；`attach.available` 表示 `--no-attach` 是否关闭了附加。
+
+这个接口是只读的。附加是一个 loopback-only 的 `POST /api/anther/attach`，请求体为 `{ "workspace": "/absolute/path" }`；服务端检查 socket 来源地址，局域网客户端无法调用。`--no-attach` 会禁用附加。
 
 ## 文件预览
 
@@ -96,14 +127,15 @@ SQLite 预览使用官方 SQLite WASM 在浏览器 Worker 中计算，服务端�
 | 音视频时间 / 倍速 | `/movie.mp4#time:90.5;rate:1.5` |
 | CSV/TSV 位置 / 详情 | `/data.csv#at:30;across:4;row:35;expanded:1`、`/data.csv#row:20;column:3` |
 | 编辑模式、主题、字号 | `/src/main.ts?ro=0&theme=dark&fs=110` |
-| Git 改动 / 分支 | `/-/git`、`/-/git/branches` |
-| 文件 diff | `/-/git/diff/src/main.ts` |
-| 提交历史 / 某次提交 | `/-/git/history?branch=main`、`/-/git/commit/abc1234` |
+| Git 改动 / 分支 | `/_/git`、`/_/git/branches` |
+| 文件 diff | `/_/git/diff/src/main.ts` |
+| 提交历史 / 某次提交 | `/_/git/history?branch=main`、`/_/git/commit/abc1234` |
 | 侧栏 / 搜索 | `/?panel=tabs`、`/?panel=search&q=TODO&case=1&exclude=dist` |
+| 实例列表 | `/-` |
 | 压缩包内文件 / 嵌套压缩包 | `/books.zip?entry=readme.md`、`/books.zip?inside=inner.zip&entry=readme.md` |
-| 包内数据库 | `/-/database/data.zip?inside=inner.zip&entry=app.db&object=users` |
-| 数据库表 / 结构 | `/-/database/app.db?object=users`、`/-/database/app.db?object=users&mode=structure` |
-| 数据库筛选 / 排序 / 分页 | `/-/database/app.db?object=users&filter=name&value=Alice&sort=id&order=desc#offset:100` |
+| 包内数据库 | `/_/database/data.zip?inside=inner.zip&entry=app.db&object=users` |
+| 数据库表 / 结构 | `/_/database/app.db?object=users`、`/_/database/app.db?object=users&mode=structure` |
+| 数据库筛选 / 排序 / 分页 | `/_/database/app.db?object=users&filter=name&value=Alice&sort=id&order=desc#offset:100` |
 | 终端 | `/?term=t_…` |
 | 界面语言 | `?lang=zh`、`?lang=en` |
 
@@ -111,7 +143,7 @@ SQLite 预览使用官方 SQLite WASM 在浏览器 Worker 中计算，服务端�
 
 阅读位置随滚动更新当前地址，不为连续滚动新增历史记录；支持刷新、分享与前进/后退，也适用于压缩包内文档。EPUB 复用 [Leaf Reader](https://github.com/wanderxuhq/leaf-reader) 的 LBP 定位：`章节索引@正文元素路径#UTF-16 字符偏移`，索引从 0 开始；文件身份由 URL 路径和压缩包参数提供。位置不依赖屏幕像素，改变宽度后仍定位到对应文字；正文修改后可能回退到上级元素或章节开头。`zoom` 是阅读器缩放百分比，省略时 PDF 适应宽度、EPUB 为 100%。Markdown 保存当前标题，不保存源码/渲染切换状态。
 
-Git 使用 `/-/git` 路由；路径以 `-/` 开头的文件使用 `/-/file/` 前缀，例如 `/-/file/-/git/history`。
+Git 使用 `/_/git` 路由；`/-/` 保留给工作区挂载，`/_/` 保留给内部视图。路径以 `-/` 或 `_/` 开头的文件使用 `/_/file/` 前缀，例如 `/_/file/-/git/history`。挂载工作区的地址在前面加上对应 base，例如 `/-/qlang/src/main.ts`、`/-/qlang/_/git`、`/-/qlang/api/list?path=.`。
 
 图片的 `x/y` 为原图中心点比例（0–1），省略 `zoom` 时适应窗口。音视频的 `time` 以秒计，恢复位置后保持暂停。表格的 `at/across` 是可视区域起始行列，`row/column` 指定详情，均从 1 开始；`expanded:1` 展开整行详情。SQLite 也使用这些表格参数，`offset` 为查询结果偏移，顺序分页时可附带 `cursor`。这些状态及文本的 `line` 参数同样支持压缩包内文件。
 

@@ -25,6 +25,7 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 }
 .icon-btn.active { background: var(--accent); color: white; }
 .icon-btn:disabled { opacity: .4; }
+a.icon-btn { color: inherit; text-decoration: none; }
 
 .editor-area { min-width: 0; min-height: 0; overflow: hidden; grid-column: 1; grid-row: 2; position: relative; }
 
@@ -243,8 +244,11 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   /* 触控区 ≥ 40px（spec §7.4，核查补充）：view-tab 也是抽屉内主要点击目标 */
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 40px; min-height: 40px;
+  color: inherit; text-decoration: none;
 }
 .drawer-views .view-tab.active { background: var(--accent); }
+/* 信息/实例入口固定在侧边栏最下面 */
+.drawer-view-footer { margin-top: auto; display: flex; flex-direction: column; gap: 4px; }
 .drawer-content { flex: 1; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; padding: 8px; }
 
 .view-placeholder { color: var(--muted); padding: 12px; font-size: 13px; }
@@ -400,6 +404,53 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 .system-info-address { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .system-info-address-meta { color: var(--muted); font-size: 11px; }
 .system-info-card .dialog-actions { flex: 0 0 auto; }
+
+/* 实例列表（侧边栏底部入口 / `/-` 页面）：点击切换到最短地址 */
+.instances-status { color: var(--muted); font-size: 13px; }
+.instances-list {
+  display: flex; flex-direction: column; gap: 6px;
+  flex: 1; min-height: 0; overflow-y: auto;
+}
+.instance-row {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px;
+  background: none; color: inherit; text-align: left; cursor: pointer;
+  text-decoration: none;
+}
+.instance-row:hover { background: var(--row-hover); }
+.instance-row.current { border-color: var(--accent); }
+.instance-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.instance-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.instance-name { font-weight: 600; font-size: 14px; }
+.instance-badge {
+  font-size: 10px; line-height: 1.5; letter-spacing: .04em;
+  color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px;
+}
+.instance-badge.current { color: var(--accent); border-color: var(--accent); }
+.instance-workspace, .instance-url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px; overflow-wrap: anywhere;
+}
+.instance-workspace { color: var(--muted); }
+.instance-url { color: var(--accent); }
+
+/* `/-` 独立实例列表页 */
+.instances-page {
+  min-height: 100dvh; padding: 24px;
+  display: flex; align-items: flex-start; justify-content: center;
+  background: var(--bg);
+}
+.instances-page-card {
+  width: min(640px, 100%); max-height: calc(100dvh - 48px);
+  padding: 16px; border: 1px solid var(--border); border-radius: 8px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.instances-page-head { display: flex; align-items: center; gap: 4px; }
+.instances-page-title { flex: 1; margin: 0; font-size: 18px; }
+@media (max-width: 599px) {
+  .instances-page { padding: 12px; }
+  .instances-page-card { max-height: calc(100dvh - 24px); }
+}
 
 /* ---- 全局搜索（Task 17） ---- */
 .search-view { font-size: 13px; display: flex; flex-direction: column; gap: 8px; }

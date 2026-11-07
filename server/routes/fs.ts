@@ -1,5 +1,5 @@
 // server/routes/fs.ts
-import type { HttpServer, Handler } from '../http.ts';
+import type { Router, Handler } from '../http.ts';
 import type { FileStore } from '../files.ts';
 import { HttpError } from '../http-error.ts';
 import { sendDownload } from '../download.ts';
@@ -7,7 +7,7 @@ import { sendImage } from '../images.ts';
 import { inspectFile, sendPreview } from '../preview.ts';
 import { ArchiveManager, type ArchiveOptions } from '../archives.ts';
 
-export function registerFsRoutes(http: HttpServer, files: FileStore, archiveOptions?: ArchiveOptions): ArchiveManager {
+export function registerFsRoutes(http: Router, files: FileStore, archiveOptions?: ArchiveOptions): ArchiveManager {
   const archives = new ArchiveManager(files, archiveOptions);
   http.onClose(() => archives.dispose());
 

@@ -65,6 +65,7 @@ before(async () => {
         import { fileTargetKey } from '${path.join(import.meta.dirname, 'file-target.ts')}';
         import * as downloads from '${path.join(import.meta.dirname, 'download.ts')}';
         import { registerReaderNavigation, cancelReaderNavigation } from '${path.join(import.meta.dirname, 'readers/navigation.ts')}';
+        import { InstancesPage } from '${path.join(import.meta.dirname, 'views/instances.tsx')}';
         import { DocumentReader } from '${path.join(import.meta.dirname, 'components/document-reader.tsx')}';
         import { ArchiveFeedback } from '${path.join(import.meta.dirname, 'components/archive-feedback.tsx')}';
         import { setArchiveSession } from '${path.join(import.meta.dirname, 'archive-sessions.ts')}';
@@ -86,6 +87,7 @@ before(async () => {
             const dispose = render(() => <DocumentReader url={url()} path="document" createReader={factory}/>, host);
             return { setUrl, dispose };
           },
+          mountInstances: () => render(() => <InstancesPage />, document.getElementById('root')),
         };
       ` : null }, solid()],
     build: { write: false, minify: false,
@@ -103,7 +105,7 @@ async function until(check: () => boolean) {
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 type Hook = (url: URL, init: RequestInit) => Promise<Response | undefined> | Response | undefined;
 
-async function setup(t: TestContext, url: string, opts: { hook?: Hook; mount?: boolean; narrow?: boolean; duringStart?: (stores: any, window: any) => Promise<void> } = {}) {
+async function setup(t: TestContext, url: string, opts: { hook?: Hook; mount?: boolean; narrow?: boolean; start?: boolean; duringStart?: (stores: any, window: any) => Promise<void> } = {}) {
   const dom = new JSDOM('<div id="root"></div>', {
     url: `http://localhost${url}`, runScripts: 'outside-only', pretendToBeVisual: true,
   });
@@ -153,7 +155,7 @@ async function setup(t: TestContext, url: string, opts: { hook?: Hook; mount?: b
   };
   w.eval(code);
   const s = w.harness.stores;
-  const started = s.startSync();
+  const started = opts.start === false ? Promise.resolve() : s.startSync();
   const dispose = opts.mount === false ? () => {} : w.harness.mount();
   t.after(() => { dispose(); dom.window.close(); });
   await opts.duringStart?.(s, w);
@@ -225,9 +227,9 @@ test('同文件后退到无行号 URL 时回到开头；Markdown 默认预览仍
 
 test('Git 主视图、diff、历史、分支管理和提交均可由 URL 独立恢复', async (t) => {
   for (const [url, kind] of [
-    ['/-/git', 'git'], ['/-/git/diff/a.txt', 'git-diff'],
-    ['/-/git/history?branch=feature%2Ftest', 'git-history'],
-    ['/-/git/branches', 'git-branch'], ['/-/git/commit/abc1234', 'git-commit'],
+    ['/_/git', 'git'], ['/_/git/diff/a.txt', 'git-diff'],
+    ['/_/git/history?branch=feature%2Ftest', 'git-history'],
+    ['/_/git/branches', 'git-branch'], ['/_/git/commit/abc1234', 'git-commit'],
   ]) {
     const { s, calls } = await setup(t, url);
     assert.equal(s.activeTab().kind, kind);
@@ -243,8 +245,8 @@ test('Git 主视图、diff、历史、分支管理和提交均可由 URL 独立�
 test('普通路径和保留路径中的真实文件可刷新、切换 Git 并后退恢复', async (t) => {
   for (const [url, path] of [
     ['/git', 'git'], ['/git/history', 'git/history'],
-    ['/-/file/-/git/history', '-/git/history'],
-    ['/-/file/-/file/a.txt', '-/file/a.txt'],
+    ['/_/file/-/git/history', '-/git/history'],
+    ['/_/file/-/file/a.txt', '-/file/a.txt'],
   ]) {
     const { w, s, history } = await setup(t, url, { hook: (u, init) => {
       if (u.pathname === '/api/file' && u.searchParams.get('path') === path && init.method !== 'PUT') {
@@ -256,7 +258,7 @@ test('普通路径和保留路径中的真实文件可刷新、切换 Git 并后
     assert.equal(s.currentFile(), path);
     s.openGit();
     assert.equal(s.activeTab().kind, 'git');
-    assert.equal(w.location.pathname, '/-/git');
+    assert.equal(w.location.pathname, '/_/git');
     await history('back');
     await until(() => s.docLoadedPath() === path);
     assert.equal(s.currentFile(), path);
@@ -270,52 +272,52 @@ test('普通路径和保留路径中的真实文件可刷新、切换 Git 并后
 });
 
 test('Git 导航与分支筛选形成历史，后退恢复筛选；文件 diff 保留路径', async (t) => {
-  const { w, s, history } = await setup(t, '/-/git/history?branch=feature%2Ftest&lang=en');
+  const { w, s, history } = await setup(t, '/_/git/history?branch=feature%2Ftest&lang=en');
   s.selectHistoryBranch('main');
   assert.match(w.location.search, /branch=main/);
   await history('back');
   assert.equal(s.historyBranch(), 'feature/test');
   assert.equal(w.document.querySelector('.history-select').value, 'feature/test');
   s.openGitCommit('abc1234');
-  assert.equal(w.location.pathname, '/-/git/commit/abc1234');
+  assert.equal(w.location.pathname, '/_/git/commit/abc1234');
   await history('back');
   assert.equal(s.activeTab().kind, 'git-history');
   s.openGitDiff('a.txt');
-  assert.equal(w.location.pathname, '/-/git/diff/a.txt');
+  assert.equal(w.location.pathname, '/_/git/diff/a.txt');
   s.openGitBranch();
-  assert.equal(w.location.pathname, '/-/git/branches');
+  assert.equal(w.location.pathname, '/_/git/branches');
 });
 
 test('Git URL 恢复时清理无关路径和参数；不新增历史且保留分支与侧栏状态', async (t) => {
   const { w, s, history } = await setup(t,
-    '/-/git/history/?view=diff&branch=feature%2Ftest&commit=abc1234&panel=tabs#line:3', { narrow: true });
-  assert.equal(w.location.pathname + w.location.search, '/-/git/history?branch=feature%2Ftest&panel=tabs');
+    '/_/git/history/?view=diff&branch=feature%2Ftest&commit=abc1234&panel=tabs#line:3', { narrow: true });
+  assert.equal(w.location.pathname + w.location.search, '/_/git/history?branch=feature%2Ftest&panel=tabs');
   assert.equal(w.history.length, 1);
   assert.equal(s.activeTab().kind, 'git-history');
   assert.equal(s.historyBranch(), 'feature/test');
   s.openGitCommit('abc1234');
-  assert.equal(w.location.pathname + w.location.search, '/-/git/commit/abc1234?panel=tabs');
+  assert.equal(w.location.pathname + w.location.search, '/_/git/commit/abc1234?panel=tabs');
   s.openGitDiff('目录/a #?%.ts');
-  assert.equal(decodeURIComponent(w.location.pathname), '/-/git/diff/目录/a #?%.ts');
+  assert.equal(decodeURIComponent(w.location.pathname), '/_/git/diff/目录/a #?%.ts');
   assert.equal(w.location.search, '?panel=tabs');
   await history('back');
   assert.equal(s.activeTab().commit, 'abc1234');
   await history('back');
   assert.equal(s.historyBranch(), 'feature/test');
-  assert.equal(w.location.pathname, '/-/git/history');
-  w.history.pushState(null, '', '/-/git/commit/invalid?branch=main#line:2');
+  assert.equal(w.location.pathname, '/_/git/history');
+  w.history.pushState(null, '', '/_/git/commit/invalid?branch=main#line:2');
   s.openGitBranch();
   const length = w.history.length;
   await history('back');
   assert.equal(s.activeTab().kind, 'git');
-  assert.equal(w.location.pathname + w.location.search, '/-/git');
+  assert.equal(w.location.pathname + w.location.search, '/_/git');
   assert.equal(w.history.length, length);
   await history('forward');
   assert.equal(s.activeTab().kind, 'git-branch');
 });
 
 test('刷新 history + panel=tabs 不弹出抽屉，手动展开仍选中 Tabs，后退也不弹出', async (t) => {
-  const { w, s, history } = await setup(t, '/-/git/history?panel=tabs', { narrow: true });
+  const { w, s, history } = await setup(t, '/_/git/history?panel=tabs', { narrow: true });
   assert.equal(s.activeTab().kind, 'git-history');
   assert.equal(s.activePanel(), 'tabs');
   assert.equal(s.drawerOpen(), false);
@@ -328,7 +330,7 @@ test('刷新 history + panel=tabs 不弹出抽屉，手动展开仍选中 Tabs�
   w.document.querySelector('.drawer-backdrop').click();
   assert.equal(w.document.querySelector('.drawer'), null);
   assert.equal(w.history.length, length);
-  assert.equal(w.location.pathname + w.location.search, '/-/git/history?panel=tabs');
+  assert.equal(w.location.pathname + w.location.search, '/_/git/history?panel=tabs');
   s.openGitCommit('abc1234');
   await history('back');
   assert.equal(s.activeTab().kind, 'git-history');
@@ -980,7 +982,7 @@ test('阅读工具栏独立弹出目录，跳转及关闭不改变侧栏和 URL'
 });
 
 test('数据库表、结构使用独立标签，切换后保留分页排序，URL 后退恢复对象', async (test) => {
-  const { w, s, calls, history } = await setup(test, '/-/database/app.db?object=users&lang=zh', {
+  const { w, s, calls, history } = await setup(test, '/_/database/app.db?object=users&lang=zh', {
     hook(url) {
       if (url.pathname !== '/__test/sqlite') return;
       const request = JSON.parse(url.searchParams.get('request')!);
@@ -1050,7 +1052,7 @@ test('重命名和删除数据库时同步所有对象标签，不影响其他�
   s.relocateDatabaseTabs('folder', 'renamed');
   assert.equal(s.tabs().length, 3);
   assert.equal(s.activeTab().path, 'renamed/app.db');
-  assert.equal(w.location.pathname, '/-/database/renamed/app.db');
+  assert.equal(w.location.pathname, '/_/database/renamed/app.db');
   s.relocateDatabaseTabs('renamed/app.db');
   assert.equal(s.tabs().length, 1);
   assert.equal(s.activeTab().path, 'other/app.db');
@@ -1095,7 +1097,7 @@ test('CSV 共用紧凑表格：字段与整行详情同步 URL，关闭后清理
 });
 
 test('字段浮层可点外部关闭，数据源变化或切换文件后清理详情', async (test) => {
-  const { w, s } = await setup(test, '/-/database/app.db?object=users&lang=zh', { hook(url) {
+  const { w, s } = await setup(test, '/_/database/app.db?object=users&lang=zh', { hook(url) {
     if (url.pathname !== '/__test/sqlite') return;
     const request = JSON.parse(url.searchParams.get('request')!);
     if (request.action === 'objects') return json({ objects: [], truncated: false });
@@ -1127,7 +1129,7 @@ test('字段浮层可点外部关闭，数据源变化或切换文件后清理�
 
 test('整行详情替换分页栏，逐条切换同步高亮并跨页，加载图标保留固定槽位', async (test) => {
   let release: (() => void) | undefined;
-  const { w } = await setup(test, '/-/database/app.db?object=users&lang=zh', { async hook(url) {
+  const { w } = await setup(test, '/_/database/app.db?object=users&lang=zh', { async hook(url) {
     if (url.pathname !== '/__test/sqlite') return;
     const request = JSON.parse(url.searchParams.get('request')!);
     if (request.action === 'objects') return json({ objects: [], truncated: false });
@@ -1305,7 +1307,7 @@ test('压缩包内的 PDF 和 Markdown 复用文件树大纲，跳转包含嵌�
 });
 
 test('包内数据库的嵌套身份贯穿文件树、独立标签、历史和重命名', async (test) => {
-  const { w, s, history, calls } = await setup(test, '/-/database/bundle.zip?inside=inner.zip&entry=app.db&object=users&lang=zh', { hook(url) {
+  const { w, s, history, calls } = await setup(test, '/_/database/bundle.zip?inside=inner.zip&entry=app.db&object=users&lang=zh', { hook(url) {
     if (url.pathname === '/api/list') return json({ entries: [{ name: 'bundle.zip', type: 'file' }] });
     if (url.pathname !== '/__test/sqlite') return;
     const request = JSON.parse(url.searchParams.get('request')!);
@@ -1418,7 +1420,7 @@ test('CSV 深链恢复整行详情，选择变化替换 URL，后退恢复同一
 
 test('SQLite 深链应用筛选、分页及详情，同对象的历史恢复清空旧筛选', async (test) => {
   const queries: any[] = [];
-  const { w, history } = await setup(test, '/-/database/app.db?lang=zh&object=users&filter=name&value=Alice#offset:100;row:101', { hook(url) {
+  const { w, history } = await setup(test, '/_/database/app.db?lang=zh&object=users&filter=name&value=Alice#offset:100;row:101', { hook(url) {
     if (url.pathname !== '/__test/sqlite') return;
     const body = JSON.parse(url.searchParams.get('request')!);
     if (body.action !== 'rows') return json({ objects: [], truncated: false });
@@ -1429,7 +1431,7 @@ test('SQLite 深链应用筛选、分页及详情，同对象的历史恢复清�
   await until(() => !!w.document.querySelector('.table-row-detail'));
   assert.equal(queries.at(-1).offset, 100); assert.equal(queries.at(-1).filter.value, 'Alice');
   assert.equal(w.document.querySelector('.database-filter input')!.value, 'Alice');
-  w.history.pushState(null, '', '/-/database/app.db?lang=zh&object=users'); w.dispatchEvent(new w.PopStateEvent('popstate'));
+  w.history.pushState(null, '', '/_/database/app.db?lang=zh&object=users'); w.dispatchEvent(new w.PopStateEvent('popstate'));
   await until(() => w.document.querySelector('.database-data')?.textContent.includes('all'));
   assert.equal(queries.at(-1).offset, 0); assert.equal(queries.at(-1).filter, undefined);
   assert.equal(w.document.querySelector('.database-filter input')!.value, '');
@@ -1561,6 +1563,35 @@ test('删除等待正在保存的内容完成，不在删除后重新创建旧�
   await tick(); assert.equal(deleted, false); assert.equal(h.editor().state.readOnly, true);
   release(); await until(() => deleted && h.s.currentFile() === null);
   await tick(1100); assert.equal(h.docs.has('a.txt'), false);
+});
+
+test('侧边栏底部提供实例列表链接 /-', async (t) => {
+  const h = await setup(t, '/');
+  const link = h.w.document.querySelector('.drawer-view-footer a[href="/-"]');
+  assert.ok(link);
+  assert.ok(link!.getAttribute('title'));
+  assert.ok(link!.getAttribute('aria-label'));
+});
+
+test('实例列表页 `/-`：列出宿主和所有挂载，链接使用最短地址', async (t) => {
+  const mounts = [
+    { name: 'anther', index: 0, workspace: '/repo/anther', base: '/-/anther/-/0', shorthand: '/-/anther', legacyRoot: true },
+    { name: 'qlang', index: 0, workspace: '/repo/qlang', base: '/-/qlang/-/0', shorthand: '/-/qlang', legacyRoot: false },
+    { name: 'qlang', index: 1, workspace: '/other/qlang', base: '/-/qlang/-/1', shorthand: null, legacyRoot: false },
+  ];
+  const h = await setup(t, '/-', { mount: false, start: false, hook: (url) => {
+    if (url.pathname === '/api/anther') {
+      return json({ name: 'anther', workspace: '/repo/anther', instanceId: 'x', attach: { available: true }, mounts });
+    }
+  } });
+  const dispose = h.w.harness.mountInstances();
+  await until(() => h.w.document.querySelectorAll('.instance-row').length === 3);
+
+  const rows = [...h.w.document.querySelectorAll('.instance-row')] as HTMLAnchorElement[];
+  assert.deepEqual(rows.map((row) => row.getAttribute('href')), ['/', '/-/qlang/', '/-/qlang/-/1/']);
+  assert.equal(rows[2].querySelector('.instance-name')!.textContent, 'qlang #1');
+  assert.ok(rows[0].querySelector('.instance-badge'));
+  dispose();
 });
 
 test('保存失败阻止重命名，并恢复可编辑状态', async (t) => {

@@ -1,5 +1,6 @@
 import { createSignal } from 'solid-js';
 import { api, type ArchiveDownload } from './api.ts';
+import { withBase } from './base.ts';
 import { t } from './i18n.ts';
 
 export const [preparingDownload, setPreparingDownload] = createSignal(false);
@@ -35,7 +36,7 @@ export async function startDownload(source: string | { url: string; filename: st
   setPreparingDownload(true);
   try {
     if (typeof source === 'string') await beforeDownload?.(source, directory);
-    let url = typeof source === 'string' ? api.downloadUrl(source) : source.url;
+    let url = typeof source === 'string' ? api.downloadUrl(source) : withBase(source.url);
     let filename = typeof source === 'string' ? source.split('/').pop() ?? source : source.filename;
     if (directory && typeof source === 'string') {
       let result = await controlRequest((signal) => api.prepareDownload(source, signal));
@@ -47,7 +48,8 @@ export async function startDownload(source: string | { url: string; filename: st
       }
       if (result.kind === 'archive' && result.status === 'failed') throw new Error(result.error);
       if (!result.url) throw new Error('Download is no longer available');
-      url = result.url;
+      // 服务端返回的是根相对地址；挂载页需要补上 base。
+      url = withBase(result.url);
       filename = result.filename;
     }
     const link = document.createElement('a');

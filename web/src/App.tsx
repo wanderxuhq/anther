@@ -728,14 +728,24 @@ export function App() {
             <button class="view-tab" onClick={() => void openGit()} title={t('view.git')} aria-label={t('view.git')}>
               <Icon name="git-branch" />
             </button>
-            <button
-              class="view-tab"
-              onClick={() => { setSystemOpen(true); setDrawerOpen(false); }}
-              title={t('system.info')}
-              aria-label={t('system.info')}
-            >
-              <Icon name="info" />
-            </button>
+            <div class="drawer-view-footer">
+              <button
+                class="view-tab"
+                onClick={() => { setSystemOpen(true); setDrawerOpen(false); }}
+                title={t('system.info')}
+                aria-label={t('system.info')}
+              >
+                <Icon name="info" />
+              </button>
+              <a
+                class="view-tab"
+                href="/-"
+                title={t('instances.open')}
+                aria-label={t('instances.open')}
+              >
+                <Icon name="instances" />
+              </a>
+            </div>
           </nav>
           <div class="drawer-content">
             <For each={views}>

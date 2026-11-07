@@ -12,10 +12,10 @@ export type TabItem =
   | DatabaseTab
   | { kind: 'file'; id: string; path: string }
   | { kind: 'terminal'; id: string; name: string }
-  | { kind: 'git'; id: '/-/git' }
+  | { kind: 'git'; id: '/_/git' }
   | { kind: 'git-diff'; id: string; path: string }
-  | { kind: 'git-history'; id: '/-/git/history' }
-  | { kind: 'git-branch'; id: '/-/git/branches' }
+  | { kind: 'git-history'; id: '/_/git/history' }
+  | { kind: 'git-branch'; id: '/_/git/branches' }
   | { kind: 'git-commit'; id: string; commit: string };
 
 export function addFileTab(tabs: TabItem[], path: string): TabItem[] {
@@ -48,10 +48,10 @@ export function terminalExists(tabs: TabItem[], id: string): boolean {
 }
 
 // 文件 id 是相对路径；Git id 用前导 / 隔离，避免与名为 git 等的文件冲突。
-export const GIT_TAB_ID = '/-/git';
+export const GIT_TAB_ID = '/_/git';
 
 export function gitDiffTabId(path: string): string {
-  return `/-/git/diff/${path}`;
+  return `/_/git/diff/${path}`;
 }
 
 export function addGitTab(tabs: TabItem[]): TabItem[] {
@@ -65,11 +65,11 @@ export function addGitDiffTab(tabs: TabItem[], path: string): TabItem[] {
   return [...tabs, { kind: 'git-diff', id, path }];
 }
 
-export const GIT_HISTORY_TAB_ID = '/-/git/history';
-export const GIT_BRANCH_TAB_ID = '/-/git/branches';
+export const GIT_HISTORY_TAB_ID = '/_/git/history';
+export const GIT_BRANCH_TAB_ID = '/_/git/branches';
 
 export function gitCommitTabId(hash: string): string {
-  return `/-/git/commit/${hash}`;
+  return `/_/git/commit/${hash}`;
 }
 
 export function addGitHistoryTab(tabs: TabItem[]): TabItem[] {
@@ -90,7 +90,7 @@ export function addGitCommitTab(tabs: TabItem[], hash: string): TabItem[] {
 
 /** Content identity is independent of a backing file. Sort/page are view state, not identity. */
 export function databaseTabId(path: string, target: DatabaseTarget): string {
-  return '/-/database/' + encodeURIComponent(JSON.stringify([fileTargetKey({ path, archive: target.archive }), target.object?.type ?? null, target.object?.name ?? null, target.mode]));
+  return '/_/database/' + encodeURIComponent(JSON.stringify([fileTargetKey({ path, archive: target.archive }), target.object?.type ?? null, target.object?.name ?? null, target.mode]));
 }
 export function addDatabaseTab(tabs: TabItem[], path: string, target: DatabaseTarget): TabItem[] {
   const id = databaseTabId(path, target);

@@ -4,6 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { readFile, realpath } from 'node:fs/promises';
+import type { AttachInfo, IdentityProviders, MountWire } from './mount-types.ts';
 
 export const APP_NAME = 'anther';
 export const PACKAGE_NAME = '@wanderxuhq/anther';
@@ -45,6 +46,10 @@ export type AppIdentity = {
   instanceId: string;
   /** 进程启动时间（epoch ms） */
   startedAt: number;
+  /** 本进程的本地附加能力；不同用户不附加。 */
+  attach?: AttachInfo;
+  /** 宿主 + 所有已附加工作区；供命令行判断同目录复用。 */
+  mounts?: MountWire[];
 };
 
 /** 工作区真实路径：符号链接/相对路径统一，启动器比较时不会误判不同实例。 */
@@ -60,7 +65,10 @@ async function canonicalWorkspace(workspaceRoot: string): Promise<string> {
  * GET /api/anther 的响应体：身份 + 实例上下文。
  * 不含主机名/硬件等系统细节（那些只在 /api/system 中按需返回）。
  */
-export async function appIdentity(workspaceRoot: string): Promise<AppIdentity> {
+export async function appIdentity(
+  workspaceRoot: string,
+  providers?: IdentityProviders,
+): Promise<AppIdentity> {
   return {
     name: APP_NAME,
     package: PACKAGE_NAME,
@@ -69,5 +77,7 @@ export async function appIdentity(workspaceRoot: string): Promise<AppIdentity> {
     workspace: await canonicalWorkspace(workspaceRoot),
     instanceId: INSTANCE_ID,
     startedAt: STARTED_AT,
+    attach: providers?.getAttach?.(),
+    mounts: providers?.getMounts?.() ?? [],
   };
 }

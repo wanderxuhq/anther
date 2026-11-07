@@ -4,6 +4,7 @@
 // 初始加载和浏览器历史恢复都会应用语言；t() 读 lang 信号即时更新界面。
 import { createSignal } from 'solid-js';
 import { parseUrl } from './url-state.ts';
+import { basePath } from './base.ts';
 
 export type Lang = 'en' | 'zh';
 
@@ -95,6 +96,15 @@ const messages: Record<Lang, Record<string, string>> = {
     'system.hour': 'h',
     'system.minute': 'm',
     'system.second': 's',
+    'instances.open': 'Instances',
+    'instances.title': 'Instances',
+    'instances.loading': 'Loading instances…',
+    'instances.failed': 'Unable to load instances: {msg}',
+    'instances.empty': 'No instances',
+    'instances.current': 'Current',
+    'instances.host': 'Host',
+    'instances.refresh': 'Refresh',
+    'instances.close': 'Close',
     'download.file': 'Download file',
     'image.loadFailed': 'Unable to display this image. It may be missing, damaged or unsupported by your browser.',
     'preview.mediaError': 'This media could not be played. The file may be damaged or its codec may not be supported by your browser. You can still download it.',
@@ -346,6 +356,15 @@ const messages: Record<Lang, Record<string, string>> = {
     'system.unavailable': '不可用',
     'system.day': '天',
     'system.hour': '小时',
+    'instances.open': '实例',
+    'instances.title': '实例列表',
+    'instances.loading': '正在加载实例…',
+    'instances.failed': '无法加载实例：{msg}',
+    'instances.empty': '暂无实例',
+    'instances.current': '当前',
+    'instances.host': '宿主',
+    'instances.refresh': '刷新',
+    'instances.close': '关闭',
     'system.minute': '分钟',
     'system.second': '秒',
     'download.file': '下载文件',
@@ -542,7 +561,7 @@ export function t(key: string, params?: Record<string, string | number>): string
 
 /** 页面加载时调用一次：检测语言 → 设信号 + <html lang>。返回识别结果。 */
 export function initI18n(): Lang {
-  return applyLanguage(parseUrl(window.location.href).lang);
+  return applyLanguage(parseUrl(window.location.href, basePath()).lang);
 }
 
 /** 初始加载和浏览器历史恢复共用；无显式覆盖时跟随浏览器语言。 */
