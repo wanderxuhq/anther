@@ -11,7 +11,7 @@ import { api, connectTerminal, type TerminalSocket } from '../api.ts';
 import { fontScale, openPreviewTab, removeTerminalTab, theme } from '../stores.ts';
 import { t } from '../i18n.ts';
 import { CONTROL_LETTERS, TERMINAL_KEYS, applyTerminalModifiers, controlChar, keySequence, type TerminalKey } from '../terminal-keys.ts';
-import { setTerminalRenderMode, terminalRenderMode } from '../terminal/settings.ts';
+import { terminalRenderMode } from '../terminal/settings.ts';
 import { classifyMarkdownRows, joinWrappedRows, type MarkdownBlock } from '../terminal/markdown-blocks.ts';
 import { firstContentCell, joinLogicalCells } from '../terminal/logical.ts';
 import { renderRow, rowClass, rowRawText, type CursorInfo } from '../terminal/render.ts';
@@ -586,6 +586,11 @@ export function TerminalView(props: { id: string }) {
     scheduleRender();
   });
 
+  // 主工具栏切换渲染模式后，桌面端把焦点还给终端输入；手机端不主动弹软键盘。
+  createEffect(on(terminalRenderMode, () => {
+    if (window.matchMedia('(pointer: fine)').matches) focusInput?.();
+  }, { defer: true }));
+
   // 主题色变化同步给服务端，供 OSC 10/11 本地回应。
   createEffect(() => {
     theme();
@@ -835,20 +840,6 @@ export function TerminalView(props: { id: string }) {
   return (
     <div class="terminal-pane" ref={(el) => (paneEl = el)} onClick={focusOnPaneClick}>
       <div class="terminal-toolbar">
-        <div class="terminal-mode" role="group" aria-label={t('terminal.renderMode')}>
-          <button
-            type="button"
-            classList={{ active: terminalRenderMode() === 'html' }}
-            aria-pressed={terminalRenderMode() === 'html'}
-            onClick={() => { setTerminalRenderMode('html'); focusInput?.(); }}
-          >{t('terminal.html')}</button>
-          <button
-            type="button"
-            classList={{ active: terminalRenderMode() === 'text' }}
-            aria-pressed={terminalRenderMode() === 'text'}
-            onClick={() => { setTerminalRenderMode('text'); focusInput?.(); }}
-          >{t('terminal.text')}</button>
-        </div>
         <Show when={cwd()}>
           <span class="terminal-cwd" title={`${t('terminal.cwd')}: ${cwd()}`}>{cwd()}</span>
         </Show>

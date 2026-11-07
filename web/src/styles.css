@@ -87,13 +87,6 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   display: flex; flex: 0 0 auto; align-items: center; gap: 8px;
   min-height: 36px; padding: 4px 8px; border-bottom: 1px solid var(--border);
 }
-.terminal-mode { display: inline-flex; flex: 0 0 auto; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-.terminal-mode button {
-  min-height: 30px; padding: 0 10px; border: 0; background: none; color: inherit;
-  font: inherit; font-size: 12px; cursor: pointer;
-}
-.terminal-mode button + button { border-left: 1px solid var(--border); }
-.terminal-mode button.active { background: var(--accent); color: #fff; }
 .terminal-cwd {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
