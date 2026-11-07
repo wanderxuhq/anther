@@ -177,11 +177,13 @@ function UploadItem(props: { target: MenuTarget }) {
   let folderInput!: HTMLInputElement;
   const base = () => props.target.kind === 'dir' ? props.target.path : parentOf(props.target.path);
   const pick = (input: HTMLInputElement) => {
+    // 先算目标目录：setMenu(null) 后 props.target 的 getter 重回 menu()，会读到 null。
+    const target = base();
     // 先快照 FileList：部分浏览器在 value='' 后会把 input.files 清空。
     const entries = input.files ? entriesFromFiles(input.files) : [];
     input.value = ''; // 允许连续选择同一批文件
     setMenu(null);
-    if (entries.length > 0) void startUpload(base(), entries);
+    if (entries.length > 0) void startUpload(target, entries);
   };
   return (
     <>
