@@ -26,6 +26,7 @@ function blockKey(block: MarkdownBlock): string {
     case 'list': return `l:${block.prefix}:${block.text}`;
     case 'quote': return `q:${block.text}`;
     case 'code': return `c:${block.text}`;
+    case 'table': return block.role === 'start' ? `t:${block.source}` : 't:body';
     default: return block.kind;
   }
 }
@@ -285,10 +286,22 @@ export function TerminalView(props: { id: string }) {
     for (let absolute = start; absolute < end; absolute++) texts.push(textCache[absolute] ?? '');
     const blocks = classifyMarkdownRows(texts);
 
+    // 表格会跨多行渲染成一张表；只要表格碰到活动输入区（光标所在行及之后），
+    // 就整组退回普通单元格渲染，避免光标/输入行被表格吞掉。
+    const tableDisabled = new Array<boolean>(count).fill(false);
+    if (mode === 'html') {
+      for (const block of blocks) {
+        if (block.kind !== 'table' || block.role !== 'start') continue;
+        if (alt || cursorAbs < start + block.end) {
+          for (let row = block.start; row < block.end; row++) tableDisabled[row] = true;
+        }
+      }
+    }
+
     for (let index = 0; index < count; index++) {
       const absolute = start + index;
       const active = alt || absolute >= cursorAbs;
-      const markdown = mode === 'html' && !active;
+      const markdown = mode === 'html' && !active && !tableDisabled[index];
       const block: MarkdownBlock = markdown ? blocks[index] : { kind: 'normal' };
       const cursorInfo = absolute === cursorAbs && cursorVisible
         ? { col: cursor.col, visible: true, shape: cursorShape, blinking: cursorBlinking }

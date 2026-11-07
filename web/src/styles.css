@@ -166,6 +166,13 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 .term-row-md-code { background: var(--row-hover); border-left: 2px solid var(--border); padding-left: .5em; }
 .terminal-html .term-row-md-code { white-space: pre; }
 .term-row-md-fence { display: none; }
+/* 表格：整张表在首行渲染，后续占位行隐藏，避免留下空白行。 */
+/* 需要覆盖 .terminal-html .term-row-md 的 pre-wrap，否则表格标签间的换行会变成空隙。 */
+.terminal-html .term-row-md-table { white-space: normal; overflow-wrap: normal; }
+.term-row-md-table-body { display: none; }
+.term-md-body { max-width: none; margin: 0; line-height: inherit; }
+.term-md-body > :first-child { margin-top: 0; }
+.term-md-body > :last-child { margin-bottom: 0; }
 .term-md-hr { border: 0; border-top: 1px solid var(--border); margin: .35em 0; }
 .term-row code {
   padding: .05em .3em; border-radius: 3px; background: var(--row-hover);

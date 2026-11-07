@@ -7,7 +7,7 @@
 import type { ScreenCell } from '../../../shared/terminal/vt.ts';
 import { splitLinks, type TermLink } from './linkify.ts';
 import type { MarkdownBlock } from './markdown-blocks.ts';
-import { renderMarkdownInline } from '../markdown.ts';
+import { renderMarkdown, renderMarkdownInline } from '../markdown.ts';
 
 export type RenderMode = 'html' | 'text';
 
@@ -262,6 +262,11 @@ function markdownRow(block: MarkdownBlock, options: RenderOptions): string {
       return '<hr class="term-md-hr" />';
     case 'fence':
       return '';
+    case 'table':
+      // 整张表在首行渲染，其余行由 CSS 隐藏；复用文件预览的 Markdown 渲染器。
+      return block.role === 'start'
+        ? `<div class="markdown-body term-md-body">${renderMarkdown(block.source)}</div>`
+        : '';
     default:
       return '';
   }
@@ -287,6 +292,10 @@ export function rowClass(block: MarkdownBlock, options: RenderOptions): string {
     case 'code': return 'term-row term-row-md term-row-md-code';
     case 'fence': return 'term-row term-row-md term-row-md-fence';
     case 'hr': return 'term-row term-row-md term-row-md-hr';
+    case 'table':
+      return block.role === 'start'
+        ? 'term-row term-row-md term-row-md-table'
+        : 'term-row term-row-md term-row-md-table-body';
     default: return `term-row ${options.markdown ? 'term-row-html' : 'term-row-grid'}`;
   }
 }

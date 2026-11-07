@@ -6,6 +6,7 @@ import { createTerminalScreen, type ScreenCell } from '../../../shared/terminal/
 const dom = new JSDOM('');
 Object.assign(globalThis, { window: dom.window });
 const { renderRow, rowClass, rowText } = await import('./render.ts');
+const { classifyMarkdownRows } = await import('./markdown-blocks.ts');
 after(() => { dom.window.close(); delete (globalThis as Record<string, unknown>).window; });
 
 function cells(text: string, cols = 80): ScreenCell[] {
@@ -60,6 +61,20 @@ test('光标：块状光标包住当前位置字符', () => {
 
 test('rowText：宽字符与末尾空白', () => {
   assert.equal(rowText(cells('a中b    ')), 'a中b');
+});
+
+test('html 模式：GFM 表格复用 Markdown 渲染器', () => {
+  const rows = ['| A | B |', '| --- | --- |', '| 1 | 2 |'];
+  const blocks = classifyMarkdownRows(rows);
+  const html = renderRow(cells(rows[0]), {
+    mode: 'html', markdown: true, linkify: true, block: blocks[0],
+  });
+  assert.match(html, /<table>/);
+  assert.match(html, /<th>A<\/th>/);
+  assert.match(html, /<td>1<\/td>/);
+  assert.equal(renderRow(cells(rows[1]), { mode: 'html', markdown: true, block: blocks[1] }), '');
+  assert.equal(rowClass(blocks[0], { mode: 'html', markdown: true }), 'term-row term-row-md term-row-md-table');
+  assert.equal(rowClass(blocks[1], { mode: 'html', markdown: true }), 'term-row term-row-md term-row-md-table-body');
 });
 
 test('html 模式：活动行关闭 Markdown 但保留链接', () => {
