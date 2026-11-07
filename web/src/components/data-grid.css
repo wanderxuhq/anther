@@ -11,6 +11,9 @@
 .data-grid th { background: var(--bg); color: var(--muted); }
 .data-grid thead th { position: sticky; top: 0; z-index: 1; }
 .data-grid-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   border: 0;
   padding: 0;
   background: transparent;
@@ -22,9 +25,6 @@
 .data-grid-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .data-grid-null { color: var(--muted); font-style: italic; }
-
-.data-grid th[aria-sort='ascending'] .data-grid-sort::after { content: ' ↑'; }
-.data-grid th[aria-sort='descending'] .data-grid-sort::after { content: ' ↓'; }
 
 .data-grid-compact { border-collapse: separate; border-spacing: 0; }
 .data-grid-compact td, .data-grid-compact th { padding: 0; white-space: nowrap; border-width: 0 1px 1px 0; }

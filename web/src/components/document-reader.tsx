@@ -2,6 +2,7 @@ import { createEffect, createSignal, createUniqueId, on, onCleanup, Show } from 
 import { createStore } from 'solid-js/store';
 import { initialReaderState, type ReaderController, type ReaderFactory } from '../readers/types.ts';
 import { t } from '../i18n.ts';
+import { Icon } from './icons.tsx';
 import './document-reader.css';
 import { bindReaderGestures } from './reader-gestures.ts';
 import { ReaderOutline } from './reader-outline.tsx';
@@ -48,28 +49,28 @@ export function DocumentReader(props: { url: string; path: string; createReader:
       <div class="reader-toolbar" role="toolbar" aria-label={t('reader.controls')}>
         <button ref={outlineButton} class="icon-btn reader-outline-toggle" title={t('reader.outline')} aria-label={t('reader.outline')}
           aria-haspopup="dialog" aria-expanded={outlineOpen()} aria-controls={outlineId} onClick={() => setOutlineOpen((value) => !value)}>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M8 10h12M8 15h12M4 20h16M3 10h1M3 15h1"/></svg>
+          <Icon name="outline" />
         </button>
         <button class="icon-btn" title={t(state.unit === 'chapter' ? 'reader.previousChapter' : 'reader.previous')} aria-label={t(state.unit === 'chapter' ? 'reader.previousChapter' : 'reader.previous')} disabled={!state.total || state.position <= 1} onClick={() => reader?.goTo(state.position - 1)}>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6" /></svg>
+          <Icon name="chevron-left" />
         </button>
         <input class="reader-page-number" type="number" min="1" max={state.total ?? 1} value={state.position} aria-label={t(state.unit === 'chapter' ? 'reader.chapter' : 'reader.page')} disabled={!state.total} onChange={(e) => { reader?.goTo(e.currentTarget.valueAsNumber); e.currentTarget.value = String(state.position); }} />
         <span class="reader-page-count">/ {state.total ?? '—'}</span>
         <button class="icon-btn" title={t(state.unit === 'chapter' ? 'reader.nextChapter' : 'reader.next')} aria-label={t(state.unit === 'chapter' ? 'reader.nextChapter' : 'reader.next')} disabled={!state.total || state.position >= (state.total ?? 1)} onClick={() => reader?.goTo(state.position + 1)}>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+          <Icon name="chevron-right" />
         </button>
         <Show when={state.canZoom}>
           <button class="icon-btn" title={t('image.zoomOut')} aria-label={t('image.zoomOut')} disabled={!state.total || state.scale <= 0.1} onClick={() => reader?.zoomTo(state.scale / 1.25)}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14" /></svg>
+            <Icon name="zoom-out" />
           </button>
           <output>{Math.round(state.scale * 100)}%</output>
           <button class="icon-btn" title={t('image.zoomIn')} aria-label={t('image.zoomIn')} disabled={!state.total || state.scale >= 5} onClick={() => reader?.zoomTo(state.scale * 1.25)}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14" /></svg>
+            <Icon name="zoom-in" />
           </button>
         </Show>
         <Show when={state.canFitWidth}>
           <button class="icon-btn" title={t('reader.fit')} aria-label={t('reader.fit')} aria-pressed={state.fitWidth} disabled={!state.total} onClick={() => reader?.fitWidth()}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5v14M21 5v14M7 12h10m-7-3-3 3 3 3m4-6 3 3-3 3" /></svg>
+            <Icon name="fit-width" />
           </button>
         </Show>
         <Show when={outlineOpen()}><ReaderOutline id={outlineId} state={state} navigate={(id) => reader?.goToOutline?.(id)} close={closeOutline}/></Show>

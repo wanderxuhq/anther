@@ -25,6 +25,7 @@ const DocumentTree = lazy(() => import('../components/document-tree.tsx'));
 
 import { isDatabaseFile } from '../database/source.ts';
 import { DatabaseIcon } from '../components/database-icon.tsx';
+import { Icon } from '../components/icons.tsx';
 const DatabaseTree = lazy(() => import('../components/database-tree.tsx'));
 
 const ArchiveTree = lazy(() => import('../components/archive-tree.tsx'));
@@ -314,10 +315,10 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
           void dropUpload(e, isDir ? props.path : parentOf(props.path));
         }}
       >
-        <span class="tree-arrow"><Show when={archive || database() || document} fallback={isDir ? (expanded() ? '▾' : '▸') : ''}>
-          <button class="archive-toggle" title={t(database() ? 'database.expand' : document ? 'reader.expandOutline' : 'archive.expand')} aria-label={t(database() ? 'database.expand' : document ? 'reader.expandOutline' : 'archive.expand')} aria-expanded={database() ? databaseExpanded() : document ? documentExpanded() : archiveExpanded()} onClick={(e) => { e.stopPropagation(); if (database()) setDatabaseExpanded((value) => !value); else if (document) setDocumentExpanded((value) => !value); else setArchiveExpanded((value) => !value); }}>{(database() ? databaseExpanded() : document ? documentExpanded() : archiveExpanded()) ? '▾' : '▸'}</button>
+        <span class="tree-arrow"><Show when={archive || database() || document} fallback={isDir ? <Icon name={expanded() ? 'chevron-down' : 'chevron-right'} size={14} /> : ''}>
+          <button class="archive-toggle" title={t(database() ? 'database.expand' : document ? 'reader.expandOutline' : 'archive.expand')} aria-label={t(database() ? 'database.expand' : document ? 'reader.expandOutline' : 'archive.expand')} aria-expanded={database() ? databaseExpanded() : document ? documentExpanded() : archiveExpanded()} onClick={(e) => { e.stopPropagation(); if (database()) setDatabaseExpanded((value) => !value); else if (document) setDocumentExpanded((value) => !value); else setArchiveExpanded((value) => !value); }}><Icon name={(database() ? databaseExpanded() : document ? documentExpanded() : archiveExpanded()) ? 'chevron-down' : 'chevron-right'} size={14} /></button>
         </Show></span>
-        <Show when={archive}><svg class="archive-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h10l4 4v14H5zM11 3v3h2v3h-2v3h2v3h-2v3h2"/></svg></Show>
+        <Show when={archive}><Icon name="archive" size={16} class="archive-icon" /></Show>
         <Show when={database()}><DatabaseIcon/></Show>
         <span class="tree-name">{props.entry.name}</span>
         <div class="tree-row-actions">
@@ -325,7 +326,7 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
             class="icon-btn row-menu-btn"
             title={t('filetree.actions')}
             onClick={(e) => { e.stopPropagation(); showMenu({ path: props.path, kind: isDir ? 'dir' : 'file' }); }}
-          >⋯</button>
+          ><Icon name="more" size={18} /></button>
           <Show when={menu()?.path === props.path}>
             <div class="row-menu" onClick={(e) => e.stopPropagation()}>
               <button class="menu-item" onClick={() => beginCreate('file', menu()!)}>{t('filetree.newFile')}</button>
@@ -410,7 +411,7 @@ export function FileTreeView() {
         <div role="status">{downloadProgressText()}</div>
       </Show>
       <div class="filetree-toolbar">
-        <button class="icon-btn" onClick={() => showMenu({ path: '.', kind: 'root' })}>＋ {t('filetree.new')}</button>
+        <button class="icon-btn" onClick={() => showMenu({ path: '.', kind: 'root' })}><Icon name="plus" size={16} /> {t('filetree.new')}</button>
         <Show when={menu()?.kind === 'root'}>
           <div class="row-menu" onClick={(e) => e.stopPropagation()}>
             <button class="menu-item" onClick={() => beginCreate('file', menu()!)}>{t('filetree.newFile')}</button>

@@ -6,6 +6,7 @@ import { searchStream, type SearchFile } from '../api.ts';
 import { gotoLine0, searchQuery as query, searchCaseSensitive as caseSensitive, searchExclude as exclude, updateSearch } from '../stores.ts';
 import { splitByQuery } from './search-util.ts';
 import { t } from '../i18n.ts';
+import { Icon } from '../components/icons.tsx';
 
 export function SearchView() {
   const [files, setFiles] = createSignal<SearchFile[]>([]);
@@ -138,7 +139,7 @@ export function SearchView() {
           {(f) => (
             <div class="search-group">
               <button class="search-group-head" onClick={() => toggleGroup(f.path)}>
-                <span class="tree-arrow">{expanded().has(f.path) ? '▾' : '▸'}</span>
+                <span class="tree-arrow"><Icon name={expanded().has(f.path) ? 'chevron-down' : 'chevron-right'} size={14} /></span>
                 <span class="search-group-path">{f.path}</span>
                 <span class="search-group-count">{f.matches.length}</span>
               </button>

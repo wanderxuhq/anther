@@ -5,6 +5,7 @@ import { createEffect, createSignal, Show, For } from 'solid-js';
 import { api, type GitBranches } from '../api.ts';
 import { createBranch, gitRefreshTick } from '../stores.ts';
 import { t } from '../i18n.ts';
+import { Icon } from '../components/icons.tsx';
 
 export function BranchView(props: { onCheckout: (name: string) => void }) {
   const [data, setData] = createSignal<GitBranches | null>(null);
@@ -65,7 +66,7 @@ export function BranchView(props: { onCheckout: (name: string) => void }) {
             <li>
               {/* 当前分支行禁用点击（spec §6.1：切到已是当前的分支 → 无操作） */}
               <button class="branch-row" disabled={b.current} onClick={() => setConfirmName(b.name)}>
-                <span class="branch-current">{b.current ? '✓' : ''}</span>
+                <span class="branch-current">{b.current ? <Icon name="check" size={16} /> : ''}</span>
                 <span class="branch-name">{b.name}</span>
                 <span class="branch-tip">{b.tip}</span>
               </button>

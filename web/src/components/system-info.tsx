@@ -4,6 +4,7 @@
 import { createSignal, onCleanup, onMount, Show } from 'solid-js';
 import { api, type SystemInfo } from '../api.ts';
 import { t } from '../i18n.ts';
+import { Icon } from './icons.tsx';
 import { formatBytes, formatLoad, formatUptime, usedBytes } from '../system-info-model.ts';
 
 export function SystemInfoDialog(props: { onClose: () => void }) {
@@ -57,9 +58,9 @@ export function SystemInfoDialog(props: { onClose: () => void }) {
         <div class="system-info-head">
           <h2 class="dialog-title" id="system-info-title">{t('system.title')}</h2>
           <button type="button" class="icon-btn" disabled={loading()} onClick={() => void load()}
-            title={t('system.refresh')} aria-label={t('system.refresh')}>↻</button>
+            title={t('system.refresh')} aria-label={t('system.refresh')}><Icon name="refresh" /></button>
           <button type="button" class="icon-btn" onClick={props.onClose}
-            title={t('system.close')} aria-label={t('system.close')}>✕</button>
+            title={t('system.close')} aria-label={t('system.close')}><Icon name="close" /></button>
         </div>
 
         <Show when={loading() && !info()}>

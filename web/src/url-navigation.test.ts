@@ -368,7 +368,7 @@ test('下载先保存编辑器的最新修改，再使用原文件的下载地�
   w.HTMLAnchorElement.prototype.click = function () { downloads.push(this.href); };
   editor().dispatch({ changes: { from: 0, to: editor().state.doc.length, insert: '# 最新修改' }, userEvent: 'input' });
   const button = w.document.querySelector('.file-download');
-  assert.equal(button.nextElementSibling.textContent.trim(), '✎');
+  assert.ok(button.nextElementSibling.querySelector('svg'));
   button.click();
   await until(() => downloads.length === 1);
   assert.equal(docs.get('README.md'), '# 最新修改');

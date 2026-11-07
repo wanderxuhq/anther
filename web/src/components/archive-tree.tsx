@@ -9,6 +9,7 @@ import { isDatabaseFile } from '../database/source.ts';
 const DatabaseTree = lazy(() => import('./database-tree.tsx'));
 const DocumentTree = lazy(() => import('./document-tree.tsx'));
 import { ArchiveFeedback } from './archive-feedback.tsx';
+import { Icon } from './icons.tsx';
 
 function Branch(props: { archive: string; directory: string; chain: string[] }) {
   const [limit, setLimit] = createSignal(200);
@@ -49,16 +50,16 @@ function Entry(props: { archive: string; entry: ArchiveEntry; chain: string[] })
         void openArchiveEntry(props.archive, nested() ? null : props.entry.path, nested() ? [...props.chain, props.entry.path] : props.chain).catch(() => {});
       }
     }}>
-      <span class="tree-arrow"><Show when={nested() || document() || database()} fallback={props.entry.directory ? expanded() ? '▾' : '▸' : ''}>
+      <span class="tree-arrow"><Show when={nested() || document() || database()} fallback={props.entry.directory ? <Icon name={expanded() ? 'chevron-down' : 'chevron-right'} size={14} /> : ''}>
         <button class="archive-toggle" title={t(database() ? 'database.expand' : document() ? 'reader.expandOutline' : 'archive.expand')} aria-label={t(database() ? 'database.expand' : document() ? 'reader.expandOutline' : 'archive.expand')}
-          aria-expanded={expanded()} onClick={(event) => { event.stopPropagation(); setExpanded(!expanded()); }}>{expanded() ? '▾' : '▸'}</button>
+          aria-expanded={expanded()} onClick={(event) => { event.stopPropagation(); setExpanded(!expanded()); }}><Icon name={expanded() ? 'chevron-down' : 'chevron-right'} size={14} /></button>
       </Show></span>
       <span class="tree-name">{props.entry.path.split('/').pop()}</span>
       <span class="archive-readonly" title={t('archive.readonly')} aria-label={t('archive.readonly')}>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="10" width="12" height="10" rx="2"/><path d="M9 10V7a3 3 0 0 1 6 0v3"/></svg>
+        <Icon name="lock" size={16} />
       </span>
       <Show when={!props.entry.directory && !props.entry.link}>
-        <div class="tree-row-actions"><button class="icon-btn row-menu-btn" title={t('filetree.actions')} onClick={(e) => { e.stopPropagation(); setMenu((value) => !value); }}>⋯</button>
+        <div class="tree-row-actions"><button class="icon-btn row-menu-btn" title={t('filetree.actions')} aria-label={t('filetree.actions')} onClick={(e) => { e.stopPropagation(); setMenu((value) => !value); }}><Icon name="more" size={18} /></button>
           <Show when={menu()}><div class="row-menu" onClick={(e) => e.stopPropagation()}><button class="menu-item" disabled={!!state()?.busy} onClick={() => { setMenu(false); void download(); }}>{t('filetree.download')}</button></div></Show>
         </div>
       </Show>

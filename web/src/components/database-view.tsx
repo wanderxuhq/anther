@@ -5,6 +5,7 @@ import type { DatabaseObject, DatabaseCell } from '../database/source.ts';
 import { DataTable } from './data-table.tsx';
 import { DataGrid } from './data-grid.tsx';
 import { t } from '../i18n.ts';
+import { Icon } from './icons.tsx';
 import './database.css';
 
 const displayCell = (cell: DatabaseCell): string | number | null => {
@@ -50,7 +51,7 @@ export function DatabaseView(props: {
           <For each={filterColumns()}>{(column) => <option value={column.key}>{column.label}</option>}</For>
         </select>
         <input aria-label={t('database.filter')} placeholder={t('database.filter')} value={filterValue()} onInput={(e) => setFilterValue(e.currentTarget.value)} />
-        <button class="icon-btn" type="submit" disabled={props.state.busy} title={t('database.applyFilter')} aria-label={t('database.applyFilter')}>⌕</button>
+        <button class="icon-btn" type="submit" disabled={props.state.busy} title={t('database.applyFilter')} aria-label={t('database.applyFilter')}><Icon name="search" size={18} /></button>
         {loading()}
       </form>
     </Show>
@@ -68,9 +69,9 @@ export function DatabaseView(props: {
           footer={<>
             <Show when={previewLimited()}><div class="database-notice">{t('database.previewLimit')}</div></Show>
             <footer class="database-pagination">
-              <button class="icon-btn" disabled={props.state.busy || !hasPrevious()} onClick={() => props.controller.previous()} aria-label={t('database.previous')} title={t('database.previous')}>‹</button>
+              <button class="icon-btn" disabled={props.state.busy || !hasPrevious()} onClick={() => props.controller.previous()} aria-label={t('database.previous')} title={t('database.previous')}><Icon name="chevron-left" size={18} /></button>
               <span>{rows().length ? `${props.state.rows!.offset + 1}–${props.state.rows!.offset + rows().length}` : '0'}</span>
-              <button class="icon-btn" disabled={props.state.busy || !!props.state.error || !props.state.rows?.hasMore} onClick={() => props.controller.next()} aria-label={t('database.next')} title={t('database.next')}>›</button>
+              <button class="icon-btn" disabled={props.state.busy || !!props.state.error || !props.state.rows?.hasMore} onClick={() => props.controller.next()} aria-label={t('database.next')} title={t('database.next')}><Icon name="chevron-right" size={18} /></button>
             </footer>
           </>}
           onSort={(column) => props.controller.sort({ column, direction: props.state.sort?.column === column && props.state.sort.direction === 'asc' ? 'desc' : 'asc' })} />

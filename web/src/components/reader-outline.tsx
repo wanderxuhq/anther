@@ -1,6 +1,7 @@
 import { createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import type { ReaderOutlineItem, ReaderState } from '../readers/types.ts';
 import { t } from '../i18n.ts';
+import { Icon } from './icons.tsx';
 import './reader-outline.css';
 
 function OutlineItem(props: { item: ReaderOutlineItem; navigate: (id: string) => void }) {
@@ -9,7 +10,7 @@ function OutlineItem(props: { item: ReaderOutlineItem; navigate: (id: string) =>
   return <li>
     <div class="outline-row">
       <Show when={props.item.children.length} fallback={<span class="outline-arrow" />}>
-        <button class="outline-arrow" aria-label={title()} aria-expanded={expanded()} onClick={() => setExpanded((value) => !value)}>{expanded() ? '▾' : '▸'}</button>
+        <button class="outline-arrow" aria-label={title()} aria-expanded={expanded()} onClick={() => setExpanded((value) => !value)}><Icon name={expanded() ? 'chevron-down' : 'chevron-right'} size={16} /></button>
       </Show>
       <button class="outline-title" title={title()} disabled={!props.item.navigable && !props.item.children.length}
         onClick={() => props.item.navigable ? props.navigate(props.item.id) : setExpanded((value) => !value)}>{title()}</button>
@@ -33,7 +34,7 @@ export function ReaderOutline(props: { id: string; state: ReaderState; navigate:
   };
   return <section ref={popup} id={props.id} class="reader-outline-popup" role="dialog" aria-label={t('reader.outline')} tabIndex={-1}>
     <div class="reader-outline-header"><h3>{t('reader.outline')}</h3>
-      <button class="icon-btn" title={t('reader.closeOutline')} aria-label={t('reader.closeOutline')} onClick={() => props.close()}>×</button>
+      <button class="icon-btn" title={t('reader.closeOutline')} aria-label={t('reader.closeOutline')} onClick={() => props.close()}><Icon name="close" size={18} /></button>
     </div>
     <nav class="outline-view" aria-label={t('reader.outline')}>
       <Show when={props.state.outlineStatus === 'loading'}><p role="status">{t('loading')}</p></Show>

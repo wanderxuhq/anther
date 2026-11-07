@@ -2,6 +2,7 @@ import { createEffect, createMemo, createSignal, onCleanup, Show } from 'solid-j
 import { archiveSession, cancelArchive, ensureArchive } from '../archive-sessions.ts';
 import { archiveLimits } from '../archive-settings.ts';
 import { t } from '../i18n.ts';
+import { Icon } from './icons.tsx';
 import './archive.css';
 
 type FeedbackHost = { id: number; path: string; chain: string[]; entry?: string; priority: number };
@@ -37,12 +38,12 @@ export function ArchiveFeedback(props: { path: string; chain?: string[]; entry?:
     <Show when={state()?.busy}>
       <div class="archive-progress" role="status">
         <span>{t(`archive.${state()?.busy}`)}{state()?.progress !== undefined ? ` ${state()!.progress}%` : ''}</span>
-        <button class="icon-btn" title={t('archive.cancel')} aria-label={t('archive.cancel')} onClick={() => cancelArchive(props.path)}>×</button>
+        <button class="icon-btn" title={t('archive.cancel')} aria-label={t('archive.cancel')} onClick={() => cancelArchive(props.path)}><Icon name="close" size={18} /></button>
       </div>
     </Show>
     <Show when={state()?.passwordRequired} fallback={<Show when={state()?.error}>
       <div class="error-banner" role="alert">{state()?.limit === 'depth' ? t('archive.depthLimit', { depth: archiveLimits().maxDepth }) : state()?.limit === 'budget' ? t('archive.budgetLimit', { size: archiveLimits().maxBufferedBytes / 1024 / 1024 }) : t('archive.failed')}<button class="icon-btn" title={t('archive.retry')} aria-label={t('archive.retry')} onClick={() => retry()}>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7a9 9 0 1 0 1 8M20 3v5h-5" /></svg>
+        <Icon name="refresh" size={18} />
       </button></div>
     </Show>}>
       <form class="archive-password" onSubmit={(e) => { e.preventDefault(); const value = password(); setPassword(''); retry(value); }}>

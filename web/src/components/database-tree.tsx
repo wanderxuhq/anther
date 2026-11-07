@@ -6,6 +6,7 @@ import { fileTargetKey, type FileTarget } from '../file-target.ts';
 import type { DatabaseObject } from '../database/source.ts';
 import { activeTab, openDatabaseTab } from '../stores.ts';
 import { DatabaseIcon } from './database-icon.tsx';
+import { Icon } from './icons.tsx';
 import { t } from '../i18n.ts';
 import './database.css';
 
@@ -34,7 +35,7 @@ export default function DatabaseTree(props: FileTarget & { reload?: number }) {
         const group = () => objects().filter((item) => item.type === kind);
         return <Show when={group().length}>
           <button class="tree-row database-group" onClick={() => setExpanded(!expanded())} aria-expanded={expanded()}>
-            <span class="tree-arrow">{expanded() ? '▾' : '▸'}</span><DatabaseIcon kind={kind}/><span>{t(`database.${kind}s`)}</span>
+            <span class="tree-arrow"><Icon name={expanded() ? 'chevron-down' : 'chevron-right'} size={14} /></span><DatabaseIcon kind={kind}/><span>{t(`database.${kind}s`)}</span>
           </button>
           <Show when={expanded()}><div class="tree-children"><For each={group().slice(0, limit())}>{(object) => {
             const selected = () => { const tab = activeTab(); return tab?.kind === 'database' && fileTargetKey(tab) === fileTargetKey(props) && tab.object?.name === object.name && tab.object.type === kind; };

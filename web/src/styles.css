@@ -259,7 +259,7 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 /* 拖拽上传：根区域与目标目录/文件行的高亮 */
 .filetree.drop-active { outline: 2px dashed var(--accent); outline-offset: 4px; border-radius: 6px; }
 .tree-row.drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--row-hover); }
-.tree-arrow { width: 14px; flex: 0 0 auto; text-align: center; color: var(--muted); }
+.tree-arrow { width: 14px; flex: 0 0 auto; display: flex; align-items: center; justify-content: center; color: var(--muted); }
 .tree-row.active .tree-arrow { color: inherit; }
 .tree-name { overflow: hidden; text-overflow: ellipsis; }
 .tree-children { margin-left: 10px; border-left: 1px solid var(--border); padding-left: 4px; }
@@ -438,6 +438,7 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .git-sync-count { color: var(--accent); font-size: 12px; display: inline-flex; gap: 6px; white-space: nowrap; }
+.git-sync-item { display: inline-flex; align-items: center; gap: 2px; }
 .git-sync-actions { display: flex; gap: 4px; }
 .git-sync-btn {
   min-height: 36px; padding: 0 10px; font-size: 12px;
@@ -644,7 +645,7 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 }
 .complete-btn:active { opacity: 0.8; }
 
-.archive-toggle { border: 0; background: transparent; color: inherit; font: inherit; padding: 0; cursor: pointer; width: 100%; }
-.archive-icon { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; margin-right: 4px; flex-shrink: 0; }
+.archive-toggle { border: 0; background: transparent; color: inherit; font: inherit; padding: 0; cursor: pointer; width: 100%; display: flex; align-items: center; justify-content: center; }
+.archive-icon { width: 14px; height: 14px; margin-right: 4px; flex-shrink: 0; }
 
 .tab-select { border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; padding: 0; }

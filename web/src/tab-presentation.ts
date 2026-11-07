@@ -1,16 +1,17 @@
 import { fileTargetName, fileTargetLabel } from './file-target.ts';
 import type { TabItem } from './tab-model.ts';
 import { t } from './i18n.ts';
+import type { IconName } from './components/icons.tsx';
 
-export function tabIcon(tab: TabItem): string {
-  if (tab.kind === 'database') return tab.object?.type === 'view' ? '◉' : '▦';
-  if (tab.kind === 'file') return '📄';
-  if (tab.kind === 'terminal') return '🖥';
-  if (tab.kind === 'git') return '🕘';
-  if (tab.kind === 'git-history') return '📜';
-  if (tab.kind === 'git-branch') return '⑂';
-  if (tab.kind === 'git-commit') return '↔';
-  return '↔'; // git-diff
+export function tabIcon(tab: TabItem): IconName {
+  if (tab.kind === 'database') return tab.object?.type === 'view' ? 'eye' : 'table';
+  if (tab.kind === 'file') return 'file';
+  if (tab.kind === 'terminal') return 'terminal';
+  if (tab.kind === 'git') return 'git-changes';
+  if (tab.kind === 'git-history') return 'git-history';
+  if (tab.kind === 'git-branch') return 'git-branch';
+  if (tab.kind === 'git-commit') return 'commit';
+  return 'diff'; // git-diff
 }
 
 export function tabName(tab: TabItem): string {

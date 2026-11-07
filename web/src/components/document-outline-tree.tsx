@@ -2,6 +2,7 @@ import { createSignal, For, Show } from 'solid-js';
 import type { OutlineState } from '../readers/outline-source.ts';
 import type { ReaderOutlineItem } from '../readers/types.ts';
 import { t } from '../i18n.ts';
+import { Icon } from './icons.tsx';
 import './document-outline-tree.css';
 
 function Branch(props: { items: ReaderOutlineItem[]; navigate(id: string): void; selected?: string }) {
@@ -12,7 +13,7 @@ function Branch(props: { items: ReaderOutlineItem[]; navigate(id: string): void;
     return <div class="tree-node">
       <div class="tree-row document-outline-row" classList={{ active: props.selected === item.id }}>
         <span class="tree-arrow"><Show when={item.children.length}>
-          <button class="archive-toggle" title={title()} aria-label={title()} aria-expanded={expanded()} onClick={() => setExpanded(!expanded())}>{expanded() ? '▾' : '▸'}</button>
+          <button class="archive-toggle" title={title()} aria-label={title()} aria-expanded={expanded()} onClick={() => setExpanded(!expanded())}><Icon name={expanded() ? 'chevron-down' : 'chevron-right'} size={14} /></button>
         </Show></span>
         <button class="tree-name document-outline-title" title={title()} disabled={!item.navigable && !item.children.length}
           aria-current={props.selected === item.id ? 'location' : undefined}

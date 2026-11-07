@@ -1,16 +1,13 @@
 import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
 import { copyText } from '../clipboard.ts';
 import { t } from '../i18n.ts';
+import { Icon, type IconName } from './icons.tsx';
 
 export type TableCellDetail = { value: string | number | null | undefined; type?: string; truncated?: boolean };
 
 export function DetailIcon(props: { kind: 'copy' | 'close' | 'expand' | 'collapse' }) {
-  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <Show when={props.kind === 'copy'}><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/></Show>
-    <Show when={props.kind === 'close'}><path d="m6 6 12 12M6 18 18 6"/></Show>
-    <Show when={props.kind === 'expand'}><path d="M8 3H3v5m0-5 7 7m6 11h5v-5m0 5-7-7"/></Show>
-    <Show when={props.kind === 'collapse'}><path d="M3 10h7V3m0 7L3 3m18 11h-7v7m0-7 7 7"/></Show>
-  </svg>;
+  const name = (): IconName => props.kind;
+  return <Icon name={name()} size={18} />;
 }
 
 export function CopyCell(props: { detail: TableCellDetail }) {
@@ -60,9 +57,9 @@ export function RowDetail(props: {
       <dd><DetailValue detail={props.cell(index())}/></dd>
     </div>}</For></dl>
     <footer class="table-record-nav">
-      <button class="icon-btn" type="button" disabled={props.busy || !props.hasPrevious} onClick={props.onPrevious} aria-label={t('table.previousRecord')} title={t('table.previousRecord')}>‹</button>
+      <button class="icon-btn" type="button" disabled={props.busy || !props.hasPrevious} onClick={props.onPrevious} aria-label={t('table.previousRecord')} title={t('table.previousRecord')}><Icon name="chevron-left" size={18} /></button>
       <span>{t('table.rowDetail', { row: props.row })}</span>
-      <button class="icon-btn" type="button" disabled={props.busy || !props.hasNext} onClick={props.onNext} aria-label={t('table.nextRecord')} title={t('table.nextRecord')}>›</button>
+      <button class="icon-btn" type="button" disabled={props.busy || !props.hasNext} onClick={props.onNext} aria-label={t('table.nextRecord')} title={t('table.nextRecord')}><Icon name="chevron-right" size={18} /></button>
     </footer>
   </section>;
 }

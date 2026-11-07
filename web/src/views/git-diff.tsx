@@ -6,6 +6,7 @@ import { createInlineDiffEditor, type DiffHandle } from '../editor/inline-diff.t
 import { parseUnifiedDiff, type DiffFile } from './diff-model.ts';
 import { openTab } from '../stores.ts';
 import { t } from '../i18n.ts';
+import { Icon } from '../components/icons.tsx';
 
 export function GitDiffView(props: { path: string }) {
   let container: HTMLDivElement | undefined;
@@ -44,8 +45,8 @@ export function GitDiffView(props: { path: string }) {
     <div class="git-diff-view">
       <div class="git-diff-header">
         <span class="git-diff-path">{props.path}</span>
-        <button class="icon-btn" onClick={() => void openTab(props.path)} title={t('git.openInEditor')}>
-          ✎
+        <button class="icon-btn" onClick={() => void openTab(props.path)} title={t('git.openInEditor')} aria-label={t('git.openInEditor')}>
+          <Icon name="edit" />
         </button>
       </div>
       <Show when={error()}>

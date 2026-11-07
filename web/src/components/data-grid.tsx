@@ -1,6 +1,7 @@
 import { For, Show, type JSX } from 'solid-js';
 import './data-grid.css';
 import { t } from '../i18n.ts';
+import { Icon } from './icons.tsx';
 
 export type DataGridColumn = { key: string; label: string };
 export type DataGridSort = { column: string; direction: 'asc' | 'desc' };
@@ -39,6 +40,7 @@ export function DataGrid(props: {
                     onClick={() => props.onSort?.(column.key)}
                   >
                     {column.label}
+                    <Show when={sorted()}><Icon name={props.sort?.direction === 'asc' ? 'sort-asc' : 'sort-desc'} size={14} /></Show>
                   </button>
                 </Show>
               </th>

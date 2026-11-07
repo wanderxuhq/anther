@@ -27,6 +27,7 @@ import { describeLanguage, loadLanguage } from './editor/language.ts';
 import { t } from './i18n.ts';
 import { isMarkdownFile, parseMarkdownDocument } from './markdown.ts';
 import { MarkdownPreview } from './components/markdown-preview.tsx';
+import { Icon } from './components/icons.tsx';
 import { preparingDownload, startDownload, setBeforeDownload } from './download.ts';
 import { isImageFile, isBinaryImage } from './image.ts';
 import { LocatedImagePreview as ImagePreview, LocatedTablePreview as TablePreview } from './components/located-preview.tsx';
@@ -487,8 +488,8 @@ export function App() {
   return (
     <div class={`app ${isNarrow() ? 'narrow' : 'wide'}`}>
       <header class="toolbar" classList={{ 'git-toolbar': isGitKind() }}>
-        <button class="icon-btn" onClick={() => setDrawerOpen(!drawerOpen())} title={t('menu')}>
-          ☰
+        <button class="icon-btn" onClick={() => setDrawerOpen(!drawerOpen())} title={t('menu')} aria-label={t('menu')}>
+          <Icon name="menu" />
         </button>
         <Show
           when={!isGitKind()}
@@ -502,35 +503,25 @@ export function App() {
                 <button class="icon-btn git-toolbar-action git-view-tab" classList={{ active: activeKind() === 'git' }}
                   onClick={() => openGit()} title={t('git.changes')} aria-label={t('git.changes')}
                   aria-current={activeKind() === 'git' ? 'page' : undefined}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                    stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M9 5h11M9 12h11M9 19h11M3 5h1M3 12h1M3 19h1" />
-                  </svg>
+                  <Icon name="git-changes" />
                 </button>
                 <button class="icon-btn git-toolbar-action git-view-tab" classList={{ active: activeKind() === 'git-history' }}
                   onClick={() => openGitHistory()} title={t('git.history')} aria-label={t('git.history')}
                   aria-current={activeKind() === 'git-history' ? 'page' : undefined}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                    stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M3 11a9 9 0 1 1 2.6 7.4M3 4v7h7" />
-                    <path d="M12 7v5l3 2" />
-                  </svg>
+                  <Icon name="git-history" />
                 </button>
               </nav>
               <button class="icon-btn git-toolbar-action" onClick={() => setGitRefreshTick((x) => x + 1)} title={t('git.refresh')} aria-label={t('git.refresh')}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                  stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M20 7a9 9 0 0 0-15-1L2 9m0-6v6h6M4 17a9 9 0 0 0 15 1l3-3m0 6v-6h-6" />
-                </svg>
+                <Icon name="refresh" />
               </button>
-              <button class="icon-btn" onClick={() => setBranchDialogOpen(true)} title={t('git.newBranch')}>
-                ➕
+              <button class="icon-btn" onClick={() => setBranchDialogOpen(true)} title={t('git.newBranch')} aria-label={t('git.newBranch')}>
+                <Icon name="plus" />
               </button>
             </>
           }
         >
-          <button class="icon-btn" onClick={() => editorHandle()?.openSearch()} title={t('find')} disabled={!currentFile() || docLoadedPath() !== currentFile()}>
-            🔍
+          <button class="icon-btn" onClick={() => editorHandle()?.openSearch()} title={t('find')} aria-label={t('find')} disabled={!currentFile() || docLoadedPath() !== currentFile()}>
+            <Icon name="search" />
           </button>
           <span class="toolbar-path" title={browsingArchive() ? [currentFile(), ...archiveChain(), archiveEntry()].filter(Boolean).join(' › ') : undefined}>{toolbarPathLabel()}</span>
           <Show when={activeTab()?.kind === 'file'}>
@@ -540,10 +531,7 @@ export function App() {
               title={t('preview.close')}
               aria-label={t('preview.close')}
             >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                stroke-width="1.75" stroke-linecap="round" aria-hidden="true">
-                <path d="M6 6l12 12M18 6 6 18" />
-              </svg>
+              <Icon name="close" />
             </button>
           </Show>
           <Show when={canPreviewMarkdown() || canPreviewTable()}>
@@ -553,14 +541,7 @@ export function App() {
               title={canPreviewTable() ? (showTablePreview() ? t('preview.showSource') : t('preview.showTable')) : (showMarkdownPreview() ? t('markdown.showSource') : t('markdown.showPreview'))}
               aria-label={canPreviewTable() ? (showTablePreview() ? t('preview.showSource') : t('preview.showTable')) : (showMarkdownPreview() ? t('markdown.showSource') : t('markdown.showPreview'))}
             >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <Show when={showRenderedDocument()} fallback={
-                  <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></>
-                }>
-                  <path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18" />
-                </Show>
-              </svg>
+              <Icon name={showRenderedDocument() ? 'code' : 'eye'} />
             </button>
           </Show>
           <Show when={browsingArchive() || activeDatabase()?.archive}><ArchiveOptions /></Show>
@@ -577,10 +558,7 @@ export function App() {
           <button class="icon-btn file-download" onClick={() => void handleDownload()}
             disabled={!downloadPath() || preparingDownload() || (browsingArchive() ? !!(archiveEntry() || archiveChain().length) && archiveBusy(currentFile()!) : !!currentFile() && !showImagePreview() && !currentPreview() && docLoadedPath() !== currentFile())}
             title={t('download.file')} aria-label={t('download.file')} aria-busy={preparingDownload()}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-              stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M12 3v12m-5-5 5 5 5-5M4 16v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4" />
-            </svg>
+            <Icon name="download" />
           </button>
           <button
             class={`icon-btn ${!activeDatabase() && !documentReadOnly() && !isBinaryImage(documentPath()) && !currentPreview() ? 'active' : ''}`}
@@ -593,8 +571,9 @@ export function App() {
               pushState();
             }}
             title={browsingArchive() ? t('archive.readonly') : roMode() ? t('switchEdit') : t('switchReadonly')}
+            aria-label={browsingArchive() ? t('archive.readonly') : roMode() ? t('switchEdit') : t('switchReadonly')}
           >
-            ✎
+            <Icon name="edit" />
           </button>
         </Show>
       </header>
@@ -646,7 +625,7 @@ export function App() {
             title={t('complete')}
             aria-label={t('complete')}
           >
-            ⌘
+            <Icon name="sparkles" />
           </button>
         </Show>
         <Show when={activeKind() === 'terminal'}>
@@ -710,15 +689,15 @@ export function App() {
                   onClick={() => selectPanel(v.id)}
                   title={v.title()}
                 >
-                  {v.icon}
+                  <Icon name={v.icon} />
                 </button>
               )}
             </For>
-            <button class="view-tab" onClick={() => void handleNewTerminal()} title={t('newTerminal')}>
-              ➕
+            <button class="view-tab" onClick={() => void handleNewTerminal()} title={t('newTerminal')} aria-label={t('newTerminal')}>
+              <Icon name="terminal-plus" />
             </button>
-            <button class="view-tab" onClick={() => void openGit()} title={t('view.git')}>
-              🕘
+            <button class="view-tab" onClick={() => void openGit()} title={t('view.git')} aria-label={t('view.git')}>
+              <Icon name="git-branch" />
             </button>
             <button
               class="view-tab"
@@ -726,7 +705,7 @@ export function App() {
               title={t('system.info')}
               aria-label={t('system.info')}
             >
-              ⓘ
+              <Icon name="info" />
             </button>
           </nav>
           <div class="drawer-content">

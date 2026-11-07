@@ -1,6 +1,7 @@
 import { batch, createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from 'solid-js';
 import type { ImagePosition } from '../preview-state.ts';
 import { t } from '../i18n.ts';
+import { Icon } from './icons.tsx';
 import './image-preview.css';
 
 type Point = { x: number; y: number };
@@ -141,17 +142,17 @@ export function ImagePreview(props: { path: string; url: string; position?: Imag
     <section class="image-preview" aria-label={t('image.preview')}>
       <div class="image-preview-toolbar" role="toolbar" aria-label={t('image.zoomControls')}>
         <button class="icon-btn" disabled={status() !== 'loaded' || scale() <= minScale()} onClick={() => zoomTo(scale() / STEP)} title={t('image.zoomOut')} aria-label={t('image.zoomOut')}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M5 12h14" /></svg>
+          <Icon name="zoom-out" />
         </button>
         <output class="image-preview-scale" aria-label={t('image.zoomLevel', { level: zoomLevel() })}>{zoomLevel()}</output>
         <button class="icon-btn" disabled={status() !== 'loaded' || scale() >= MAX_SCALE} onClick={() => zoomTo(scale() * STEP)} title={t('image.zoomIn')} aria-label={t('image.zoomIn')}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M5 12h14M12 5v14" /></svg>
+          <Icon name="zoom-in" />
         </button>
         <button class="icon-btn" disabled={status() !== 'loaded'} onClick={() => zoomTo(1)} title={t('image.actualSize')} aria-label={t('image.actualSize')}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M9 9h6v6H9z" /></svg>
+          <Icon name="actual-size" />
         </button>
         <button class="icon-btn" classList={{ active: fit() }} disabled={status() !== 'loaded'} onClick={fitWindow} title={t('image.fit')} aria-label={t('image.fit')} aria-pressed={fit()}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="1" /><path d="m8 9 4 6 4-6" /></svg>
+          <Icon name="fit" />
         </button>
       </div>
       <div class="image-preview-viewport" ref={viewport} tabIndex={0} aria-label={t('image.preview')}

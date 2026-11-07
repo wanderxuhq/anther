@@ -5,6 +5,7 @@ import { createEffect, createSignal, For, Show, onCleanup } from 'solid-js';
 import { api, type GitChange, type GitStatus } from '../api.ts';
 import { openGitDiff, gitRefreshTick } from '../stores.ts';
 import { t } from '../i18n.ts';
+import { Icon } from '../components/icons.tsx';
 import { canCommit, changeBadge, stagedChanges, statusClass, unstagedChanges } from './git-model.ts';
 
 type SyncAction = 'fetch' | 'pull' | 'push';
@@ -131,8 +132,8 @@ export function GitView() {
             </Show>
             <Show when={(status()?.ahead ?? 0) > 0 || (status()?.behind ?? 0) > 0}>
               <span class="git-sync-count" title={t('git.aheadBehind', { ahead: status()!.ahead, behind: status()!.behind })}>
-                <Show when={status()!.ahead > 0}>{`↑${status()!.ahead}`}</Show>
-                <Show when={status()!.behind > 0}>{`↓${status()!.behind}`}</Show>
+                <Show when={status()!.ahead > 0}><span class="git-sync-item"><Icon name="sort-asc" size={12} />{status()!.ahead}</span></Show>
+                <Show when={status()!.behind > 0}><span class="git-sync-item"><Icon name="sort-desc" size={12} />{status()!.behind}</span></Show>
               </span>
             </Show>
           </div>
@@ -204,11 +205,11 @@ export function GitView() {
                     <span class={`git-status git-status-${statusClass(changeBadge(change, true))}`}>{changeBadge(change, true)}</span>
                   </button>
                   <button class="git-row-btn" title={t('git.unstage')} aria-label={`${t('git.unstage')} ${change.path}`}
-                    disabled={!!busy()} onClick={() => void mutate('unstage', [change.path])}>－</button>
+                    disabled={!!busy()} onClick={() => void mutate('unstage', [change.path])}><Icon name="minus" size={18} /></button>
                   <button class={`git-row-btn ${discardPath() === change.path ? 'danger' : ''}`}
                     title={discardPath() === change.path ? t('git.confirmDiscard') : t('git.discard')}
                     aria-label={t('git.discard')} disabled={!!busy()} onClick={() => onDiscard(change)}>
-                    {discardPath() === change.path ? '!' : '↺'}
+                    <Icon name={discardPath() === change.path ? 'alert' : 'undo'} size={18} />
                   </button>
                 </li>
               )}
@@ -234,11 +235,11 @@ export function GitView() {
                     <span class={`git-status git-status-${statusClass(changeBadge(change, false))}`}>{changeBadge(change, false)}</span>
                   </button>
                   <button class="git-row-btn" title={t('git.stage')} aria-label={`${t('git.stage')} ${change.path}`}
-                    disabled={!!busy()} onClick={() => void mutate('stage', [change.path])}>＋</button>
+                    disabled={!!busy()} onClick={() => void mutate('stage', [change.path])}><Icon name="plus" size={18} /></button>
                   <button class={`git-row-btn ${discardPath() === change.path ? 'danger' : ''}`}
                     title={discardPath() === change.path ? t('git.confirmDiscard') : t('git.discard')}
                     aria-label={t('git.discard')} disabled={!!busy()} onClick={() => onDiscard(change)}>
-                    {discardPath() === change.path ? '!' : '↺'}
+                    <Icon name={discardPath() === change.path ? 'alert' : 'undo'} size={18} />
                   </button>
                 </li>
               )}
