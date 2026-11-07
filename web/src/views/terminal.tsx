@@ -76,7 +76,6 @@ export function TerminalView(props: { id: string }) {
   let resizeObserver: ResizeObserver | undefined;
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;
   let renderFrame: number | undefined;
-  let statusTimer: ReturnType<typeof setTimeout> | undefined;
   let composing = false;
   let skipInput = false;
   let lastCols = 0;
@@ -101,7 +100,6 @@ export function TerminalView(props: { id: string }) {
   let lastCursorAbs = -1;
 
   const [ctrlArmed, setCtrlArmed] = createSignal(false);
-  const [status, setStatus] = createSignal<string | null>(null);
   const [cwd, setCwd] = createSignal('');
   const [tick, setTick] = createSignal(0);
 
@@ -549,7 +547,6 @@ export function TerminalView(props: { id: string }) {
       renderFrame = undefined;
       clearTimeout(resizeTimer);
       resizeTimer = undefined;
-      clearTimeout(statusTimer);
       resizeObserver?.disconnect();
       resizeObserver = undefined;
       sock.dispose();
@@ -744,11 +741,8 @@ export function TerminalView(props: { id: string }) {
         const located = await api.terminals.resolve(path, cwdPath(screen?.getCwd() || '') || undefined);
         if (located.kind === 'file') await openPreviewTab(located.path, line ? { start: line, end: line } : null);
         else await revealDirectory(located.path);
-        setStatus(null);
       } catch {
-        setStatus(t('terminal.fileNotFound', { path }));
-        clearTimeout(statusTimer);
-        statusTimer = setTimeout(() => setStatus(null), 3000);
+        // 路径识别是启发式的：文件不存在时静默忽略，不弹提示、不做任何事。
       }
     })();
   };
@@ -772,9 +766,6 @@ export function TerminalView(props: { id: string }) {
         </div>
         <Show when={cwd()}>
           <span class="terminal-cwd" title={`${t('terminal.cwd')}: ${cwd()}`}>{cwd()}</span>
-        </Show>
-        <Show when={status()}>
-          <span class="terminal-status" role="status">{status()}</span>
         </Show>
       </div>
 
