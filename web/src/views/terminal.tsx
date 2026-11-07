@@ -12,8 +12,8 @@ import { fontScale, openPreviewTab, removeTerminalTab, theme } from '../stores.t
 import { t } from '../i18n.ts';
 import { CONTROL_LETTERS, TERMINAL_KEYS, controlChar, keySequence } from '../terminal-keys.ts';
 import { setTerminalRenderMode, terminalRenderMode } from '../terminal/settings.ts';
-import { classifyMarkdownRows, type MarkdownBlock } from '../terminal/markdown-blocks.ts';
-import { renderRow, rowClass, rowText } from '../terminal/render.ts';
+import { classifyMarkdownRows, joinWrappedRows, type MarkdownBlock } from '../terminal/markdown-blocks.ts';
+import { renderRow, rowClass, rowRawText, rowText } from '../terminal/render.ts';
 import { keyToSequence, pasteInput } from '../terminal/input.ts';
 import { revealDirectory } from './filetree.tsx';
 
@@ -274,11 +274,11 @@ export function TerminalView(props: { id: string }) {
       const absolute = start + index;
       if (forceAll) {
         // 全量重建只缓存文本；单元格在渲染循环里按行读取，避免同时持有整屏对象。
-        textCache[absolute] = rowText(s.getRowAbsolute(absolute));
+        textCache[absolute] = rowRawText(s.getRowAbsolute(absolute));
       } else if (textCache[absolute] === undefined || dirtyRows.has(absolute)) {
         const line = s.getRowAbsolute(absolute);
         freshCells.set(absolute, line);
-        textCache[absolute] = rowText(line);
+        textCache[absolute] = rowRawText(line);
       }
     }
 
@@ -286,12 +286,31 @@ export function TerminalView(props: { id: string }) {
     for (let absolute = start; absolute < end; absolute++) texts.push(textCache[absolute] ?? '');
     const blocks = classifyMarkdownRows(texts);
 
-    // 表格会跨多行渲染成一张表；只要表格碰到活动输入区（光标所在行及之后），
-    // 就整组退回普通单元格渲染，避免光标/输入行被表格吞掉。
+    // 终端自动换行会把一条 Markdown 表格行拆成多个终端行。按服务端的 wrapped
+    // 标记拼回逻辑行，只在逻辑行上识别表格，避免表格在换行处被截断。
+    const { texts: logicalTexts, starts: logicalStart } = joinWrappedRows(
+      texts,
+      (index) => s.isRowAbsoluteWrapped(start + index),
+    );
+
+    // 逻辑表格块 → 终端行范围。首行渲染整张表，其余行（含自动换行续行）隐藏。
+    const tableRowBlocks = new Array<MarkdownBlock | undefined>(count);
+    for (const block of classifyMarkdownRows(logicalTexts)) {
+      if (block.kind !== 'table' || block.role !== 'start') continue;
+      const first = logicalStart[block.start];
+      const tableEnd = block.end < logicalStart.length ? logicalStart[block.end] : count;
+      for (let index = first; index < tableEnd; index++) {
+        tableRowBlocks[index] = index === first
+          ? { kind: 'table', role: 'start', source: block.source, start: first, end: tableEnd }
+          : { kind: 'table', role: 'body', start: first, end: tableEnd };
+      }
+    }
+
+    // 表格碰到活动输入区（光标所在行及之后）时整组退回普通单元格渲染。
     const tableDisabled = new Array<boolean>(count).fill(false);
     if (mode === 'html') {
-      for (const block of blocks) {
-        if (block.kind !== 'table' || block.role !== 'start') continue;
+      for (const block of tableRowBlocks) {
+        if (!block || block.kind !== 'table' || block.role !== 'start') continue;
         if (alt || cursorAbs < start + block.end) {
           for (let row = block.start; row < block.end; row++) tableDisabled[row] = true;
         }
@@ -302,7 +321,7 @@ export function TerminalView(props: { id: string }) {
       const absolute = start + index;
       const active = alt || absolute >= cursorAbs;
       const markdown = mode === 'html' && !active && !tableDisabled[index];
-      const block: MarkdownBlock = markdown ? blocks[index] : { kind: 'normal' };
+      const block: MarkdownBlock = markdown ? (tableRowBlocks[index] ?? blocks[index]) : { kind: 'normal' };
       const cursorInfo = absolute === cursorAbs && cursorVisible
         ? { col: cursor.col, visible: true, shape: cursorShape, blinking: cursorBlinking }
         : undefined;

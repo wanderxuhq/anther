@@ -34,6 +34,8 @@ export class RemoteTerminalScreen {
   private total = 24;
   private scrollback = 0;
   private lines = new Map<number, ScreenCell[]>();
+  /** 自动换行续行的保留行编号。 */
+  private wrapped = new Set<number>();
   private cursor: Cursor = { col: 0, row: 0 };
   private cursorVisible = true;
   private cursorShape: CursorShape = 'block';
@@ -52,6 +54,7 @@ export class RemoteTerminalScreen {
     this.total = 24;
     this.scrollback = 0;
     this.lines = new Map();
+    this.wrapped = new Set();
     this.cursor = { col: 0, row: 0 };
     this.cursorVisible = true;
     this.cursorShape = 'block';
@@ -71,8 +74,11 @@ export class RemoteTerminalScreen {
     this.total = snapshot.total;
     this.scrollback = snapshot.scrollback;
     this.lines = new Map();
+    this.wrapped = new Set();
     for (let index = 0; index < snapshot.lines.length; index++) {
-      this.lines.set(index, deserializeRow(snapshot.lines[index], snapshot.styles, snapshot.cols));
+      const line = snapshot.lines[index];
+      this.lines.set(index, deserializeRow(line, snapshot.styles, snapshot.cols));
+      if (line.wrapped) this.wrapped.add(index);
     }
     this.applyMeta(snapshot);
     this.dirtyRows = 'all';
@@ -90,6 +96,12 @@ export class RemoteTerminalScreen {
         if (next >= 0) shifted.set(next, line);
       }
       this.lines = shifted;
+      const shiftedWrapped = new Set<number>();
+      for (const index of this.wrapped) {
+        const next = index - delta;
+        if (next >= 0) shiftedWrapped.add(next);
+      }
+      this.wrapped = shiftedWrapped;
     }
 
     this.cols = diff.cols;
@@ -99,11 +111,16 @@ export class RemoteTerminalScreen {
     this.scrollback = diff.scrollback;
     for (const line of diff.lines) {
       this.lines.set(line.row, deserializeRow(line, diff.styles, diff.cols));
+      if (line.wrapped) this.wrapped.add(line.row);
+      else this.wrapped.delete(line.row);
       this.markDirty(line.row);
     }
     // 尺寸收缩/回滚截断后，清掉窗口外的行，避免 getRowAbsolute 读到旧内容。
     for (const index of this.lines.keys()) {
       if (index >= diff.total) this.lines.delete(index);
+    }
+    for (const index of [...this.wrapped]) {
+      if (index >= diff.total) this.wrapped.delete(index);
     }
     this.applyMeta(diff);
     this.dirtyCursor = true;
@@ -146,6 +163,10 @@ export class RemoteTerminalScreen {
 
   getRowAbsolute(row: number): ScreenCell[] {
     return this.lines.get(row) ?? this.emptyRow();
+  }
+
+  isRowAbsoluteWrapped(row: number): boolean {
+    return this.wrapped.has(row);
   }
 
   getRow(row: number): ScreenCell[] {

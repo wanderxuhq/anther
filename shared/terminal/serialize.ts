@@ -23,7 +23,11 @@ export type SerializedStyle = {
   url: string | null;
 };
 
-export type SerializedRow = { runs: Array<[number, string]> };
+export type SerializedRow = {
+  runs: Array<[number, string]>;
+  /** 该行是上一行自动换行产生的续行；浏览器据此拼回逻辑行再识别表格。 */
+  wrapped?: boolean;
+};
 
 export type ScreenModes = {
   altScreen: boolean;
@@ -157,9 +161,10 @@ function serializeRow(
   cells: readonly ScreenCell[],
   styles: SerializedStyle[],
   styleIndex: Map<string, number>,
+  trimEnd = true,
 ): SerializedRow {
   const runs: Array<[number, string]> = [];
-  const end = rowEnd(cells);
+  const end = trimEnd ? rowEnd(cells) : cells.length;
   for (let index = 0; index < end; index++) {
     const cell = cells[index];
     if (cell.char === '') continue; // 宽字符占位格，浏览器按字素宽度重建
@@ -237,7 +242,13 @@ function serializeRows(
   const lines: SerializedDiffRow[] = [];
   for (const row of indices) {
     if (row < 0 || row >= screen.totalRows()) continue;
-    lines.push({ row, ...serializeRow(screen.getRowAbsolute(row), styles, styleIndex) });
+    // 下一行是自动换行续行时，保留本行末尾空格，浏览器拼回逻辑行才不会丢空格。
+    const nextWrapped = row + 1 < screen.totalRows() && screen.isRowAbsoluteWrapped(row + 1);
+    lines.push({
+      row,
+      ...serializeRow(screen.getRowAbsolute(row), styles, styleIndex, !nextWrapped),
+      wrapped: screen.isRowAbsoluteWrapped(row),
+    });
   }
   return { styles, lines };
 }
@@ -250,7 +261,11 @@ export function serializeScreen(screen: TerminalScreen): ScreenSnapshot {
   const lines: SerializedRow[] = [];
   // getRowAbsolute 用 0 起的“保留行”编号；first 只是回滚截断计数器。
   for (let row = 0; row < total; row++) {
-    lines.push(serializeRow(screen.getRowAbsolute(row), styles, styleIndex));
+    const nextWrapped = row + 1 < total && screen.isRowAbsoluteWrapped(row + 1);
+    lines.push({
+      ...serializeRow(screen.getRowAbsolute(row), styles, styleIndex, !nextWrapped),
+      wrapped: screen.isRowAbsoluteWrapped(row),
+    });
   }
   return { ...metaOf(screen), lines, styles };
 }

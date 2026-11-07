@@ -199,6 +199,17 @@ test('滚动区内的插入/删除行', () => {
   assert.equal(text(s.getRow(4)), '5');
 });
 
+test('自动换行标记：续行 wrapped，显式换行不标记', () => {
+  const s = screen(5, 4);
+  s.process('abcdef');
+  assert.equal(text(s.getRow(0)), 'abcde');
+  assert.equal(text(s.getRow(1)), 'f');
+  assert.equal(s.isRowWrapped(0), false);
+  assert.equal(s.isRowWrapped(1), true);
+  s.process('\r\nxyz');
+  assert.equal(s.isRowWrapped(2), false);
+});
+
 test('split grapheme across chunks：组合字符与 ZWJ', () => {
   const s = screen();
   s.process('e');

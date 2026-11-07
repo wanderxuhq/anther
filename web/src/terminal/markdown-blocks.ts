@@ -115,3 +115,24 @@ export function classifyMarkdownRows(rows: readonly string[]): MarkdownBlock[] {
 export function isMarkdownBlock(block: MarkdownBlock): boolean {
   return block.kind !== 'normal';
 }
+
+/**
+ * 按自动换行标记把终端行拼回逻辑行。返回每个逻辑行的起始终端行号，
+ * 供表格块映射回要隐藏的终端行范围。
+ */
+export function joinWrappedRows(
+  rows: readonly string[],
+  wrapped: (index: number) => boolean,
+): { texts: string[]; starts: number[] } {
+  const texts: string[] = [];
+  const starts: number[] = [];
+  for (let index = 0; index < rows.length; index++) {
+    if (index > 0 && wrapped(index) && texts.length > 0) {
+      texts[texts.length - 1] += rows[index];
+    } else {
+      starts.push(index);
+      texts.push(rows[index]);
+    }
+  }
+  return { texts, starts };
+}

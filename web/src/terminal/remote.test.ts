@@ -30,6 +30,15 @@ test('applySnapshot：恢复全部行、光标和模式', () => {
   assert.equal(remote.getMode('altScreen'), false);
 });
 
+test('applySnapshot：保留自动换行续行标记', () => {
+  const server = createTerminalScreen({ cols: 5, rows: 3, scrollbackLimit: 10 });
+  server.process('abcdef');
+  const remote = new RemoteTerminalScreen();
+  remote.applySnapshot(serializeScreen(server));
+  assert.equal(remote.isRowAbsoluteWrapped(0), false);
+  assert.equal(remote.isRowAbsoluteWrapped(1), true);
+});
+
 test('applyDiff：只更新脏行并推进光标', () => {
   const server = createTerminalScreen({ cols: 10, rows: 3, scrollbackLimit: 10 });
   server.process('one\r\ntwo\r\nthree');

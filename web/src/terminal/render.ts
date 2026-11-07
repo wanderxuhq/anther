@@ -311,3 +311,10 @@ export function rowText(cells: readonly ScreenCell[]): string {
   }
   return text;
 }
+
+/** 保留末尾空白的纯文本：自动换行续行拼接时不能丢掉换行边界上的空格。 */
+export function rowRawText(cells: readonly ScreenCell[]): string {
+  let text = '';
+  for (const cell of cells) if (cell.char !== '') text += cell.char;
+  return text;
+}

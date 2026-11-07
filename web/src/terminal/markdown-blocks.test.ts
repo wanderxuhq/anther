@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyMarkdownRows } from './markdown-blocks.ts';
+import { classifyMarkdownRows, joinWrappedRows } from './markdown-blocks.ts';
 
 test('classifyMarkdownRows：标题/列表/引用/分隔线', () => {
   const blocks = classifyMarkdownRows(['# Title', 'plain', '- item', '> quote', '---']);
@@ -34,6 +34,15 @@ test('classifyMarkdownRows：标题最多 6 级，缩进列表保留前缀', () 
     { kind: 'list', prefix: '  - ', text: 'nested' },
     { kind: 'list', prefix: '1. ', text: 'first' },
   ]);
+});
+
+test('joinWrappedRows：按自动换行标记拼回逻辑行', () => {
+  const { texts, starts } = joinWrappedRows(
+    ['| A | B |', '| --- |', '| 1 | 2 |', 'tail', 'more'],
+    (index) => index === 1 || index === 4,
+  );
+  assert.deepEqual(texts, ['| A | B || --- |', '| 1 | 2 |', 'tailmore']);
+  assert.deepEqual(starts, [0, 2, 3]);
 });
 
 test('classifyMarkdownRows：GFM 表格跨行，首行带完整 source', () => {

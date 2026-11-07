@@ -257,6 +257,8 @@ export class TerminalScreen {
   private pendingText = '';
   private pendingJoin = false;
   private state: ParserState = { kind: 'ground' };
+  /** 由自动换行产生的续行（内容属于上一条逻辑行）。用行数组对象做键，随滚动/裁剪自然移动。 */
+  private wrappedRows = new WeakSet<ScreenCell[]>();
   private dirtyRows: Set<number> | 'all' = 'all';
   private dirtyCursor = true;
   private scrolled = 0;
@@ -298,6 +300,17 @@ export class TerminalScreen {
     if (row < 0 || row >= this.totalRows()) return this.emptyRow;
     if (row < this.scrollback.length) return this.scrollback[row];
     return this.buffer[row - this.scrollback.length] ?? this.emptyRow;
+  }
+
+  /** 该屏幕行是否是上一行自动换行产生的续行。 */
+  isRowWrapped(row: number): boolean {
+    const line = this.buffer[row];
+    return !!line && this.wrappedRows.has(line);
+  }
+
+  /** 保留行编号版本（含回滚区），供序列化使用。 */
+  isRowAbsoluteWrapped(row: number): boolean {
+    return this.wrappedRows.has(this.getRowAbsolute(row));
   }
 
   getText(): string {
@@ -887,10 +900,10 @@ export class TerminalScreen {
     if (width === 0) { this.appendToPrevious(grapheme); return; }
     if (this.pendingWrap && this.autoWrap) {
       this.carriageReturn();
-      this.lineFeed();
+      this.lineFeed(true);
     }
     if (width === 2 && this.cursor.col >= this.cols - 1) {
-      if (this.autoWrap) { this.carriageReturn(); this.lineFeed(); }
+      if (this.autoWrap) { this.carriageReturn(); this.lineFeed(true); }
       else this.cursor.col = this.cols - 1;
     }
     const row = this.cursor.row;
@@ -943,9 +956,14 @@ export class TerminalScreen {
     this.markCursor();
   }
 
-  private lineFeed(): void {
+  private lineFeed(wrap = false): void {
     if (this.cursor.row === this.scrollBottom) this.scrollUp(1);
     else this.cursor.row = Math.min(this.cursor.row + 1, this.buffer.length - 1);
+    const line = this.buffer[this.cursor.row];
+    if (line) {
+      if (wrap) this.wrappedRows.add(line);
+      else this.wrappedRows.delete(line);
+    }
     this.pendingWrap = false;
     this.markCursor();
   }
