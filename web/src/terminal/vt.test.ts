@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createTerminalScreen, type ScreenCell } from './vt.ts';
+import { createTerminalScreen, type ScreenCell } from '../../../shared/terminal/vt.ts';
 
 function text(cells: readonly ScreenCell[]): string {
   return cells.map((cell) => cell.char).join('').replace(/ +$/, '');

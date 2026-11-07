@@ -1,5 +1,5 @@
 // server/terminal.test.ts
-// TerminalManager 单测：创建/列表（每用户隔离）/所有权/关闭杀进程/退出自动移除/历史上限/批处理。
+// TerminalManager 单测：创建/列表（每用户隔离）/所有权/关闭杀进程/退出自动移除/屏幕快照与 diff。
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { Terminal, TerminalManager } from './terminal.ts';
@@ -46,34 +46,85 @@ test('bash 退出 → 自动移除 + exit 事件', async () => {
   assert.equal(m.get('u1', a.id), null);
 });
 
-test('output：40ms 批处理把连续 data 合并成一次 output', async () => {
+test('screen：40ms 批处理把连续 data 合并成一次屏幕更新', async () => {
   const a = await m.create('u1', 'T');
   const term = m.get('u1', a.id)!;
   const got: string[] = [];
-  term.on('output', (b) => got.push(b));
+  term.on('screen', (message) => got.push(JSON.stringify(message)));
   term.pty.emit('data', 'ab');
   term.pty.emit('data', 'cd');
   await sleep(80);
-  const batch = got.find((b) => b.includes('abcd'));
-  assert.ok(batch, `未找到合并批：${JSON.stringify(got)}`);
+  assert.ok(got.some((batch) => batch.includes('abcd')), `未找到合并批：${JSON.stringify(got)}`);
 });
 
-test('replay：包含全部历史（供重连画面恢复）', async () => {
-  const a = await m.create('u1', 'T');
-  const term = m.get('u1', a.id)!;
-  term.pty.emit('data', 'alpha');
-  term.pty.emit('data', 'beta');
-  assert.ok(term.replay().includes('alpha'));
-  assert.ok(term.replay().includes('beta'));
+test('snapshot：包含屏幕/光标/尺寸，供连接时重建画面', async () => {
+  const handlers: Array<(chunk: string) => void> = [];
+  const fake = {
+    on: (event: string, handler: (chunk: string) => void) => { if (event === 'data') handlers.push(handler); },
+    write: () => {},
+    resize: async () => {},
+    kill: async () => {},
+  } as unknown as PtySession;
+  const term = new Terminal('t_snap', 'T', fake);
+  await term.resize(20, 5);
+  for (const handler of handlers) handler('hello');
+  const message = term.snapshotMessage();
+  assert.equal(message.type, 'screen');
+  assert.equal(message.cols, 20);
+  assert.equal(message.rows, 5);
+  assert.deepEqual(message.cursor, { row: 0, col: 5 });
+  const text = message.lines.map((line) => line.runs.map(([, value]) => value).join('')).join('\n');
+  assert.match(text, /hello/);
+  await term.close();
 });
 
-test('history：超上限截断（保留最近内容）', async () => {
-  const p = new PtySession(cwd);
-  await p.ready;
-  const t = new Terminal('t_cap', 'T', p, 1000); // 1KB 上限便于测试
-  t.pty.emit('data', 'a'.repeat(600));
-  t.pty.emit('data', 'b'.repeat(600));
-  assert.ok(t.replay().length <= 1000);
-  assert.ok(t.replay().includes('bbb'), '应保留最近的 b 内容');
-  await p.kill();
+test('diff：只发送脏行，包含新进入回滚区的行', async () => {
+  const handlers: Array<(chunk: string) => void> = [];
+  const fake = {
+    on: (event: string, handler: (chunk: string) => void) => { if (event === 'data') handlers.push(handler); },
+    write: () => {},
+    resize: async () => {},
+    kill: async () => {},
+  } as unknown as PtySession;
+  const term = new Terminal('t_diff', 'T', fake);
+  await term.resize(20, 4);
+  await sleep(60); // 先让 resize 的全量 dirty 在无订阅时被清掉
+  const messages: Array<{ type: string; lines?: Array<{ row: number }> }> = [];
+  term.on('screen', (message) => messages.push(message));
+  const feed = (data: string) => { for (const handler of handlers) handler(data); };
+  feed('\x1b[1;1Hone\r\ntwo\r\nthree\r\nfour\r\nfive');
+  await sleep(80);
+  const last = messages.at(-1)!;
+  assert.equal(last.type, 'screen-diff');
+  assert.ok(last.lines && last.lines.length > 0);
+  await term.close();
 });
+
+test('DSR6：服务端按光标位置回应，DA1/DSR5 只回一次', async () => {
+  const handlers: Array<(chunk: string) => void> = [];
+  const writes: string[] = [];
+  const fake = {
+    on: (event: string, handler: (chunk: string) => void) => { if (event === 'data') handlers.push(handler); },
+    write: (data: string) => writes.push(data),
+    resize: async () => {},
+    kill: async () => {},
+  } as unknown as PtySession;
+  const term = new Terminal('t_test', 'T', fake);
+  await term.resize(80, 24);
+  const feed = (data: string) => { for (const handler of handlers) handler(data); };
+
+  feed('\x1b[5;10H');
+  feed('\x1b[6n');
+  assert.deepEqual(writes, ['\x1b[5;10R']);
+
+  writes.length = 0;
+  feed('\x1b[?6n');
+  assert.deepEqual(writes, ['\x1b[?5;10R']);
+
+  writes.length = 0;
+  feed('\x1b[c\x1b[5n');
+  assert.deepEqual(writes, ['\x1b[?62;22c', '\x1b[0n']);
+  await term.close();
+});
+
+

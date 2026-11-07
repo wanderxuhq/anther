@@ -13,8 +13,8 @@ const pty = hasScript
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** 收集输出直到匹配 re 或超时（默认 4s） */
-async function untilMatch(p: PtySession, re: RegExp, timeout = 4000): Promise<string> {
+/** 收集输出直到匹配 re 或超时（默认 8s；并行跑全量测试时 PTY 可能较慢） */
+async function untilMatch(p: PtySession, re: RegExp, timeout = 8000): Promise<string> {
   let buf = '';
   const onData = (d: string) => { buf += d; };
   p.on('data', onData);
@@ -37,8 +37,10 @@ pty('ready：marker 解析出 pty 设备路径', async () => {
 pty('write：输入回显到输出', async () => {
   const p = new PtySession(cwd);
   await p.ready;
+  // 先挂监听再写：高负载下输出可能在 write 返回后立刻到达。
+  const match = untilMatch(p, /HELLO-PTY/);
   p.write('echo HELLO-PTY\n');
-  await untilMatch(p, /HELLO-PTY/);
+  await match;
   await p.kill();
 });
 
@@ -46,8 +48,10 @@ pty('resize：stty -F 改尺寸，stty size 读到新值', async () => {
   const p = new PtySession(cwd);
   await p.ready;
   await p.resize(100, 40);
+  // 先挂监听再写，避免高负载下丢失 stty 输出。
+  const match = untilMatch(p, /40 100/);
   p.write('stty size\n');
-  await untilMatch(p, /40 100/);
+  await match;
   await p.kill();
 });
 

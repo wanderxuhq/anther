@@ -8,7 +8,7 @@
 // - DSR 5（终端状态）
 // - OSC 10/11/12（前景/背景/光标色，颜色由浏览器 meta 同步）
 // - CSI 14/16/18/19 t（像素/单元格/窗口/屏幕尺寸）
-// DSR 6（光标位置）需要屏幕状态，暂不回应，避免回错位置。
+// DSR 6（光标位置）需要屏幕状态，由 Terminal 里的服务端 TerminalScreen 跟踪器回应。
 
 export type RGB = { r: number; g: number; b: number };
 

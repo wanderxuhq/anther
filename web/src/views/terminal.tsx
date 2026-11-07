@@ -1,11 +1,12 @@
 // web/src/views/terminal.tsx
-// HTML 终端：terminal/vt.ts 负责解析 VT 序列/维护屏幕缓冲区，渲染完全由本组件控制。
-// 同一份缓冲区可切换两种渲染：
+// HTML 终端：服务端是唯一的终端模拟器（方案 B），浏览器只消费快照/脏行 diff。
+// 同一份屏幕缓存可切换两种渲染：
 //   html（默认）— 路径可点、Markdown 可视化、长行自动换行
 //   text        — 经典等宽纯文字（保留 ANSI 颜色，不做链接/Markdown）
-// 切换只重绘，不重置 PTY、屏幕缓冲区或输入状态。
+// 切换只重绘，不重置 PTY、屏幕缓存或输入状态。
 import { createEffect, createSignal, For, on, onCleanup, Show } from 'solid-js';
-import { createTerminalScreen, type TerminalScreen as Screen, type ScreenCell } from '../terminal/vt.ts';
+import { DEFAULT_SCROLLBACK, type ScreenCell } from '../../../shared/terminal/vt.ts';
+import { RemoteTerminalScreen } from '../terminal/remote.ts';
 import { api, connectTerminal, type TerminalSocket } from '../api.ts';
 import { fontScale, openPreviewTab, removeTerminalTab, theme } from '../stores.ts';
 import { t } from '../i18n.ts';
@@ -16,7 +17,7 @@ import { renderRow, rowClass, rowText } from '../terminal/render.ts';
 import { keyToSequence, pasteInput } from '../terminal/input.ts';
 import { revealDirectory } from './filetree.tsx';
 
-const MAX_SCROLLBACK_ROWS = 2000;
+const MAX_SCROLLBACK_ROWS = DEFAULT_SCROLLBACK;
 const FONT_SCALE_TO_PX = 0.14;
 
 function blockKey(block: MarkdownBlock): string {
@@ -59,7 +60,7 @@ export function TerminalView(props: { id: string }) {
   let rowsEl: HTMLDivElement | undefined;
   let measureEl: HTMLSpanElement | undefined;
   let inputEl: HTMLTextAreaElement | undefined;
-  let screen: Screen | undefined;
+  let screen: RemoteTerminalScreen | undefined;
   let socket: TerminalSocket | undefined;
   let send: ((data: string) => void) | undefined;
   let focusInput: (() => void) | undefined;
@@ -147,7 +148,7 @@ export function TerminalView(props: { id: string }) {
     if (cols !== lastCols || rows !== lastRows) {
       lastCols = cols;
       lastRows = rows;
-      screen.resize(cols, rows);
+      // 浏览器不再本地 resize：服务端是唯一模拟器，resize 后由服务端 diff 带回新尺寸。
       socket?.resize(cols, rows);
     }
 
@@ -332,17 +333,14 @@ export function TerminalView(props: { id: string }) {
     lastMode = terminalRenderMode();
     lastAlt = false;
 
-    const s = createTerminalScreen({
-      cols: 80,
-      rows: 24,
-      scrollbackLimit: MAX_SCROLLBACK_ROWS,
-    });
+    const s = new RemoteTerminalScreen();
     screen = s;
 
     const sock = connectTerminal(id, {
-      // 首次/重连：清空本地缓冲区，等服务端历史重放重建画面（进程与信号不中断）。
+      // 首次/重连：清空本地缓存，等服务端快照重建画面（进程与信号不中断）。
       onOpen: () => { s.reset(); resetRendered(); scheduleRender(); lastMeta = ''; sendMeta(); },
-      onOutput: (data) => { s.process(data); setTick((value) => value + 1); },
+      onScreen: (snapshot) => { s.applySnapshot(snapshot); setTick((value) => value + 1); },
+      onScreenDiff: (diff) => { s.applyDiff(diff); setTick((value) => value + 1); },
       onExit: () => removeTerminalTab(id),
     });
     socket = sock;

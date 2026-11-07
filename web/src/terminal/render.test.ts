@@ -1,7 +1,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
-import { createTerminalScreen, type ScreenCell } from './vt.ts';
+import { createTerminalScreen, type ScreenCell } from '../../../shared/terminal/vt.ts';
 
 const dom = new JSDOM('');
 Object.assign(globalThis, { window: dom.window });

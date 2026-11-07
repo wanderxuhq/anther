@@ -87,20 +87,20 @@ test('close 自己 → 200 且移出列表', async () => {
     (await (await call('GET', '/api/terminals', undefined, 'u1')).json()).terminals.length === 0);
 });
 
-test('WS 集成：历史重放 → input echo → ping/pong → exit', async () => {
+test('WS 集成：屏幕快照 → input echo diff → ping/pong → exit', async () => {
   const info = await createTerminal('u1');
   const ws = new WebSocket(`ws://127.0.0.1:${port}/api/terminal?term=${info.id}&user=u1`);
-  const frames: Array<{ type: string; data?: string }> = [];
+  const frames: Array<{ type: string }> = [];
   const opened = new Promise<void>((r) => ws.on('open', r));
   ws.on('message', (d) => frames.push(JSON.parse(d.toString())));
   await opened;
-  await waitFor(() => frames.some((f) => f.type === 'output')); // 首帧 = 历史重放
+  await waitFor(() => frames.some((f) => f.type === 'screen'), 10000); // 首帧 = 完整屏幕快照
   ws.send(JSON.stringify({ type: 'input', data: 'echo WS-HI\n' }));
-  await waitFor(() => frames.some((f) => f.type === 'output' && f.data?.includes('WS-HI')));
+  await waitFor(() => frames.some((f) => f.type === 'screen-diff' && JSON.stringify(f).includes('WS-HI')), 10000);
   ws.send(JSON.stringify({ type: 'ping' }));
-  await waitFor(() => frames.some((f) => f.type === 'pong'));
+  await waitFor(() => frames.some((f) => f.type === 'pong'), 10000);
   ws.send(JSON.stringify({ type: 'input', data: 'exit\n' }));
-  await waitFor(() => frames.some((f) => f.type === 'exit'));
+  await waitFor(() => frames.some((f) => f.type === 'exit'), 10000);
   ws.close();
 });
 

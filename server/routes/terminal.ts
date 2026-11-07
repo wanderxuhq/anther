@@ -5,7 +5,7 @@
 // 参数，与既有 PUT /api/tabs/close {path} 同风格）。
 import type { HttpServer } from '../http.ts';
 import { HttpError } from '../http-error.ts';
-import type { TerminalManager } from '../terminal.ts';
+import type { TerminalManager, TerminalScreenMessage } from '../terminal.ts';
 import type { FileStore } from '../files.ts';
 import type { RGB, TerminalQueryMeta } from '../terminal-queries.ts';
 import { WebSocket } from 'ws';
@@ -65,13 +65,13 @@ export function registerTerminalRoutes(http: HttpServer, terminals: TerminalMana
     const term = id ? terminals.get(user, id) : null;
     if (!term) { ws.close(WS_FORBIDDEN, 'terminal not found'); return; }
 
-    // 先发历史重放（方案 B：xterm 重新执行转义序列恢复画面，不干扰 vim/Claude Code）；
-    // 再订阅实时 output。WS 有序保证不串帧；订阅间隙丢的批次都在 history 里，重放已覆盖。
-    ws.send(JSON.stringify({ type: 'output', data: term.replay() }));
-    const onData = (batch: string) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'output', data: batch }));
+    // 方案 B：服务端是唯一模拟器。连接时先发完整屏幕快照（含回滚区），
+    // 之后只发脏行 diff；浏览器不再解析 ANSI，也不会有两份光标状态。
+    ws.send(JSON.stringify(term.snapshotMessage()));
+    const onScreen = (message: TerminalScreenMessage) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
     };
-    term.on('output', onData);
+    term.on('screen', onScreen);
 
     const onExit = (code: number) => {
       if (ws.readyState === WebSocket.OPEN) {
@@ -82,7 +82,7 @@ export function registerTerminalRoutes(http: HttpServer, terminals: TerminalMana
     term.on('exit', onExit);
 
     ws.on('close', () => {
-      term.off('output', onData);
+      term.off('screen', onScreen);
       term.off('exit', onExit);
     });
 

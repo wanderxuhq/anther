@@ -1,7 +1,7 @@
-// web/src/terminal/vt.ts
+// shared/terminal/vt.ts
 // 自研 VT/ANSI 解析器 + 屏幕缓冲区。只负责“终端状态”，不碰 DOM：
 // 解析 CSI/OSC/ESC、维护主/备用屏幕、滚动区、光标、SGR、宽字符、超链接、
-// 脏行追踪，供 terminal.tsx 的 HTML/纯文字渲染器消费。
+// 脏行追踪。方案 B 中由服务端运行（唯一模拟器），浏览器只消费序列化后的行。
 //
 // 设计取舍：
 // - 输入是已解码的字符串（服务端用 StringDecoder 保证 UTF-8 完整）。
@@ -86,7 +86,7 @@ type ParserState =
   | { kind: 'skip' };
 
 const MAX_STRING_SEQUENCE = 1024 * 1024;
-const DEFAULT_SCROLLBACK = 2000;
+export const DEFAULT_SCROLLBACK = 2000;
 
 const ANSI_16: RGB[] = [
   { r: 0, g: 0, b: 0 }, { r: 128, g: 0, b: 0 }, { r: 0, g: 128, b: 0 }, { r: 128, g: 128, b: 0 },
@@ -150,7 +150,7 @@ type SegmenterCtor = new (locale?: string, options?: { granularity: 'grapheme' }
 const Segmenter = (Intl as unknown as { Segmenter?: SegmenterCtor }).Segmenter;
 const graphemeSegmenter = Segmenter ? new Segmenter(undefined, { granularity: 'grapheme' }) : null;
 
-function splitGraphemes(text: string): string[] {
+export function splitGraphemes(text: string): string[] {
   if (graphemeSegmenter) return [...graphemeSegmenter.segment(text)].map((part) => part.segment);
   return Array.from(text);
 }
@@ -165,7 +165,7 @@ function isCombining(cp: number): boolean {
   return /\p{Mark}/u.test(String.fromCodePoint(cp));
 }
 
-function graphemeWidth(grapheme: string): number {
+export function graphemeWidth(grapheme: string): number {
   if (!grapheme) return 0;
   const cp = grapheme.codePointAt(0)!;
   if (cp === 0x200d || (cp >= 0xfe00 && cp <= 0xfe0f) || isCombining(cp)) return 0;

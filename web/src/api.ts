@@ -1,4 +1,6 @@
 // web/src/api.ts
+import type { ScreenDiff, ScreenSnapshot } from '../../shared/terminal/serialize.ts';
+
 const USER_KEY = 'anther:userId';
 const TABS_KEY = 'anther:tabsSnapshot';
 
@@ -245,9 +247,12 @@ export type TerminalInfo = { id: string; name: string };
 export type LocatedPath = { path: string; kind: 'file' | 'dir' };
 
 export type TerminalHandlers = {
-  /** 每次 WS 打开（含重连）：前端清屏，等服务端历史重放重建画面 */
+  /** 每次 WS 打开（含重连）：前端清屏，等服务端快照重建画面 */
   onOpen: () => void;
-  onOutput: (data: string) => void;
+  /** 服务端完整屏幕（连接/重连时）。 */
+  onScreen: (snapshot: ScreenSnapshot) => void;
+  /** 服务端脏行 diff（之后每次输出/尺寸变化）。 */
+  onScreenDiff: (diff: ScreenDiff) => void;
   /** 终端进程退出 / id 失效（4404）→ 前端移除标签 */
   onExit: (code: number) => void;
 };
@@ -288,28 +293,34 @@ export function connectTerminal(id: string, handlers: TerminalHandlers, urlOverr
     const frame = JSON.stringify(obj);
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(frame);
     else if (ws && ws.readyState === WebSocket.CONNECTING) pending.push(frame);
-    // CLOSED/null → 丢弃：重连后历史重放覆盖
+    // CLOSED/null → 丢弃：重连后服务端快照覆盖
   };
 
   const open = () => {
     if (disposed || dead) return;
     const socket = new WebSocket(urlOverride ?? `/api/terminal?term=${encodeURIComponent(id)}&user=${encodeURIComponent(user)}`);
     ws = socket;
-    // 重连后旧 socket 仍可能投递已排队的消息；只认当前 socket，避免把历史重放
-    // 处理两次（表现为本地多出一行重复提示符）。
+    // 重连后旧 socket 仍可能投递已排队的消息；只认当前 socket，避免把服务端
+    // 快照/diff 处理两次（表现为本地多出一行重复提示符）。
     socket.onopen = () => {
       if (socket !== ws) return;
       attempt = 0;
       const q = pending; pending = [];   // 先 flush 排队的 resize/input
       for (const f of q) socket.send(f);
-      handlers.onOpen();                 // 再清屏等服务端历史重放
+      handlers.onOpen();                 // 再清屏等服务端快照
     };
     socket.onmessage = (e) => {
       if (socket !== ws) return;
-      let msg: { type?: string; data?: string; code?: number };
+      let msg: { type?: string; code?: number };
       try { msg = JSON.parse(String(e.data)); } catch { return; }
-      if (msg.type === 'output' && typeof msg.data === 'string') handlers.onOutput(msg.data);
-      else if (msg.type === 'exit') { dead = true; handlers.onExit(typeof msg.code === 'number' ? msg.code : 0); }
+      if (msg.type === 'screen') {
+        handlers.onScreen(msg as unknown as ScreenSnapshot);
+      } else if (msg.type === 'screen-diff') {
+        handlers.onScreenDiff(msg as unknown as ScreenDiff);
+      } else if (msg.type === 'exit') {
+        dead = true;
+        handlers.onExit(typeof msg.code === 'number' ? msg.code : 0);
+      }
     };
     socket.onclose = (e) => {
       if (socket !== ws) return;

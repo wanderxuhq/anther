@@ -7,10 +7,10 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "types": ["node"],
-    "outDir": "dist/server",
-    "rootDir": "server",
+    "outDir": "dist",
+    "rootDir": ".",
     "allowImportingTsExtensions": true,
     "rewriteRelativeImportExtensions": true
   },
-  "include": ["server"]
+  "include": ["server", "shared"]
 }

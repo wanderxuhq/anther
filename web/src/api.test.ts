@@ -170,7 +170,7 @@ test('connectTerminal：CONNECTING 期间 input/resize 不抛，open 后帧送�
   try {
     const sock = connectTerminal(
       't1',
-      { onOpen: () => {}, onOutput: () => {}, onExit: () => {} },
+      { onOpen: () => {}, onScreen: () => {}, onScreenDiff: () => {}, onExit: () => {} },
       `ws://127.0.0.1:${port}/api/terminal?term=t1&user=u`, // URL 覆盖（node 不能建相对 URL）
     );
     // 同步立即发：当前代码 readyState=0 → 抛 DOMException → doesNotThrow 红
@@ -183,6 +183,39 @@ test('connectTerminal：CONNECTING 期间 input/resize 不抛，open 后帧送�
     assert.equal(frames[1]?.type, 'resize');
     assert.equal(frames[1]?.cols, 120);
     assert.equal(frames[1]?.rows, 40);
+    sock.dispose();
+  } finally {
+    wss.close();
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test('connectTerminal：screen / screen-diff 帧分发给对应 handler', async () => {
+  const server = createServer();
+  const wss = new WebSocketServer({ server });
+  wss.on('connection', (s) => {
+    s.send(JSON.stringify({ type: 'screen', cols: 80, rows: 24 }));
+    s.send(JSON.stringify({ type: 'screen-diff', cols: 90, rows: 30 }));
+  });
+  await new Promise<void>((r) => server.listen(0, r));
+  const { port } = server.address() as { port: number };
+
+  try {
+    const screens: Array<{ cols: number }> = [];
+    const diffs: Array<{ cols: number }> = [];
+    const sock = connectTerminal(
+      't1',
+      {
+        onOpen: () => {},
+        onScreen: (snapshot) => screens.push(snapshot),
+        onScreenDiff: (diff) => diffs.push(diff),
+        onExit: () => {},
+      },
+      `ws://127.0.0.1:${port}/api/terminal?term=t1&user=u`,
+    );
+    await new Promise<void>((r) => setTimeout(r, 150));
+    assert.equal(screens[0]?.cols, 80);
+    assert.equal(diffs[0]?.cols, 90);
     sock.dispose();
   } finally {
     wss.close();
