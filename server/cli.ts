@@ -8,10 +8,12 @@ import { createWorkspace, registerWorkspaceRoutes } from './workspace.ts';
 import { MountRegistry, canonicalDir, isSameWorkspace } from './mounts.ts';
 import { ATTACH_PATH, DETACH_PATH, registerAttachRoute, registerDetachRoute } from './routes/attach.ts';
 import { registerIdentifyRoutes } from './routes/identify.ts';
+import { registerListenRoute } from './routes/listen.ts';
 import type { AppIdentity } from './app-info.ts';
 import type { AttachInfo, MountWire } from './mount-types.ts';
+import { isLoopbackHost, isValidHost, isWildcardHost } from './host.ts';
 
-export type CliArgs = { dir: string; port: number; attach: boolean; detach: boolean };
+export type CliArgs = { dir: string; port: number; host: string; attach: boolean; detach: boolean };
 
 /**
  * 静态目录解析：源码形态（server/cli.ts）→ <root>/web；编译产物（dist/server/cli.js）
@@ -25,6 +27,7 @@ export function staticDirFor(moduleUrl: string): string {
 export function parseArgs(argv: string[]): CliArgs {
   let dir = process.cwd();
   let port = 3000;
+  let host = '127.0.0.1';
   let attach = true;
   let detach = false;
   const positional: string[] = [];
@@ -36,6 +39,13 @@ export function parseArgs(argv: string[]): CliArgs {
       port = Number(raw);
       continue;
     }
+    if (a === '--lan') { host = '0.0.0.0'; continue; }
+    if (a === '--host') {
+      const raw = argv[++i];
+      if (!isValidHost(raw)) throw new Error('invalid --host');
+      host = raw;
+      continue;
+    }
     if (a === '--no-attach') { attach = false; continue; }
     if (a === '--attach') { attach = true; continue; }
     if (a === '--detach') { detach = true; continue; }
@@ -44,7 +54,7 @@ export function parseArgs(argv: string[]): CliArgs {
   }
   if (positional.length > 1) throw new Error('too many arguments');
   if (positional.length === 1) dir = path.resolve(positional[0]);
-  return { dir, port, attach, detach };
+  return { dir, port, host, attach, detach };
 }
 
 /** 第一个 IPv4 局域网地址；取不到（无网络接口 / 沙箱受限）返回 null。供启动日志打印手机访问地址。 */
@@ -87,7 +97,7 @@ function mountPath(mount: MountWire): string {
   return `${mount.shorthand ?? mount.base}/`;
 }
 
-function printMount(port: number, mount: MountWire, label: string): void {
+function printMount(port: number, mount: MountWire, label: string, host: string): void {
   const pathname = mountPath(mount);
   console.log(`${label}: http://localhost:${port}${pathname}`);
   if (mount.legacyRoot) {
@@ -99,7 +109,9 @@ function printMount(port: number, mount: MountWire, label: string): void {
     if (canonical !== `http://localhost:${port}${pathname}`) console.log(`Canonical: ${canonical}`);
   }
   const lan = lanIPv4();
-  if (lan) console.log(`LAN access: http://${lan}:${port}${pathname}`);
+  if (lan && (isWildcardHost(host) || host === lan)) {
+    console.log(`LAN access: http://${lan}:${port}${pathname}`);
+  }
 }
 
 /** 端口被占用：确认是 anther、可附加后，走主端口的 loopback-only POST；同目录复用不新建。 */
@@ -123,7 +135,7 @@ async function handlePortConflict(args: CliArgs, dir: string): Promise<number> {
   const existing = identity.mounts?.find((mount) => isSameWorkspace(mount.workspace, workspace));
   if (existing) {
     console.log('Already served by an existing anther instance; not creating another mount.');
-    printMount(args.port, existing, 'Existing URL');
+    printMount(args.port, existing, 'Existing URL', args.host);
     return 0;
   }
   if (!identity.attach.available) {
@@ -157,7 +169,7 @@ async function handlePortConflict(args: CliArgs, dir: string): Promise<number> {
 
   console.log(`Attached to existing anther at http://localhost:${args.port}`);
   console.log(`Workspace: ${workspace}`);
-  printMount(args.port, response.mount, 'URL');
+  printMount(args.port, response.mount, 'URL', args.host);
   return 0;
 }
 
@@ -220,6 +232,7 @@ export async function main(argv: string[]): Promise<void> {
   registerIdentifyRoutes(http, dir, registry.providers());
   registerAttachRoute(http, registry, () => attachState.available);
   registerDetachRoute(http, registry);
+  registerListenRoute(http, () => http.listenInfo(), (host) => http.rebind(host));
   await registry.addHost(dir, hostWorkspace, hostRouter);
 
   const shutdown = () => {
@@ -232,7 +245,7 @@ export async function main(argv: string[]): Promise<void> {
   process.on('SIGINT', shutdown);
 
   try {
-    await http.listen(args.port, '0.0.0.0');
+    await http.listen(args.port, args.host);
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw e;
     try { await http.close(); } catch { /* attach flow should still continue */ }
@@ -242,11 +255,17 @@ export async function main(argv: string[]): Promise<void> {
 
   const actualPort = (http.address() as AddressInfo).port;
   console.log(`anther started: http://localhost:${actualPort}`);
+  const scope = isWildcardHost(args.host)
+    ? ' (all interfaces)'
+    : isLoopbackHost(args.host) ? ' (local only)' : '';
+  console.log(`Listen: ${args.host}:${actualPort}${scope}`);
   const lan = lanIPv4();
-  if (lan) console.log(`LAN access: http://${lan}:${actualPort}`);
+  if (lan && (isWildcardHost(args.host) || args.host === lan)) {
+    console.log(`LAN access: http://${lan}:${actualPort}`);
+  }
   console.log(`Root directory: ${dir}`);
   const hostMount = registry.listWire().find((mount) => mount.legacyRoot);
-  if (hostMount) printMount(actualPort, hostMount, 'Mount');
+  if (hostMount) printMount(actualPort, hostMount, 'Mount', args.host);
   console.log(`Attach: ${attachState.available ? 'enabled' : 'disabled'}`);
 }
 

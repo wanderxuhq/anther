@@ -6,7 +6,7 @@ import type { JSX } from 'solid-js';
 export type IconName =
   | 'menu' | 'search' | 'close' | 'plus' | 'minus' | 'more'
   | 'chevron-right' | 'chevron-down' | 'chevron-left'
-  | 'refresh' | 'info' | 'sparkles' | 'edit' | 'eye' | 'code'
+  | 'refresh' | 'info' | 'locate' | 'sparkles' | 'edit' | 'eye' | 'code'
   | 'download' | 'check' | 'alert' | 'undo' | 'lock'
   | 'terminal' | 'terminal-plus' | 'files' | 'file' | 'tabs' | 'instances' | 'keyboard'
   | 'git-branch' | 'git-changes' | 'git-history' | 'commit' | 'diff'
@@ -30,6 +30,12 @@ const icons: Record<IconName, IconPath> = {
   'chevron-left': () => <path d="m15 6-6 6 6 6" />,
   refresh: () => <><path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4v7h-7" /></>,
   info: () => <><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></>,
+  // 十字准星（参考 JetBrains「Scroll from Source」）：在文件树中定位并高亮当前文件
+  locate: () => <>
+    <circle cx="12" cy="12" r="6.5" />
+    <path d="M12 2v3.5M12 18.5V22M2 12h3.5M18.5 12H22" />
+    <circle cx="12" cy="12" r="1.25" fill="currentColor" stroke="none" />
+  </>,
   sparkles: () => <>
     <path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3Z" />
     <path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15Z" />

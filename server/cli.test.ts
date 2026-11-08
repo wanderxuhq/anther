@@ -7,10 +7,11 @@ import { parseArgs, staticDirFor, lanIPv4 } from './cli.ts';
 // 测试文件在 <root>/server/，项目根 = 上一级
 const rootDir = path.dirname(fileURLToPath(import.meta.url)) + '/..';
 
-test('默认：当前目录、端口 3000', () => {
+test('默认：当前目录、端口 3000、仅监听本机', () => {
   const a = parseArgs([]);
   assert.equal(a.dir, process.cwd());
   assert.equal(a.port, 3000);
+  assert.equal(a.host, '127.0.0.1');
   assert.equal(a.detach, false);
 });
 
@@ -19,6 +20,25 @@ test('解析目录、端口', () => {
   assert.equal(a.dir, '/tmp/foo');
   assert.equal(a.port, 8080);
   assert.equal(a.attach, true);
+});
+
+test('--lan 监听所有网卡，--host 可覆盖', () => {
+  assert.equal(parseArgs(['--lan']).host, '0.0.0.0');
+  assert.equal(parseArgs(['--lan', '--host', '127.0.0.1']).host, '127.0.0.1');
+  assert.equal(parseArgs(['--host', '127.0.0.1', '--lan']).host, '0.0.0.0');
+});
+
+test('--host 覆盖监听地址（IPv4 / IPv6 / 主机名）', () => {
+  assert.equal(parseArgs(['--host', '127.0.0.1']).host, '127.0.0.1');
+  assert.equal(parseArgs(['--host', '::']).host, '::');
+  assert.equal(parseArgs(['--host', '::1']).host, '::1');
+  assert.equal(parseArgs(['--host', 'localhost']).host, 'localhost');
+});
+
+test('--host 缺值或非法报错', () => {
+  assert.throws(() => parseArgs(['--host']), /invalid --host/);
+  assert.throws(() => parseArgs(['--host', '--port', '1']), /invalid --host/);
+  assert.throws(() => parseArgs(['--host', 'http://example.com']), /invalid --host/);
 });
 
 test('--no-attach 关闭附加，--attach 恢复默认', () => {

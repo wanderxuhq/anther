@@ -109,6 +109,39 @@ test('HEAD 请求：静态服务与 GET 同头但不含 body（curl -I、链接�
   assert.equal(await res.text(), '');
 });
 
+test('rebind：运行中切换监听地址，已有 WS 不断，新旧连接都可用', async () => {
+  const port = (server.address() as { port: number }).port;
+  const open = (url: string) => new Promise<WebSocket>((resolve, reject) => {
+    const ws = new WebSocket(url);
+    ws.once('open', () => resolve(ws));
+    ws.once('error', reject);
+  });
+  const echo = (ws: WebSocket, msg: string) => new Promise<string>((resolve, reject) => {
+    ws.once('message', (d) => resolve(d.toString()));
+    ws.once('error', reject);
+    ws.send(msg);
+  });
+
+  const before = await open(`ws://127.0.0.1:${port}/api/echo`);
+  assert.equal(await echo(before, 'before'), 'before');
+
+  assert.deepEqual(await server.rebind('0.0.0.0'), { host: '0.0.0.0', port });
+  assert.deepEqual(server.listenInfo(), { host: '0.0.0.0', port });
+  assert.equal(await echo(before, 'after-lan'), 'after-lan'); // 旧连接不受影响
+  assert.equal((await call('GET', '/api/list?path=.')).status, 200);
+
+  const after = await open(`ws://127.0.0.1:${port}/api/echo`); // 新 listener 接受新 WS
+  assert.equal(await echo(after, 'new-lan'), 'new-lan');
+
+  assert.deepEqual(await server.rebind('127.0.0.1'), { host: '127.0.0.1', port });
+  assert.deepEqual(server.listenInfo(), { host: '127.0.0.1', port });
+  assert.equal(await echo(before, 'after-local'), 'after-local');
+  assert.equal(await echo(after, 'new-local'), 'new-local');
+
+  before.close();
+  after.close();
+});
+
 test('ws 路由：echo 往返', async () => {
   const port = (server.address() as { port: number }).port;
   const ws = new WebSocket(`ws://127.0.0.1:${port}/api/echo`);

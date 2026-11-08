@@ -102,6 +102,8 @@ export type AntherIdentity = {
   mounts?: MountInfo[];
 };
 
+export type ListenInfo = { host: string; port: number; mode: 'local' | 'lan' };
+
 export type SystemInfo = {
   hostname: string;
   addresses: { interface: string; address: string; family: 'IPv4' | 'IPv6'; internal: boolean }[];
@@ -145,6 +147,8 @@ export const api = {
   rename: (path: string, to: string) => request('POST', '/api/rename', { path, to }),
   del: (path: string) => request('POST', '/api/delete', { path }),
   system: () => request<SystemInfo>('GET', '/api/system'),
+  listen: () => request<ListenInfo>('GET', '/api/anther/listen'),
+  setListen: (host: string) => request<ListenInfo>('POST', '/api/anther/listen', { host }),
   anther: () => request<AntherIdentity>('GET', '/api/anther'),
   detach: (workspace: string) => request<{ detached: MountInfo | null }>('POST', '/api/anther/detach', { workspace }),
   tabs: {

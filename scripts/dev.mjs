@@ -12,6 +12,18 @@ const backendArgs = process.argv.slice(2);
 if (!backendArgs.includes('--no-attach')) backendArgs.push('--no-attach');
 const frontendArgs = ['node_modules/vite/bin/vite.js', '--config', 'web/vite.config.ts'];
 
+// 前端默认也只听本机；--lan / --host 与后端保持一致（按参数出现顺序，后者覆盖前者）。
+let viteHost = null;
+for (let i = 0; i < backendArgs.length; i++) {
+  if (backendArgs[i] === '--lan') viteHost = '0.0.0.0';
+  else if (backendArgs[i] === '--host') {
+    const value = backendArgs[i + 1];
+    if (value && !value.startsWith('-')) viteHost = value;
+    i++;
+  }
+}
+if (viteHost) frontendArgs.push('--host', viteHost);
+
 const children = [];
 let shuttingDown = false;
 

@@ -21,11 +21,11 @@ export default defineConfig({
   worker: { format: 'es' },
   optimizeDeps: { exclude: ['@sqlite.org/sqlite-wasm'], include: ['@zip.js/zip.js', 'pdfjs-dist', 'pdfjs-dist/web/pdf_viewer.mjs'] },
   server: {
-    host: true, // 监听所有网卡：手机/其他主机通过 IP 访问（vite 默认只绑 localhost）
+    host: '127.0.0.1', // 默认仅本机；用 --host 0.0.0.0（或 npm run dev -- --lan）开放给局域网
     port: 5173,
     // ws: true 让 Vite 把 WebSocket upgrade（终端、LSP）转发到后端。
     proxy: {
-      '/api': { target: 'http://localhost:3000', ws: true },
+      '/api': { target: 'http://127.0.0.1:3000', ws: true },
     },
   },
   build: {

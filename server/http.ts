@@ -1,6 +1,7 @@
 // server/http.ts
-import { createServer, IncomingMessage, ServerResponse } from 'node:http';
+import { createServer, IncomingMessage, ServerResponse, type Server } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import type { Duplex } from 'node:stream';
 import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { HttpError } from './http-error.ts';
@@ -126,7 +127,11 @@ function injectBase(html: string, base: string): string {
 
 export class HttpServer extends Router {
   private wss = new WebSocketServer({ noServer: true });
-  private server = createServer((req, res) => void this.handle(req, res));
+  private server: Server;
+  /** 运行中热切换会保留旧监听 server 直到其连接自然结束，关闭时一并收尾。 */
+  private servers = new Set<Server>();
+  private listenHost = '';
+  private rebinding = false;
   private staticDir: string;
   private mounts = new Map<string, Router>();
   private bases: string[] = [];
@@ -139,6 +144,7 @@ export class HttpServer extends Router {
     super();
     this.staticDir = opts.staticDir;
     this.mount('', this);
+    this.server = this.createServer();
 
     // async 守卫：handler 是 void|Promise<void>，.catch 无法直接挂（void 无 .catch）；
     // 用 async 回调 + try/catch，与 SSE 路径（await + catch 写错误）同款。
@@ -156,26 +162,35 @@ export class HttpServer extends Router {
         ws.close();
       }
     });
-
-    this.server.on('upgrade', (req, socket, head) => {
-      const resolved = this.resolve(req.url ?? '/');
-      if (resolved.reserved) {
-        socket.destroy();
-        return;
-      }
-      const candidates = resolved.base === '' && this.rootWorkspace && this.rootWorkspace !== resolved.router
-        ? [resolved.router, this.rootWorkspace]
-        : [resolved.router];
-      const router = candidates.find((candidate) => candidate.wsHandler(resolved.restPath));
-      if (!router) {
-        socket.destroy();
-        return;
-      }
-      requestRouters.set(req, router);
-      req.url = resolved.restUrl;
-      this.wss.handleUpgrade(req, socket, head, (ws) => this.wss.emit('connection', ws, req));
-    });
   }
+
+  /** 每个监听 server 复用同一套请求/升级处理；热切换时替换的是 server，不是路由。 */
+  private createServer(): Server {
+    const server = createServer((req, res) => void this.handle(req, res));
+    server.on('upgrade', this.handleUpgrade);
+    server.on('close', () => this.servers.delete(server));
+    this.servers.add(server);
+    return server;
+  }
+
+  private handleUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    const resolved = this.resolve(req.url ?? '/');
+    if (resolved.reserved) {
+      socket.destroy();
+      return;
+    }
+    const candidates = resolved.base === '' && this.rootWorkspace && this.rootWorkspace !== resolved.router
+      ? [resolved.router, this.rootWorkspace]
+      : [resolved.router];
+    const router = candidates.find((candidate) => candidate.wsHandler(resolved.restPath));
+    if (!router) {
+      socket.destroy();
+      return;
+    }
+    requestRouters.set(req, router);
+    req.url = resolved.restUrl;
+    this.wss.handleUpgrade(req, socket, head, (ws) => this.wss.emit('connection', ws, req));
+  };
 
   /** 把一个 Router 挂到一个或多个 URL 前缀；'' 表示宿主根路径。 */
   mount(bases: string | string[], router: Router) {
@@ -217,30 +232,95 @@ export class HttpServer extends Router {
     this.bases = [...this.mounts.keys()].filter(Boolean).sort((a, b) => b.length - a.length);
   }
 
-  async listen(port: number, host: string) {
+  private listenOn(server: Server, port: number, host: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const onError = (e: Error) => {
-        this.server.off('listening', onListening);
+        server.off('listening', onListening);
         reject(e);
       };
       const onListening = () => {
-        this.server.off('error', onError);
+        server.off('error', onError);
         resolve();
       };
-      this.server.once('error', onError);
-      this.server.once('listening', onListening);
-      this.server.listen(port, host);
+      server.once('error', onError);
+      server.once('listening', onListening);
+      server.listen(port, host);
     });
+  }
+
+  /** 同一端口热切换时，旧监听 socket 释放有极短延迟；对 EADDRINUSE 做短暂重试。 */
+  private async listenWithRetry(server: Server, port: number, host: string): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.listenOn(server, port, host);
+        return;
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'EADDRINUSE' || attempt >= 100) throw e;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+  }
+
+  async listen(port: number, host: string) {
+    await this.listenOn(this.server, port, host);
+    this.listenHost = host;
+  }
+
+  listenInfo(): { host: string; port: number } | null {
+    const address = this.server.address();
+    if (!address || typeof address === 'string') return null;
+    return { host: this.listenHost, port: address.port };
+  }
+
+  /**
+   * 运行中热切换监听地址：只替换监听 socket，不关闭 wss，也不 dispose 路由，
+   * 因此已建立的终端/LSP WebSocket 会继续工作。绑定失败时尽力回滚到原地址。
+   */
+  async rebind(host: string): Promise<{ host: string; port: number }> {
+    if (this.rebinding) throw new Error('rebind already in progress');
+    this.rebinding = true;
+    try {
+      const address = this.server.address();
+      if (!address || typeof address === 'string') throw new Error('server is not listening');
+      const port = address.port;
+      const previousHost = this.listenHost;
+      if (host === previousHost) return { host, port };
+      const next = this.createServer();
+      this.server.close(); // 停止接受新连接；已有 HTTP/WS 连接继续由旧 server 服务
+      try {
+        await this.listenWithRetry(next, port, host);
+      } catch (e) {
+        // 绑定失败：尽力回到原地址，避免服务完全失去监听。
+        this.servers.delete(next);
+        const rollback = this.createServer();
+        try {
+          await this.listenWithRetry(rollback, port, previousHost);
+          this.server = rollback;
+          this.listenHost = previousHost;
+        } catch {
+          this.servers.delete(rollback);
+        }
+        throw e;
+      }
+      this.server = next;
+      this.listenHost = host;
+      return { host, port };
+    } finally {
+      this.rebinding = false;
+    }
   }
 
   async close() {
     for (const c of this.wss.clients) c.close();
     this.wss.close();
-    if (this.server.listening) {
-      await new Promise<void>((resolve, reject) =>
-        this.server.close((e) => (e ? reject(e) : resolve())),
+    const servers = [...this.servers];
+    this.servers.clear();
+    await Promise.all(servers.map((server) => {
+      if (!server.listening) return Promise.resolve();
+      return new Promise<void>((resolve, reject) =>
+        server.close((e) => (e ? reject(e) : resolve())),
       );
-    }
+    }));
     const routers = new Set<Router>([this, ...this.mounts.values()]);
     if (this.rootWorkspace) routers.add(this.rootWorkspace);
     await Promise.all([...routers].map((router) => router.dispose()));

@@ -2,13 +2,16 @@
 // 服务器信息对话框：点击后现取 /api/system，展示主机、硬件、磁盘、运行时长与版本。
 // 可刷新；Esc / 点遮罩 / 关闭按钮退出。
 import { createSignal, For, onCleanup, onMount, Show } from 'solid-js';
-import { api, type SystemInfo } from '../api.ts';
+import { api, type ListenInfo, type SystemInfo } from '../api.ts';
 import { t } from '../i18n.ts';
 import { Icon } from './icons.tsx';
 import { formatBytes, formatLoad, formatUptime, usedBytes } from '../system-info-model.ts';
 
 export function SystemInfoDialog(props: { onClose: () => void }) {
   const [info, setInfo] = createSignal<SystemInfo | null>(null);
+  const [listen, setListen] = createSignal<ListenInfo | null>(null);
+  const [switching, setSwitching] = createSignal(false);
+  const [switchError, setSwitchError] = createSignal<string | null>(null);
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);
   let cancelled = false;
@@ -16,13 +19,33 @@ export function SystemInfoDialog(props: { onClose: () => void }) {
   async function load(): Promise<void> {
     setLoading(true);
     setError(null);
+    setSwitchError(null);
     try {
       const data = await api.system();
       if (!cancelled) setInfo(data);
+      const listenInfo = await api.listen().catch(() => null);
+      if (!cancelled) setListen(listenInfo);
     } catch (e) {
       if (!cancelled) setError((e as Error).message);
     } finally {
       if (!cancelled) setLoading(false);
+    }
+  }
+
+  async function toggleListen(): Promise<void> {
+    const current = listen();
+    if (!current || switching()) return;
+    // 本地 ↔ 局域网：0.0.0.0 同时包含回环，所以切到局域网后本机仍可访问。
+    const target = current.mode === 'lan' ? '127.0.0.1' : '0.0.0.0';
+    setSwitching(true);
+    setSwitchError(null);
+    try {
+      const next = await api.setListen(target);
+      if (!cancelled) setListen(next);
+    } catch (e) {
+      if (!cancelled) setSwitchError((e as Error).message);
+    } finally {
+      if (!cancelled) setSwitching(false);
     }
   }
 
@@ -73,7 +96,34 @@ export function SystemInfoDialog(props: { onClose: () => void }) {
         <Show when={info()}>
           {(data) => (
             <dl class="system-info-list">
-              <div class="system-info-row"><dt>{t('system.address')}</dt><dd>{window.location.origin}</dd></div>
+              <div class="system-info-row">
+                <dt>{t('system.address')}</dt>
+                <dd class="system-info-address-line">
+                  <span>{window.location.origin}</span>
+                  <Show when={listen()}>
+                    {(current) => (
+                      <button
+                        type="button"
+                        class="system-info-listen-btn"
+                        classList={{ 'is-lan': current().mode === 'lan' }}
+                        disabled={switching()}
+                        title={current().mode === 'lan' ? t('system.listen.toLocal') : t('system.listen.toLan')}
+                        aria-label={current().mode === 'lan' ? t('system.listen.toLocal') : t('system.listen.toLan')}
+                        onClick={() => void toggleListen()}
+                      >
+                        {switching()
+                          ? t('system.listen.switching')
+                          : current().mode === 'lan' ? t('system.listen.lan') : t('system.listen.local')}
+                      </button>
+                    )}
+                  </Show>
+                </dd>
+              </div>
+              <Show when={switchError()}>
+                <div class="system-info-switch-error" role="alert">
+                  {t('system.listen.failed', { msg: switchError()! })}
+                </div>
+              </Show>
               <div class="system-info-row system-info-addresses">
                 <dt>{t('system.addresses')}</dt>
                 <dd>

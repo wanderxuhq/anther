@@ -39,6 +39,9 @@ const [upload, setUpload] = createSignal<{ done: number; total: number } | null>
 const uploading = () => upload() !== null;
 /** 拖拽文件悬停的目标路径（'.' 为根），用于高亮可放置位置。 */
 const [dropTarget, setDropTarget] = createSignal<string | null>(null);
+/** 点击「定位当前文件」后短暂高亮的路径（Scroll from Source）。 */
+const [revealPath, setRevealPath] = createSignal<string | null>(null);
+let revealTimer: ReturnType<typeof setTimeout> | undefined;
 
 // ---- 文件管理：菜单 + 命名对话框 + 两击确认删除 ----
 type MenuTarget = { path: string; kind: 'dir' | 'file' | 'root' };
@@ -71,6 +74,48 @@ export async function revealDirectory(path: string): Promise<void> {
   }
 }
 
+/** 当前标签页对应的磁盘文件（文件 / 数据库 / 差异标签）；终端等无路径标签返回 null。 */
+function activeTabPath(): string | null {
+  const tab = activeTab();
+  return tab && 'path' in tab ? tab.path : null;
+}
+
+function flashReveal(path: string): void {
+  clearTimeout(revealTimer);
+  setRevealPath(path);
+  revealTimer = setTimeout(() => setRevealPath(null), 1500);
+}
+
+/** 文件树定位（参考 JetBrains Scroll from Source）：展开祖先目录并滚动高亮当前文件。 */
+async function revealCurrentFile(): Promise<void> {
+  const path = activeTabPath();
+  if (!path) return;
+  setActivePanel('files');
+  setDrawerOpen(true);
+  pushState();
+  setMenu(null);
+  try {
+    await ensureRoot();
+    const parts = path.split('/');
+    parts.pop(); // 只展开祖先目录；文件本身由 TreeNode 渲染
+    let parent = '.';
+    for (const part of parts) {
+      const child = childPath(parent, part);
+      if (!nodes[child]?.loaded) {
+        const { entries } = await api.list(child);
+        setNodes(child, { expanded: true, loaded: entries });
+      } else {
+        setNodes(child, 'expanded', true);
+      }
+      parent = child;
+    }
+    setError(null);
+    flashReveal(path);
+  } catch (e) {
+    setError((e as Error).message);
+  }
+}
+
 async function ensureRoot(): Promise<void> {
   if (nodes['.']?.loaded || nodes['.']?.loading) return;
   setNodes('.', { loading: true });
@@ -97,8 +142,17 @@ function showMenu(target: MenuTarget) {
   setMenu(target);
 }
 
+/** 点击菜单外任意位置关闭（菜单项和触发按钮本身除外）。 */
+function onDocumentPointerDown(e: PointerEvent): void {
+  if (!menu()) return;
+  const target = e.target;
+  if (target instanceof Element && (target.closest('.row-menu') || target.closest('.menu-trigger'))) return;
+  setMenu(null);
+}
+
 // 新建：目录行 → 建在其内；文件行 → 建在其父目录；根 → 根下
 function beginCreate(kind: 'file' | 'dir', target: MenuTarget) {
+  setMenu(null);
   const base = target.kind === 'dir' ? target.path : parentOf(target.path);
   setDialog({
     title: kind === 'file' ? t('filetree.newFile') : t('filetree.newDir'),
@@ -128,6 +182,7 @@ async function doCreate(kind: 'file' | 'dir', base: string, name: string) {
 }
 
 function beginRename(target: MenuTarget) {
+  setMenu(null);
   setDialog({
     title: t('filetree.rename'),
     initial: target.path.split('/').pop() ?? '',
@@ -257,6 +312,11 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
   const expanded = () => state()?.expanded === true;
   const loaded = () => state()?.loaded;
   const loading = () => state()?.loading === true;
+  let rowEl: HTMLDivElement | undefined;
+  // 定位后滚动到当前文件；只由匹配的 TreeNode effect 执行。
+  createEffect(() => {
+    if (revealPath() === props.path && rowEl) rowEl.scrollIntoView({ block: 'nearest' });
+  });
 
   const onToggle = async () => {
     if (state()?.expanded) {
@@ -291,7 +351,8 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
     <div class="tree-node">
       <div
         class={`tree-row ${isCurrent() ? 'active' : ''}`}
-        classList={{ 'drop-target': dropTarget() === props.path }}
+        classList={{ 'drop-target': dropTarget() === props.path, 'reveal-target': revealPath() === props.path }}
+        ref={(el) => (rowEl = el)}
         onClick={onRowClick}
         title={props.path}
         onDragOver={(e) => {
@@ -323,7 +384,7 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
         <span class="tree-name">{props.entry.name}</span>
         <div class="tree-row-actions">
           <button
-            class="icon-btn row-menu-btn"
+            class="icon-btn row-menu-btn menu-trigger"
             title={t('filetree.actions')}
             onClick={(e) => { e.stopPropagation(); showMenu({ path: props.path, kind: isDir ? 'dir' : 'file' }); }}
           ><Icon name="more" size={18} /></button>
@@ -348,7 +409,30 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
         </div>
       </div>
       <Show when={isDir && expanded() && loaded()}>
-        <div class="tree-children">
+        <div
+          class="tree-children"
+          classList={{ 'drop-target': dropTarget() === props.path }}
+          onDragOver={(e) => {
+            if (!isFileDrag(e)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+            setDropTarget(props.path);
+          }}
+          onDragLeave={(e) => {
+            e.stopPropagation();
+            const next = e.relatedTarget;
+            if (next instanceof Node && e.currentTarget.contains(next)) return;
+            if (dropTarget() === props.path) setDropTarget(null);
+          }}
+          onDrop={(e) => {
+            if (!isFileDrag(e)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            setDropTarget(null);
+            void dropUpload(e, props.path);
+          }}
+        >
           <For each={loaded() ?? []}>
             {(child) => (
               <TreeNode path={childPath(props.path, child.name)} entry={child} />
@@ -377,6 +461,9 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
 
 export function FileTreeView() {
   void ensureRoot();
+  document.addEventListener('pointerdown', onDocumentPointerDown, true);
+  onCleanup(() => document.removeEventListener('pointerdown', onDocumentPointerDown, true));
+  onCleanup(() => clearTimeout(revealTimer));
 
   return (
     <div
@@ -411,7 +498,19 @@ export function FileTreeView() {
         <div role="status">{downloadProgressText()}</div>
       </Show>
       <div class="filetree-toolbar">
-        <button class="icon-btn" onClick={() => showMenu({ path: '.', kind: 'root' })}><Icon name="plus" size={16} /> {t('filetree.new')}</button>
+        <button
+          class="icon-btn menu-trigger"
+          title={t('filetree.new')}
+          aria-label={t('filetree.new')}
+          onClick={() => showMenu({ path: '.', kind: 'root' })}
+        ><Icon name="plus" size={16} /></button>
+        <button
+          class="icon-btn"
+          disabled={!activeTabPath()}
+          title={t('filetree.reveal')}
+          aria-label={t('filetree.reveal')}
+          onClick={() => void revealCurrentFile()}
+        ><Icon name="locate" size={16} /></button>
         <Show when={menu()?.kind === 'root'}>
           <div class="row-menu" onClick={(e) => e.stopPropagation()}>
             <button class="menu-item" onClick={() => beginCreate('file', menu()!)}>{t('filetree.newFile')}</button>
