@@ -41,8 +41,8 @@ async function setup() {
 }
 
 async function get(base: string, url: string) {
-  const res = await fetch(base + url);
-  return { status: res.status, text: await res.text() };
+  const res = await fetch(base + url, { redirect: 'manual' });
+  return { status: res.status, text: await res.text(), location: res.headers.get('location') };
 }
 
 async function json(base: string, url: string) {
@@ -100,16 +100,17 @@ test('同目录复用；同名 basename 递增 index；简写始终指向 index 
   }
 });
 
-test('/- 与 /-/ 是实例列表页；未知挂载和旧前端路由 404，新路由走 SPA', async () => {
+test('/- 与 /-/ 是实例列表页；未知挂载导航回列表，/_/ 走 SPA', async () => {
   const f = await setup();
   try {
     assert.equal((await get(f.base, '/-')).status, 200);
     assert.equal((await get(f.base, '/-/')).status, 200);
-    assert.equal((await get(f.base, '/-/nope')).status, 404);
-    assert.equal((await get(f.base, '/-/nope/api/list')).status, 404);
-    assert.equal((await get(f.base, '/-/git')).status, 404);
+    for (const url of ['/-/nope', '/-/nope/api/list', '/-/git', '/-/qlang/-/1']) {
+      const res = await get(f.base, url);
+      assert.equal(res.status, 302, url);
+      assert.equal(res.location, '/-', url);
+    }
     assert.equal((await get(f.base, '/_/git')).status, 200);
-    assert.equal((await get(f.base, '/-/qlang/-/1')).status, 404);
   } finally {
     await f.http.close();
     await rm(f.root, { recursive: true, force: true });
@@ -236,7 +237,9 @@ test('detach：卸载、未挂载返回 null、宿主可卸载并重新挂载复
     assert.equal(detached.status, 200);
     const detachedBody = await detached.json() as { detached: { index: number } | null };
     assert.equal(detachedBody.detached?.index, 0);
-    assert.equal((await get(f.base, '/-/qlang/api/list?path=.')).status, 404);
+    const detachedPage = await get(f.base, '/-/qlang/api/list?path=.');
+    assert.equal(detachedPage.status, 302);
+    assert.equal(detachedPage.location, '/-');
 
     const notMounted = await postDetach(f.qlang);
     assert.equal(notMounted.status, 200);
@@ -267,7 +270,12 @@ test('detach：卸载、未挂载返回 null、宿主可卸载并重新挂载复
     const hostBody = await hostDetach.json() as { detached: { legacyRoot: boolean } | null };
     assert.equal(hostBody.detached?.legacyRoot, true);
     assert.equal((await json(f.base, '/api/list?path=.')).status, 404);
-    assert.equal((await get(f.base, '/')).status, 200);
+    for (const url of ['/', '/foo', '/_/git']) {
+      const res = await get(f.base, url);
+      assert.equal(res.status, 302, url);
+      assert.equal(res.location, '/-', url);
+    }
+    assert.equal((await get(f.base, '/-/')).status, 200);
     assert.equal((await json(f.base, '/api/anther')).status, 200);
 
     // 宿主重新 attach：复用 /、/-/anther、/-/anther/-/0
@@ -277,6 +285,8 @@ test('detach：卸载、未挂载返回 null、宿主可卸载并重新挂载复
     assert.equal(hostBackBody.mount.legacyRoot, true);
     assert.equal(hostBackBody.mount.shorthand, '/-/anther');
     assert.deepEqual(((await json(f.base, '/api/list?path=.')).body.entries as { name: string }[]).map((e) => e.name).sort(), ['host.txt', 'index.html']);
+    assert.equal((await get(f.base, '/')).status, 200);
+    assert.equal((await get(f.base, '/foo')).status, 200);
   } finally {
     await f.http.close();
     await rm(f.root, { recursive: true, force: true });

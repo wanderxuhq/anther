@@ -2,9 +2,11 @@
 
 > English | [中文](README.zh-CN.md)
 
-A mobile-first code viewer and editor for the browser. Manage files, preview documents, use Git, and run multiple terminals in a server workspace from your desktop or phone.
+Mobile-first, browser-based code viewer and editor. Run it in a project directory and open the printed URL.
 
 ## Install / Run
+
+Requires Node.js 22.7+.
 
 ```bash
 # Run directly in the current directory
@@ -18,163 +20,20 @@ npm i -g @wanderxuhq/anther
 anther /path/to/project
 ```
 
-Open `http://localhost:3000` by default. The startup log also shows a LAN address.
+Open `http://localhost:3000` by default. If the port is already served by anther, running `anther` in another directory attaches it to that server; use `--no-attach` to disable attaching, and `anther --detach` to detach. Terminals require POSIX `script`, `stty`, and `bash` (use WSL on Windows).
 
-If the port is already served by anther, running `anther` in another directory attaches that directory to the existing server instead of failing. Use `--no-attach` to force a normal port-conflict error. `npm run dev` runs with `--no-attach` because development mode is not supported for mounts.
-
-Detach the current directory with:
-
-```bash
-anther --detach
-anther /path/to/project --detach --port 8080
-```
-
-If the directory is not attached, it prints `Not attached` and exits successfully.
-
-## Multiple workspaces
-
-The first instance owns the port and keeps its legacy URLs:
-
-- `/path/to/file` is the host workspace.
-- `/-/<name>/...` and `/-/<name>/-/0/...` are the host's mount aliases.
-
-Starting anther in another directory on the same port attaches it:
-
-- first workspace named `qlang`: `/-/qlang/...` and `/-/qlang/-/0/...`
-- second workspace named `qlang`: `/-/qlang/-/1/...`
-
-Shorthands only point to index 0. Indexes are kept in memory and reset when the host exits. Starting in a directory that is already mounted reuses the existing URL and does not create another mount. Attaching uses a loopback-only HTTP request to the existing server; LAN clients cannot call it. Attached workspaces share the host process and its frontend build.
-
-Indexes belong to workspace paths. Detaching a workspace frees its URL but a different directory with the same basename gets the next index; reattaching the same directory reuses its previous index. The host workspace itself can also be detached, leaving `/` without a workspace; reattaching it restores `/` and its mount URLs.
-
-`/-` (also `/-/`) lists the host and every attached workspace. Each entry links to the shortest URL: `/` for the host, `/-/<name>/` for index 0, and `/-/<name>/-/<index>/` otherwise. The instances button at the bottom of the sidebar opens this page. The close button on an entry detaches it: the first click highlights the button, and the second click performs the detach.
-
-## Usage
-
-- Files open read-only. Click the pencil icon in the toolbar to edit.
-- Upload files or whole folders from **New** or a file-list ⋯ menu. Select several files at once, or drag files and folders from your desktop onto the tree; dropping on a folder uploads into it. There are no added size or type restrictions, and existing files are not overwritten.
-- Use the Git toolbar to switch between pending changes, history, and branch management. The changes panel stages and unstages files, discards changes, amends the last commit, and runs fetch/pull/push with ahead/behind status. Pull is fast-forward only.
-- Files, database objects, and terminals share a tab bar, with independent tabs for each. Refreshing reconnects terminals and restores their full screen and scrollback; closing a terminal tab ends its process. The keyboard button in the main toolbar toggles the key bar with Esc, Tab, arrows and Ctrl combinations; it starts open on touch/narrow screens and closed on desktop.
-- The terminal renders as HTML by default: file and directory paths in output are clickable and open the existing file preview (full screen on phones, in the main pane on desktop), and Markdown output (including tables) is rendered with the project's Markdown viewer. Use the eye/code button in the main toolbar to switch to the classic plain-text grid; switching only changes rendering, never the shell session, scrollback, or running process. The panel close button in the top-right returns to the terminal.
-- The terminal box grows with its content and only takes the height it needs; once the content exceeds the available area it keeps a fixed height with a scrollbar.
-- Click ⓘ at the bottom of the drawer for server information: host, all local network addresses, OS, CPU, memory, disk, uptime, Node.js and Anther versions, and the workspace path. The dialog can refresh in place.
-- On desktop, the file list and editor scroll independently.
-
-## Detection API
-
-`GET /api/anther` is an anther-specific endpoint for launchers, probes and integrations:
-
-```json
-{
-  "name": "anther",
-  "package": "@wanderxuhq/anther",
-  "version": "0.1.5",
-  "apiVersion": 1,
-  "workspace": "/path/to/workspace",
-  "instanceId": "0f9c…",
-  "startedAt": 1760000000000,
-  "attach": { "available": true },
-  "mounts": [
-    {
-      "name": "anther",
-      "index": 0,
-      "workspace": "/path/to/workspace",
-      "base": "/-/anther/-/0",
-      "shorthand": "/-/anther",
-      "legacyRoot": true
-    }
-  ]
-}
-```
-
-It returns identity and instance context only, not host or hardware details. A launcher can use `name`/`apiVersion` to recognize anther, and `workspace` to check whether a port that is already in use belongs to the same workspace before reusing that instance. `mounts` lists the host and every attached workspace; `attach.available` reports whether `--no-attach` left attaching disabled.
-
-This endpoint is read-only. Attaching is a loopback-only `POST /api/anther/attach` with `{ "workspace": "/absolute/path" }`; LAN clients cannot call it because the server checks the socket's remote address. `--no-attach` disables the route's effect.
-
-`POST /api/anther/detach` with the same body detaches an instance. It is used by `anther --detach` and by the `/-` page, so it is not restricted to loopback clients. If the workspace is not mounted, it returns `{ "detached": null }`.
-
-## File previews
-
-| Type | Features |
-| --- | --- |
-| Text and code | Syntax highlighting, search, editing |
-| Markdown | Rendered by default in read-only mode; source toggle and relative image paths; heading outline in the file tree |
-| Images | Common browser image formats; zoom, pan, wheel and pinch gestures; SVG source editing |
-| PDF | Continuous scrolling, page jumps, zoom, pinch gestures, text selection; embedded outlines in the file tree and reader toolbar |
-| EPUB | Continuous chapter scrolling, chapter jumps, zoom and pinch gestures; contents in the file tree and reader toolbar |
-| Audio and video | Playback and seeking; format support depends on the browser |
-| CSV / TSV | Table preview, source toggle, editing; preview limited to 1,000 rows and 100 columns |
-| SQLite | Expand tables and views in the file tree; separate data and structure tabs; read-only pagination, sorting, and filtering |
-| ZIP / 7z / RAR / TAR / GZ / BZ2 / XZ | Expand in the file tree, preview or download entries, open nested archives |
-
-Binary files without a supported preview can be downloaded.
-
-EPUB 2/3 reflowable books are read in the browser using the existing ZIP library, including inside archives. Chapters and local images/styles are loaded on demand. DRM and fixed-layout books are not supported; obfuscated fonts use fallback fonts. Book scripts and remote resources are disabled.
-
-SQLite preview runs locally in a browser Worker using official SQLite WASM; the server only transfers the file. Opening a database downloads it into browser memory, and refresh loads a new copy. Large databases are limited by available browser memory. Workspace and archive-entry databases, including nested archives, share the same table tree, tabs, and previews. Encrypted databases and WAL-mode files are not supported; export a standalone snapshot in DELETE journal mode for preview. Tables show up to 200 columns, with shortened previews for long text and BLOBs; slow queries can be cancelled or time out. Downloads return the original file, not a consistent snapshot of a live WAL database.
-
-Archives are processed in the browser, with files extracted when opened or their outlines expanded. PDF, EPUB and Markdown entries also provide file-tree outlines and chapter navigation, including inside nested archives; Reader outlines remain available. The defaults are 3 levels of nesting including the outer archive and a 128 MiB budget for cached archives and extracted output, adjustable in archive settings. This budget is not a limit on total browser memory; large files may exceed available memory. Text previews inside archives read up to 1 MiB; downloads contain the full file.
-
-## Downloads
-
-Click the download icon beside the pencil or choose **Download** from a file-list ⋯ menu. Files download directly; folders download as ZIPs using store-only mode for faster preparation. Preparation shows scanning, packing, and verification progress.
-
-- Workspace files and folder ZIPs support resuming and parallel range downloads. File URLs use `/api/download?path=<URL-encoded relative path>` and work with download managers supporting HTTP Range.
-- Folder ZIPs are stored temporarily on the server, support archives over 4 GiB, and require enough temporary disk space. An unchanged folder reuses its ZIP while the cache remains available.
-- Temporary ZIPs are removed about one minute after a complete transfer, or after about 30 minutes idle if incomplete or unused. Downloads must be prepared again after cleanup.
-- Downloading an archive entry requires browser-side extraction and is subject to the extraction budget. These downloads do not support resuming or parallel downloads through external download managers.
-
-## URL state
-
-Links preserve the current file, Git view, and display settings across refresh and browser Back/Forward navigation.
-
-All file positions and preview states use `#field:value;field:value`. Field order does not matter, the last duplicate wins, unknown or invalid fields are ignored, and default settings are omitted. Delimiters and special characters inside values are percent-encoded. Resource identity, database filters and global settings remain query parameters.
-
-| State | Example |
-| --- | --- |
-| File, line, or selection | `/src/main.ts#line:42`, `/src/main.ts#line:42-50` |
-| EPUB position / zoom | `/book.epub#lbp:2@1/3%2342;zoom:125` |
-| PDF page / page coordinates | `/manual.pdf#page:7;x:0;y:600` |
-| Markdown heading | `/README.md#heading:3` |
-| Image zoom / center | `/image.png#zoom:200;x:0.7;y:0.3` |
-| Media time / speed | `/movie.mp4#time:90.5;rate:1.5` |
-| CSV/TSV position / details | `/data.csv#at:30;across:4;row:35;expanded:1`, `/data.csv#row:20;column:3` |
-| Edit mode, theme, font size | `/src/main.ts?ro=0&theme=dark&fs=110` |
-| Git changes / branches | `/_/git`, `/_/git/branches` |
-| File diff | `/_/git/diff/src/main.ts` |
-| History / commit | `/_/git/history?branch=main`, `/_/git/commit/abc1234` |
-| Sidebar / search | `/?panel=tabs`, `/?panel=search&q=TODO&case=1&exclude=dist` |
-| Instances list | `/-` |
-| Archive entry / nested archive | `/books.zip?entry=readme.md`, `/books.zip?inside=inner.zip&entry=readme.md` |
-| Archive database | `/_/database/data.zip?inside=inner.zip&entry=app.db&object=users` |
-| Database table / structure | `/_/database/app.db?object=users`, `/_/database/app.db?object=users&mode=structure` |
-| Database filter / sort / page | `/_/database/app.db?object=users&filter=name&value=Alice&sort=id&order=desc#offset:100` |
-| Terminal | `/?term=t_…` |
-| Language | `?lang=zh`, `?lang=en` |
-
-Parameters can be combined. Defaults are read-only mode, system theme, browser language, and 100% font size. Search is case-insensitive and excludes `.git,node_modules,dist`. The `panel` parameter saves the selected sidebar tab; refreshing does not open the mobile drawer.
-
-Reading updates replace the current URL without adding history entries for continuous scrolling. Positions survive refresh, sharing and Back/Forward, including documents inside archives. EPUB reuses [Leaf Reader](https://github.com/wanderxuhq/leaf-reader)'s LBP coordinates: `spineIndex@elementPath#UTF-16Offset`, with zero-based indices; the URL path and archive parameters identify the book. Text coordinates survive changes in viewport width; edited content may fall back to an ancestor element or chapter start. `zoom` is a reader percentage; omitting it fits PDF to width and uses 100% for EPUB. Markdown records the current heading, without persisting the source/rendered toggle.
-
-Git uses the `/_/git` route. `/-/` is reserved for workspace mounts, and `/_/` is reserved for internal views. File paths starting with `-/` or `_/` use the `/_/file/` prefix, for example `/_/file/-/git/history`. For a mounted workspace, prefix the same paths with its base, for example `/-/qlang/src/main.ts`, `/-/qlang/_/git`, and `/-/qlang/api/list?path=.`.
-
-Image `x/y` specify the center as fractions of the original dimensions (0–1); omitting `zoom` fits the window. Media `time` is in seconds; restoration leaves playback paused. Table `at/across` identify the first visible row/column, and `row/column` identify inspected data, all one-based; `expanded:1` expands row details. SQLite uses the same table parameters, plus a result `offset` and an optional `cursor` for sequential paging. These states and text `line` selections also work inside archives.
-
-## Platform notes
-
-File browsing and editing work across platforms. Terminals require util-linux `script`, GNU `stty`, and `bash`. Linux and WSL provide them; Termux and macOS may need them installed; use WSL on Windows.
-
-Git sync uses your existing git configuration. Interactive credential prompts are disabled, so configure an SSH agent, a credential helper, or an HTTPS token before pushing over the network.
+After `npm run build`, `npm start` runs the built server.
 
 ## Development
 
 ```bash
 npm install
-npm run dev          # backend :3000, frontend :5173
+npm run dev         # backend :3000 + Vite :5173
+npm run dev:server  # backend only
+npm run dev:web     # frontend only
 npm test
 npm run typecheck
-npm run build        # output in dist/
-npm pack
+npm run build
 ```
 
-The backend and frontend can also run separately with `npm run dev:server` and `npm run dev:web`.
+Vite proxies `/api` to `localhost:3000`; if you change the backend port, update the proxy target in `web/vite.config.ts`.

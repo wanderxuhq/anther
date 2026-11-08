@@ -132,6 +132,8 @@ export class HttpServer extends Router {
   private bases: string[] = [];
   /** 宿主工作区路由：挂在 '/' 时作为根路由的 fallback；detach 后为 null。 */
   private rootWorkspace: Router | null = null;
+  private hostConfigured = false;
+  private hostAttached = false;
 
   constructor(opts: { staticDir: string }) {
     super();
@@ -188,6 +190,22 @@ export class HttpServer extends Router {
   /** 设置/清除宿主工作区；宿主 detach 时传 null。 */
   setRootWorkspace(router: Router | null) {
     this.rootWorkspace = router;
+    if (router) {
+      this.hostConfigured = true;
+      this.hostAttached = true;
+    } else {
+      this.hostAttached = false;
+    }
+  }
+
+  /** 仅当调用方确实配置过宿主、且宿主已被 detach 时为 true。 */
+  private hostDetached(): boolean {
+    return this.hostConfigured && !this.hostAttached;
+  }
+
+  private redirectToInstances(res: ServerResponse): void {
+    res.writeHead(302, { Location: '/-' });
+    res.end();
   }
 
   /** 移除挂载前缀；宿主根路径 '' 不允许卸载。 */
@@ -267,7 +285,14 @@ export class HttpServer extends Router {
   private async handle(req: IncomingMessage, res: ServerResponse) {
     try {
       const resolved = this.resolve(req.url ?? '/');
-      if (resolved.reserved) throw new HttpError(404, 'not found');
+      if (resolved.reserved) {
+        // 没有对应 project 的 `/-/...` 导航回项目列表；非 GET/HEAD 仍是 404。
+        if (req.method === 'GET' || req.method === 'HEAD') {
+          this.redirectToInstances(res);
+          return;
+        }
+        throw new HttpError(404, 'not found');
+      }
 
       req.url = resolved.restUrl;
       const { router, restPath } = resolved;
@@ -321,7 +346,9 @@ export class HttpServer extends Router {
         // 未知 API 永远返回 JSON 404，不能落到 SPA fallback。
         if (restPath.startsWith('/api/')) throw new HttpError(404, 'not found');
         if (req.method === 'GET' || req.method === 'HEAD') {
-          await this.serveStatic(resolved.pathname, res, req.method === 'HEAD', resolved.base);
+          const instances = resolved.base === '' && (resolved.pathname === '/-' || resolved.pathname === '/-/');
+          const redirect = resolved.base === '' && !instances && this.hostDetached();
+          await this.serveStatic(resolved.pathname, res, req.method === 'HEAD', resolved.base, redirect);
           return;
         }
         throw new HttpError(404, 'not found');
@@ -344,7 +371,18 @@ export class HttpServer extends Router {
   }
 
   /** 静态资源 + SPA fallback：存在则返回文件，否则返回 index.html；headOnly 时只发头不发 body */
-  private async serveStatic(urlPath: string, res: ServerResponse, headOnly = false, base = '') {
+  private async serveStatic(
+    urlPath: string,
+    res: ServerResponse,
+    headOnly = false,
+    base = '',
+    redirectToInstances = false,
+  ) {
+    const shellPath = urlPath === '/' || urlPath === '/index.html';
+    if (redirectToInstances && shellPath) {
+      this.redirectToInstances(res);
+      return;
+    }
     let rel: string;
     try {
       rel = urlPath === '/' ? 'index.html' : decodeURIComponent(urlPath.slice(1));
@@ -365,6 +403,10 @@ export class HttpServer extends Router {
       content = await readFile(abs);
       ext = path.extname(abs);
     } catch {
+      if (redirectToInstances) {
+        this.redirectToInstances(res);
+        return;
+      }
       // SPA fallback：任意路径都回 index.html
       content = await readFile(path.join(this.staticDir, 'index.html'));
       ext = '.html';

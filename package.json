@@ -1,8 +1,8 @@
 {
   "name": "@wanderxuhq/anther",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Mobile-first, browser-based code viewer/editor",
-  "license": "ISC",
+  "license": "MIT",
   "author": "wanderxuhq",
   "type": "module",
   "bin": {
