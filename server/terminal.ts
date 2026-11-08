@@ -16,12 +16,16 @@ export type TerminalScreenMessage =
   | ({ type: 'screen-diff' } & ScreenDiff);
 
 const FLUSH_MS = 40;
+// 全屏 TUI（备用屏幕）滚动时按浏览器帧率发 diff，避免 40ms 合批导致
+// 一帧跳 1 条、下一帧跳 3 条的不均匀感。普通 shell 输出仍用 40ms 降低负载。
+const FLUSH_MS_TUI = 16;
 
 export class Terminal extends EventEmitter {
   readonly id: string;
   readonly name: string;
   readonly pty: PtySession;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private flushDelay = FLUSH_MS;
   private cols = 80;
   private rows = 24;
   private resizeChain: Promise<void> = Promise.resolve();
@@ -62,8 +66,14 @@ export class Terminal extends EventEmitter {
   }
 
   private scheduleFlush(): void {
-    if (this.flushTimer) return;
-    this.flushTimer = setTimeout(() => this.flush(), FLUSH_MS);
+    const delay = this.tracker.getMode('altScreen') === true ? FLUSH_MS_TUI : FLUSH_MS;
+    if (this.flushTimer) {
+      // 切到全屏 TUI 时把已排队的 40ms 合批提前到下一帧；反向不延后。
+      if (delay >= this.flushDelay) return;
+      clearTimeout(this.flushTimer);
+    }
+    this.flushDelay = delay;
+    this.flushTimer = setTimeout(() => this.flush(), delay);
   }
 
   private flush(): void {

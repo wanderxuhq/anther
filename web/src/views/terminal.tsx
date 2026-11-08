@@ -4,7 +4,7 @@
 //   html（默认）— 路径可点、Markdown 可视化、长行自动换行
 //   text        — 经典等宽纯文字（保留 ANSI 颜色，不做链接/Markdown）
 // 切换只重绘，不重置 PTY、屏幕缓存或输入状态。
-import { createEffect, createSignal, For, on, onCleanup, Show } from 'solid-js';
+import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { DEFAULT_SCROLLBACK, type ScreenCell } from '../../../shared/terminal/vt.ts';
 import { RemoteTerminalScreen } from '../terminal/remote.ts';
 import { api, connectTerminal, type TerminalSocket } from '../api.ts';
@@ -14,8 +14,14 @@ import { CONTROL_LETTERS, TERMINAL_KEYS, applyTerminalModifiers, controlChar, ke
 import { terminalKeyBarOpen, terminalRenderMode } from '../terminal/settings.ts';
 import { classifyMarkdownRows, joinWrappedRows, type MarkdownBlock } from '../terminal/markdown-blocks.ts';
 import { firstContentCell, joinLogicalCells } from '../terminal/logical.ts';
-import { renderRow, rowClass, rowRawText, type CursorInfo } from '../terminal/render.ts';
+import { renderRow, renderRowBackground, rowClass, rowRawText, type CursorInfo } from '../terminal/render.ts';
 import { keyToSequence, pasteInput } from '../terminal/input.ts';
+import {
+  advanceTouchScroll,
+  createTouchScrollState,
+  startTouchScroll,
+  takeTouchSteps,
+} from '../terminal/touch-scroll.ts';
 import { revealDirectory } from './filetree.tsx';
 
 const MAX_SCROLLBACK_ROWS = DEFAULT_SCROLLBACK;
@@ -109,9 +115,29 @@ export function TerminalView(props: { id: string }) {
   let lastFirst = -1;
   let lastCursorAbs = -1;
 
+  // 触摸滚动：全屏 TUI（备用屏幕 + 鼠标跟踪，任何应用都适用）里
+  // 原生回滚不生效，用手势模拟滚轮事件（SGR 64/65）交给应用自己滚动。
+  // 用 Pointer Events + 指针捕获：重绘替换手指下的 DOM 节点时，触摸事件会
+  // 停止派发，但 pointer 事件仍会继续送到稳定的滚动容器。
+  let touchPointerId: number | null = null;
+  let touchStartX = 0;
+  let touchStartY = 0;
+  let touchLastX = 0;
+  let touchLastY = 0;
+  let touchPendingX = 0;
+  let touchPendingY = 0;
+  let touchActive = false;
+  let touchScrolling = false;
+  // 手指是否已经产生明显位移（用于区分轻点和大范围滑动）。
+  let touchMoved = false;
+  // 当前滚动方向/累计量（纯函数状态机，见 terminal/touch-scroll.ts）。
+  let touchScroll = createTouchScrollState();
+
   const [ctrlArmed, setCtrlArmed] = createSignal(false);
   const [shiftArmed, setShiftArmed] = createSignal(false);
   const [altArmed, setAltArmed] = createSignal(false);
+  // 是否处于 TUI 模式，用于给滚动容器切换 touch-action。
+  const [tuiPointerMode, setTuiPointerMode] = createSignal(false);
 
   const [tick, setTick] = createSignal(0);
 
@@ -435,7 +461,10 @@ export function TerminalView(props: { id: string }) {
         const key = blockKey(block);
         const needs = forceAll || dirtyRows.has(absolute) || rowHtml[index] === '\u0000' || rowBlockKeys[index] !== key || el.className !== className;
         if (!needs) continue;
-        const html = renderRow(freshCells.get(absolute) ?? s.getRowAbsolute(absolute), options);
+        const cells = freshCells.get(absolute) ?? s.getRowAbsolute(absolute);
+        const text = renderRow(cells, options);
+        const background = renderRowBackground(cells, options);
+        const html = background ? `${background}<span class="term-row-content">${text}</span>` : text;
         if (el.className !== className) el.className = className;
         if (rowHtml[index] !== html) {
           el.innerHTML = html;
@@ -558,11 +587,30 @@ export function TerminalView(props: { id: string }) {
     const s = new RemoteTerminalScreen();
     screen = s;
 
+    const syncTuiPointerMode = () => {
+      setTuiPointerMode(s.getMode('mouseTracking') === true && s.getMode('altScreen') === true);
+    };
+
     const sock = connectTerminal(id, {
       // 首次/重连：清空本地缓存，等服务端快照重建画面（进程与信号不中断）。
-      onOpen: () => { s.reset(); resetRendered(); scheduleRender(); lastMeta = ''; sendMeta(); },
-      onScreen: (snapshot) => { s.applySnapshot(snapshot); setTick((value) => value + 1); },
-      onScreenDiff: (diff) => { s.applyDiff(diff); setTick((value) => value + 1); },
+      onOpen: () => {
+        s.reset();
+        resetRendered();
+        scheduleRender();
+        lastMeta = '';
+        setTuiPointerMode(false);
+        sendMeta();
+      },
+      onScreen: (snapshot) => {
+        s.applySnapshot(snapshot);
+        syncTuiPointerMode();
+        setTick((value) => value + 1);
+      },
+      onScreenDiff: (diff) => {
+        s.applyDiff(diff);
+        syncTuiPointerMode();
+        setTick((value) => value + 1);
+      },
       onExit: () => removeTerminalTab(id),
     });
     socket = sock;
@@ -612,8 +660,8 @@ export function TerminalView(props: { id: string }) {
     terminalRenderMode();
     tick();
     if (!screen) return;
-    // 内容行数会随输出变化：重新计算视觉高度（逻辑行列不变时不会触发 PTY resize）。
-    updateSize();
+    // 尺寸/字号变化由 ResizeObserver、字号和按键条 effect 负责；
+    // 每条 diff 都重新测量会强制同步布局，滚动时会造成掉帧。
     scheduleRender();
   });
 
@@ -774,12 +822,12 @@ export function TerminalView(props: { id: string }) {
     queueMicrotask(() => { skipInput = false; });
   };
 
-  const reportMouse = (event: MouseEvent, button: number, release = false): boolean => {
+  const reportMouseAt = (clientX: number, clientY: number, button: number, release = false): boolean => {
     const rows = rowsEl;
     if (!rows || !cellWidth || !cellHeight) return false;
     const rect = rows.getBoundingClientRect();
-    const col = Math.max(0, Math.min(lastCols - 1, Math.floor((event.clientX - rect.left) / cellWidth)));
-    const row = Math.max(0, Math.min(lastRows - 1, Math.floor((event.clientY - rect.top) / cellHeight)));
+    const col = Math.max(0, Math.min(lastCols - 1, Math.floor((clientX - rect.left) / cellWidth)));
+    const row = Math.max(0, Math.min(lastRows - 1, Math.floor((clientY - rect.top) / cellHeight)));
     if (screen?.getMode('sgrMouse') === true) {
       sendText(`\x1b[<${button};${col + 1};${row + 1}${release ? 'm' : 'M'}`);
     } else {
@@ -788,23 +836,188 @@ export function TerminalView(props: { id: string }) {
     return true;
   };
 
+  const reportMouse = (event: MouseEvent, button: number, release = false): boolean =>
+    reportMouseAt(event.clientX, event.clientY, button, release);
+
+  const inTuiMouseMode = () =>
+    screen?.getMode('mouseTracking') === true && screen?.getMode('altScreen') === true;
+
   const handlePointerDown = (event: PointerEvent) => {
+    if (event.pointerType === 'touch') {
+      if (!inTuiMouseMode() || touchActive) return;
+      touchPointerId = event.pointerId;
+      touchActive = true;
+      touchScrolling = false;
+      touchMoved = false;
+      touchScroll = createTouchScrollState();
+      touchPendingX = 0;
+      touchPendingY = 0;
+      touchStartX = event.clientX;
+      touchStartY = event.clientY;
+      touchLastX = event.clientX;
+      touchLastY = event.clientY;
+      // 捕获到稳定的滚动容器：即使重绘把手指下的节点替换掉，move/up 仍会送来这里。
+      try { scrollEl?.setPointerCapture(event.pointerId); } catch { /* ignore */ }
+      // 接管手势，压掉兼容鼠标事件；轻点/链接在 pointerup 里按坐标手动处理。
+      event.preventDefault();
+      return;
+    }
     if (event.button !== 0) return;
     if ((event.target as HTMLElement | null)?.closest('.term-link, .term-url')) return;
     if (screen?.getMode('mouseTracking') === true) reportMouse(event, 0);
   };
 
+  const handlePointerMove = (event: PointerEvent) => {
+    if (event.pointerType !== 'touch' || !touchActive || event.pointerId !== touchPointerId) return;
+    const dx = event.clientX - touchLastX;
+    const dy = event.clientY - touchLastY;
+    touchLastX = event.clientX;
+    touchLastY = event.clientY;
+
+    let justStarted = false;
+    if (!touchScrolling) {
+      touchPendingX += dx;
+      touchPendingY += dy;
+      if (Math.abs(touchPendingY) >= 10 && Math.abs(touchPendingY) > Math.abs(touchPendingX)) {
+        touchMoved = true;
+        touchScrolling = true;
+        // 把阈值阶段累计的纵向位移也算进去。
+        startTouchScroll(touchScroll, touchPendingY);
+        touchPendingX = 0;
+        touchPendingY = 0;
+        justStarted = true;
+      } else if (Math.abs(touchPendingX) >= 10 && Math.abs(touchPendingX) >= Math.abs(touchPendingY)) {
+        // 横向阶段：不结束整个手势，清空累计后继续等纵向动作。
+        touchMoved = true;
+        touchPendingX = 0;
+        touchPendingY = 0;
+        return;
+      } else {
+        return;
+      }
+    }
+
+    // 阻止原生滚动/overscroll，把纵向位移翻译成滚轮事件。
+    event.preventDefault();
+    if (!justStarted) {
+      const switched = advanceTouchScroll(touchScroll, dy);
+      // 方向刚切换的这一帧先不发：下一帧确认方向仍然一致，避免回弹/坐标跳变反向滚一下。
+      if (switched) return;
+    }
+
+    const step = Math.max(32, cellHeight * 2);
+    const steps = takeTouchSteps(touchScroll, step);
+    if (steps === 0) return;
+    // 固定用手势起点上报：一次滑动等价于“在该位置连续转动滚轮”。
+    const button = steps > 0 ? 64 : 65;
+    for (let index = 0; index < Math.abs(steps); index++) {
+      reportMouseAt(touchStartX, touchStartY, button);
+    }
+  };
+
   const handlePointerUp = (event: PointerEvent) => {
+    if (event.pointerType === 'touch') {
+      if (!touchActive || event.pointerId !== touchPointerId) return;
+      const wasScrolling = touchScrolling;
+      const moved = touchMoved;
+      try { scrollEl?.releasePointerCapture(event.pointerId); } catch { /* ignore */ }
+      resetTouchScroll();
+      // 滚动/滑动结束时不再补发点击；否则把轻点当成一次鼠标点击交给 TUI。
+      if (wasScrolling || moved) return;
+      const tui = inTuiMouseMode();
+      // TUI 里原生 click 被 preventDefault 压掉了：链接按坐标手动触发。
+      if (tui && activateTouchTarget(event.clientX, event.clientY)) return;
+      if (screen?.getMode('mouseTracking') === true) {
+        reportMouseAt(event.clientX, event.clientY, 0);
+        reportMouseAt(event.clientX, event.clientY, 0, true);
+      }
+      if (tui) focusInput?.();
+      return;
+    }
     if (event.button !== 0) return;
     if ((event.target as HTMLElement | null)?.closest('.term-link, .term-url')) return;
     if (screen?.getMode('mouseTracking') === true) reportMouse(event, 0, true);
   };
 
+  const handlePointerCancel = (event: PointerEvent) => {
+    if (event.pointerType !== 'touch' || event.pointerId !== touchPointerId) return;
+    resetTouchScroll();
+  };
+
+  const handleLostPointerCapture = (event: PointerEvent) => {
+    if (event.pointerType !== 'touch' || event.pointerId !== touchPointerId || !touchActive) return;
+    resetTouchScroll();
+  };
+
   const handleWheel = (event: WheelEvent) => {
     // 只在全屏 TUI 里把滚轮交给应用；普通 shell 保留原生回滚。
-    if (screen?.getMode('mouseTracking') !== true || screen?.getMode('altScreen') !== true) return;
+    if (!inTuiMouseMode()) return;
     if (reportMouse(event, event.deltaY < 0 ? 64 : 65)) event.preventDefault();
   };
+
+  /** 终端里的可点击路径：鼠标点击和触摸轻点共用同一套打开逻辑。 */
+  const activateTermPath = (target: HTMLElement) => {
+    const path = target.dataset.termPath;
+    if (!path) return;
+    const line = Number(target.dataset.termLine) || undefined;
+    void (async () => {
+      try {
+        const located = await api.terminals.resolve(path, cwdPath(screen?.getCwd() || '') || undefined);
+        if (located.kind === 'file') await openPreviewTab(located.path, line ? { start: line, end: line } : null);
+        else await revealDirectory(located.path);
+      } catch {
+        // 路径识别是启发式的：文件不存在时静默忽略，不弹提示、不做任何事。
+      }
+    })();
+  };
+
+  /** touchstart 的 preventDefault 会压掉原生 click，轻点时按坐标找链接并手动触发。 */
+  const activateTouchTarget = (clientX: number, clientY: number): boolean => {
+    const element = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+    if (!element) return false;
+    const path = element.closest<HTMLElement>('[data-term-path]');
+    if (path) {
+      activateTermPath(path);
+      return true;
+    }
+    const url = element.closest<HTMLAnchorElement>('a[href]');
+    if (url) {
+      url.click();
+      return true;
+    }
+    return false;
+  };
+
+  const resetTouchScroll = () => {
+    touchPointerId = null;
+    touchActive = false;
+    touchScrolling = false;
+    touchMoved = false;
+    touchPendingX = 0;
+    touchPendingY = 0;
+    touchScroll = createTouchScrollState();
+  };
+
+  // 用 pointer 事件而不是 touch：滚动重绘会替换手指下的节点，Chrome 会停止
+  // 给被移除的节点派发 touchmove/touchend；pointer 事件仍按当前位置派发。
+  // pointerdown/move 需要非 passive 才能 preventDefault 接管手势。
+  onMount(() => {
+    const el = scrollEl;
+    if (!el) return;
+    el.addEventListener('pointerdown', handlePointerDown, { passive: false });
+    el.addEventListener('pointermove', handlePointerMove, { passive: false });
+    el.addEventListener('pointerup', handlePointerUp);
+    el.addEventListener('pointercancel', handlePointerCancel);
+    el.addEventListener('lostpointercapture', handleLostPointerCapture);
+    onCleanup(() => {
+      el.removeEventListener('pointerdown', handlePointerDown);
+      el.removeEventListener('pointermove', handlePointerMove);
+      el.removeEventListener('pointerup', handlePointerUp);
+      el.removeEventListener('pointercancel', handlePointerCancel);
+      el.removeEventListener('lostpointercapture', handleLostPointerCapture);
+      resetTouchScroll();
+    });
+  });
 
   const focusOnPaneClick = (event: MouseEvent) => {
     const target = event.target as HTMLElement | null;
@@ -825,18 +1038,7 @@ export function TerminalView(props: { id: string }) {
     }
     event.preventDefault();
     event.stopPropagation();
-    const path = target.dataset.termPath;
-    if (!path) return;
-    const line = Number(target.dataset.termLine) || undefined;
-    void (async () => {
-      try {
-        const located = await api.terminals.resolve(path, cwdPath(screen?.getCwd() || '') || undefined);
-        if (located.kind === 'file') await openPreviewTab(located.path, line ? { start: line, end: line } : null);
-        else await revealDirectory(located.path);
-      } catch {
-        // 路径识别是启发式的：文件不存在时静默忽略，不弹提示、不做任何事。
-      }
-    })();
+    activateTermPath(target);
   };
 
   const renderKey = (key: TerminalKey) => (
@@ -883,12 +1085,17 @@ export function TerminalView(props: { id: string }) {
     <div class="terminal-pane" ref={(el) => (paneEl = el)} onClick={focusOnPaneClick}>
       <div
         class="terminal-scroll"
-        classList={{ 'terminal-html': terminalRenderMode() === 'html', 'terminal-text': terminalRenderMode() === 'text' }}
+        classList={{
+          'terminal-html': terminalRenderMode() === 'html',
+          'terminal-text': terminalRenderMode() === 'text',
+          // TUI 里接管纵向手势，禁止浏览器把单指滑动当成页面/容器滚动。
+          'terminal-tui': tuiPointerMode(),
+        }}
         ref={(el) => (scrollEl = el)}
         onClick={handleClick}
         onWheel={handleWheel}
-        onPointerDown={handlePointerDown}
-        onPointerUp={handlePointerUp}
+        onContextMenu={(event) => { if (tuiPointerMode()) event.preventDefault(); }}
+        onDragStart={(event) => { if (tuiPointerMode()) event.preventDefault(); }}
       >
         <div class="terminal-rows" ref={(el) => (rowsEl = el)} />
         <span class="terminal-measure" ref={(el) => (measureEl = el)} aria-hidden="true" />

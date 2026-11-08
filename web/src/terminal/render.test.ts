@@ -5,7 +5,7 @@ import { createTerminalScreen, type ScreenCell } from '../../../shared/terminal/
 
 const dom = new JSDOM('');
 Object.assign(globalThis, { window: dom.window });
-const { renderRow, rowClass, rowText } = await import('./render.ts');
+const { renderRow, renderRowBackground, rowClass, rowText } = await import('./render.ts');
 const { classifyMarkdownRows } = await import('./markdown-blocks.ts');
 after(() => { dom.window.close(); delete (globalThis as Record<string, unknown>).window; });
 
@@ -21,6 +21,21 @@ test('text 模式：保留文本与 ANSI 颜色，不生成链接/Markdown', () 
   assert.match(html, /color:var\(--term-ansi-1\)/);
   assert.doesNotMatch(html, /term-link/);
   assert.doesNotMatch(html, /<strong>/);
+});
+
+test('cell 背景层：按列覆盖完整宽度，宽字符占 2 列，Markdown 行不生成', () => {
+  const bg = renderRowBackground(cells('\x1b[48;2;10;10;10mAB\x1b[0m'), { mode: 'text' });
+  assert.match(bg, /^<span class="term-row-bg"/);
+  assert.match(bg, /left:0ch;width:2ch;background-color:rgb\(10, 10, 10\)/);
+
+  const wide = renderRowBackground(cells('\x1b[48;2;10;10;10m中\x1b[0m'), { mode: 'text' });
+  assert.match(wide, /left:0ch;width:2ch;background-color:rgb\(10, 10, 10\)/);
+
+  assert.equal(renderRowBackground(cells('AB'), { mode: 'text' }), '');
+  assert.equal(
+    renderRowBackground(cells('\x1b[48;2;10;10;10mAB\x1b[0m'), { mode: 'html', markdown: true }),
+    '',
+  );
 });
 
 test('html 模式：文件路径可点击、URL 是新窗口链接', () => {

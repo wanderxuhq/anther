@@ -41,6 +41,9 @@ type Run = {
   style: RunStyle;
   url: string | null;
   cursor: boolean;
+  /** 该 run 覆盖的终端列范围 [start, end)，用于整行背景层定位。 */
+  start: number;
+  end: number;
 };
 
 const ANSI_RGB = [
@@ -106,6 +109,7 @@ function buildRuns(cells: readonly ScreenCell[], cursor?: CursorInfo): Run[] {
     const previous = runs[runs.length - 1];
     if (previous && !previous.cursor && !run.cursor && previous.style.key === run.style.key && previous.url === run.url) {
       previous.text += run.text;
+      previous.end = run.end;
     } else {
       runs.push(run);
     }
@@ -113,19 +117,23 @@ function buildRuns(cells: readonly ScreenCell[], cursor?: CursorInfo): Run[] {
 
   for (let index = 0; index < cells.length; index++) {
     const cell = cells[index];
-    if (cell.char === '') continue; // 宽字符的占位单元格
+    if (cell.char === '') {
+      // 宽字符的占位单元格：并入前一个 run 的宽度，背景块才能覆盖完整的 2 列。
+      if (runs.length > 0) runs[runs.length - 1].end = index + 1;
+      continue;
+    }
     const style = styleFor(cell);
     const url = safeUrl(cell.url);
     if (index === cursorCol) {
-      push({ text: cell.char || ' ', style, url, cursor: true });
+      push({ text: cell.char || ' ', style, url, cursor: true, start: index, end: index + 1 });
     } else {
-      push({ text: cell.char, style, url, cursor: false });
+      push({ text: cell.char, style, url, cursor: false, start: index, end: index + 1 });
     }
   }
   if (cursorAtEnd) {
     const last = cells[cells.length - 1];
     const style = last ? styleFor(last) : { key: '', classes: [], color: null, background: null, underlineColor: null };
-    push({ text: ' ', style, url: null, cursor: true });
+    push({ text: ' ', style, url: null, cursor: true, start: cells.length, end: cells.length + 1 });
   }
 
   // 去掉末尾没有背景色/光标的空白，避免每行都铺满整屏空格。
@@ -280,6 +288,24 @@ export function renderRow(cells: readonly ScreenCell[], options: RenderOptions):
   if (block.kind === 'code') return gridRow(cells, { ...options, markdown: false });
   if (block.kind !== 'normal') return markdownRow(block, options);
   return gridRow(cells, options);
+}
+
+/**
+ * 整行背景层：把 ANSI 背景画在单元格矩形上，覆盖完整行高（含行距），
+ * 避免 HTML 行内 span 背景只盖住文字内容盒而露出终端底色。
+ * 只在 1:1 网格行（text / alt screen / 活动输入行）使用；Markdown 行不生成。
+ */
+export function renderRowBackground(cells: readonly ScreenCell[], options: RenderOptions): string {
+  if (options.mode === 'html' && options.markdown) return '';
+  const runs = buildRuns(cells);
+  const blocks = runs.map((run) => {
+    const background = run.style.background
+      ?? (run.style.classes.includes('term-inverse') ? 'var(--term-fg)' : null);
+    if (!background) return '';
+    const width = Math.max(1, run.end - run.start);
+    return `<span class="term-bg-run" style="left:${run.start}ch;width:${width}ch;background-color:${background}"></span>`;
+  }).join('');
+  return blocks ? `<span class="term-row-bg" aria-hidden="true">${blocks}</span>` : '';
 }
 
 /** 行容器的 class：决定 pre / pre-wrap、Markdown 块样式。 */

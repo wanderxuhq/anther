@@ -149,11 +149,25 @@ a.icon-btn { color: inherit; text-decoration: none; }
 }
 /* HTML 模式长行会换行，不需要横向滚动；纯文字模式仍保留横向滚动看长行。 */
 .terminal-scroll.terminal-html { overflow-x: hidden; }
+/* TUI（备用屏幕 + 鼠标跟踪）里纵向手势由 JS 转成滚轮事件；
+   禁止浏览器接管单指拖动和长按选择，否则浏览器会用 touchcancel 中断手势。 */
+.terminal-scroll.terminal-tui { touch-action: none; overscroll-behavior: none; }
+/* 触摸设备上滚动时不要触发文字选择/长按菜单，避免同一个手势被系统打断。 */
+@media (any-pointer: coarse) {
+  .terminal-scroll.terminal-tui {
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  }
+}
 .terminal-rows { min-width: 100%; }
 .terminal-text .terminal-rows { width: max-content; }
 /* fixed 定位不参与滚动容器的可滚动区域，避免测量元素撑出横向滚动条。 */
 .terminal-measure { position: fixed; left: 0; top: 0; visibility: hidden; white-space: pre; pointer-events: none; }
 .term-row { min-height: 1.35em; }
+.term-row-grid, .term-row-text { position: relative; }
+/* ANSI 背景层：覆盖完整行高（含行距），避免行内 span 背景只盖住文字内容盒。 */
+.term-row-bg { position: absolute; inset: 0; pointer-events: none; }
+.term-bg-run { position: absolute; top: 0; bottom: 0; }
+.term-row-content { position: relative; z-index: 1; }
 .terminal-text .term-row, .term-row-grid { white-space: pre; }
 .terminal-html .term-row-html, .terminal-html .term-row-md { white-space: pre-wrap; overflow-wrap: anywhere; }
 .terminal-input {
@@ -352,7 +366,7 @@ a.icon-btn { color: inherit; text-decoration: none; }
 /* 暗色主题开关为 html[data-theme]（stores.ts applyTheme 设置，跟随 ?theme= 参数）：
    原 @media (prefers-color-scheme) 只跟随系统设置，导致 ?theme=dark 无效 */
 :root[data-theme='dark'] {
-  --bg: #16161a; --border: #2a2a30; --muted: #8a8a93; --accent: #60a5fa;
+  --bg: #1e1e1e; --border: #2a2a30; --muted: #8a8a93; --accent: #60a5fa;
   --row-hover: rgba(96, 165, 250, .14);
   --toast-bg: #3a3a42; --toast-fg: #f4f4f6;
   --toast-success: #16a34a; --toast-error: #dc2626;
