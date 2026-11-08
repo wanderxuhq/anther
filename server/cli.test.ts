@@ -11,6 +11,7 @@ test('默认：当前目录、端口 3000', () => {
   const a = parseArgs([]);
   assert.equal(a.dir, process.cwd());
   assert.equal(a.port, 3000);
+  assert.equal(a.detach, false);
 });
 
 test('解析目录、端口', () => {
@@ -24,6 +25,13 @@ test('--no-attach 关闭附加，--attach 恢复默认', () => {
   assert.equal(parseArgs(['--no-attach']).attach, false);
   assert.equal(parseArgs(['--attach', '--no-attach']).attach, false);
   assert.equal(parseArgs(['--no-attach', '--attach']).attach, true);
+});
+
+test('--detach：只卸载当前目录，不启动服务器', () => {
+  const a = parseArgs(['/tmp/foo', '--detach', '--port', '8080']);
+  assert.equal(a.dir, '/tmp/foo');
+  assert.equal(a.port, 8080);
+  assert.equal(a.detach, true);
 });
 
 test('未知选项报错', () => {

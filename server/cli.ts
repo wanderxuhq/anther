@@ -3,14 +3,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AddressInfo } from 'node:net';
-import { HttpServer } from './http.ts';
+import { HttpServer, Router } from './http.ts';
 import { createWorkspace, registerWorkspaceRoutes } from './workspace.ts';
 import { MountRegistry, canonicalDir, isSameWorkspace } from './mounts.ts';
-import { ATTACH_PATH, registerAttachRoute } from './routes/attach.ts';
+import { ATTACH_PATH, DETACH_PATH, registerAttachRoute, registerDetachRoute } from './routes/attach.ts';
+import { registerIdentifyRoutes } from './routes/identify.ts';
 import type { AppIdentity } from './app-info.ts';
 import type { AttachInfo, MountWire } from './mount-types.ts';
 
-export type CliArgs = { dir: string; port: number; attach: boolean };
+export type CliArgs = { dir: string; port: number; attach: boolean; detach: boolean };
 
 /**
  * 静态目录解析：源码形态（server/cli.ts）→ <root>/web；编译产物（dist/server/cli.js）
@@ -25,6 +26,7 @@ export function parseArgs(argv: string[]): CliArgs {
   let dir = process.cwd();
   let port = 3000;
   let attach = true;
+  let detach = false;
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -36,12 +38,13 @@ export function parseArgs(argv: string[]): CliArgs {
     }
     if (a === '--no-attach') { attach = false; continue; }
     if (a === '--attach') { attach = true; continue; }
+    if (a === '--detach') { detach = true; continue; }
     if (a.startsWith('-')) throw new Error(`unknown option: ${a}`);
     positional.push(a);
   }
   if (positional.length > 1) throw new Error('too many arguments');
   if (positional.length === 1) dir = path.resolve(positional[0]);
-  return { dir, port, attach };
+  return { dir, port, attach, detach };
 }
 
 /** 第一个 IPv4 局域网地址；取不到（无网络接口 / 沙箱受限）返回 null。供启动日志打印手机访问地址。 */
@@ -158,18 +161,66 @@ async function handlePortConflict(args: CliArgs, dir: string): Promise<number> {
   return 0;
 }
 
+/** --detach：只从运行中的宿主卸载当前目录，不启动服务器。未挂载时只提示，不算失败。 */
+async function detachFromHost(args: CliArgs, dir: string): Promise<number> {
+  const identity = await probeIdentity(args.port);
+  if (!identity) {
+    console.error(`Port ${args.port} is not served by anther.`);
+    return 1;
+  }
+
+  const workspace = await canonicalDir(dir);
+  const mount = identity.mounts?.find((item) => isSameWorkspace(item.workspace, workspace));
+  if (identity.mounts && !mount) {
+    console.log(`Not attached: ${workspace}`);
+    return 0;
+  }
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${args.port}${DETACH_PATH}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspace }),
+      signal: AbortSignal.timeout(2000),
+    });
+    const data = (await res.json().catch(() => ({}))) as { detached?: MountWire | null; error?: string };
+    if (!res.ok) {
+      console.error(`Cannot detach from anther on port ${args.port}: ${data.error ?? res.statusText}`);
+      return 1;
+    }
+    if (!data.detached) {
+      console.log(`Not attached: ${workspace}`);
+      return 0;
+    }
+    console.log(`Detached: ${data.detached.name} (${data.detached.workspace})`);
+    return 0;
+  } catch (e) {
+    console.error(
+      `Cannot detach from anther on port ${args.port}: ${e instanceof Error ? e.message : String(e)}`,
+    );
+    return 1;
+  }
+}
+
 export async function main(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
   const dir = args.dir;
+  if (args.detach) {
+    process.exitCode = await detachFromHost(args, dir);
+    return;
+  }
 
   const http = new HttpServer({ staticDir: staticDirFor(import.meta.url) });
   const attachState: AttachInfo = { available: args.attach };
   const registry = new MountRegistry(http, () => attachState);
 
   const hostWorkspace = createWorkspace(dir);
-  registerWorkspaceRoutes(http, hostWorkspace, registry.providers());
+  const hostRouter = new Router();
+  registerWorkspaceRoutes(hostRouter, hostWorkspace, registry.providers());
+  registerIdentifyRoutes(http, dir, registry.providers());
   registerAttachRoute(http, registry, () => attachState.available);
-  await registry.addHost(dir, hostWorkspace);
+  registerDetachRoute(http, registry);
+  await registry.addHost(dir, hostWorkspace, hostRouter);
 
   const shutdown = () => {
     void (async () => {

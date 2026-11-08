@@ -146,6 +146,7 @@ export const api = {
   del: (path: string) => request('POST', '/api/delete', { path }),
   system: () => request<SystemInfo>('GET', '/api/system'),
   anther: () => request<AntherIdentity>('GET', '/api/anther'),
+  detach: (workspace: string) => request<{ detached: MountInfo | null }>('POST', '/api/anther/detach', { workspace }),
   tabs: {
     list: () => request<{ tabs: string[] }>('GET', '/api/tabs'),
     open: (path: string) => request('PUT', '/api/tabs/open', { path }),

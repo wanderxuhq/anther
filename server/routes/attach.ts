@@ -7,6 +7,7 @@ import { HttpError } from '../http-error.ts';
 import type { MountRegistry } from '../mounts.ts';
 
 export const ATTACH_PATH = '/api/anther/attach';
+export const DETACH_PATH = '/api/anther/detach';
 
 /** 127.0.0.1 / ::1 / ::ffff:127.0.0.1；仅用于附加接口。 */
 export function isLoopback(req: IncomingMessage): boolean {
@@ -32,6 +33,24 @@ export function registerAttachRoute(
       return await registry.attach(workspace);
     } catch (e) {
       throw new HttpError(400, e instanceof Error ? e.message : 'attach failed');
+    }
+  });
+}
+
+/**
+ * detach 同时供 CLI 和 `/-` 实例页使用；页面可能从局域网访问，
+ * 因此不像 attach 那样限制回环来源。未挂载时返回 detached:null，不算错误。
+ */
+export function registerDetachRoute(http: Router, registry: MountRegistry): void {
+  http.post(DETACH_PATH, async (_req, body) => {
+    const workspace = (body as { workspace?: unknown } | undefined)?.workspace;
+    if (typeof workspace !== 'string' || workspace === '') {
+      throw new HttpError(400, 'missing workspace');
+    }
+    try {
+      return { detached: await registry.detach(workspace) };
+    } catch (e) {
+      throw new HttpError(400, e instanceof Error ? e.message : 'detach failed');
     }
   });
 }

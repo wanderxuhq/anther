@@ -22,6 +22,15 @@ anther /path/to/project
 
 如果端口已经由 anther 提供服务，在另一个目录运行 `anther` 会附加到现有服务器，而不是报端口冲突。用 `--no-attach` 可强制按普通端口冲突报错。`npm run dev` 会带 `--no-attach`，开发模式不支持挂载。
 
+卸载当前目录：
+
+```bash
+anther --detach
+anther /path/to/project --detach --port 8080
+```
+
+目录本来就没被附加时只提示 `Not attached`，正常退出。
+
 ## 多工作区
 
 第一个实例占用端口，并保留原来的地址：
@@ -36,7 +45,9 @@ anther /path/to/project
 
 简写只指向 index 0。索引保存在内存中，宿主退出后重置。在已经挂载的目录再次启动会复用已有地址，不会新建挂载。附加使用对现有服务器的 loopback-only HTTP 请求，局域网客户端无法调用。附加的工作区共享宿主进程和前端构建。
 
-`/-`（以及 `/-/`）列出宿主和所有已附加工作区；每一项链接到最短地址：宿主 `/`，index 0 为 `/-/<name>/`，其余为 `/-/<name>/-/<index>/`。侧边栏最下面的实例按钮会打开这个页面。
+索引按工作区路径记录。卸载后 URL 释放，但同名的新目录会继续往后分配 index；同一目录重新附加则复用原 index。宿主自身也可以卸载，此时 `/` 没有工作区；重新附加同一目录会恢复 `/` 和原有挂载地址。
+
+`/-`（以及 `/-/`）列出宿主和所有已附加工作区；每一项链接到最短地址：宿主 `/`，index 0 为 `/-/<name>/`，其余为 `/-/<name>/-/<index>/`。侧边栏最下面的实例按钮会打开这个页面。条目右侧的关闭按钮用于卸载：第一次点击高亮，第二次点击真正卸载。
 
 ## 使用
 
@@ -79,6 +90,8 @@ anther /path/to/project
 只返回身份与实例上下文，不包含主机名、硬件等系统细节。启动器可用 `name`/`apiVersion` 确认对面是 anther，再用 `workspace` 判断占用端口的实例是否服务同一目录，决定能否直接复用。`mounts` 列出宿主和所有已附加工作区；`attach.available` 表示 `--no-attach` 是否关闭了附加。
 
 这个接口是只读的。附加是一个 loopback-only 的 `POST /api/anther/attach`，请求体为 `{ "workspace": "/absolute/path" }`；服务端检查 socket 来源地址，局域网客户端无法调用。`--no-attach` 会禁用附加。
+
+`POST /api/anther/detach` 使用同样的请求体卸载实例。`anther --detach` 和 `/-` 页面都会调用它，因此不限制回环来源。目录未挂载时返回 `{ "detached": null }`。
 
 ## 文件预览
 

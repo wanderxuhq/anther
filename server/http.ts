@@ -36,13 +36,14 @@ const MIME: Record<string, string> = {
   '.map': 'application/json; charset=utf-8',
 };
 
-/** 每个工作区一套路由表；HttpServer 自身是宿主工作区的路由表。 */
+/** 每个工作区一套路由表；HttpServer 自身是 shell（静态、身份、attach/detach）路由表。 */
 export class Router {
   private routes = new Map<string, Map<string, Handler>>();
   private binaryPosts = new Set<string>();
   private sseRoutes = new Map<string, SseHandler>();
   private streamRoutes = new Map<string, SseHandler>();
   private wsRoutes = new Map<string, WsHandler>();
+  private wsClients = new Set<WebSocket>();
   private disposers: (() => Promise<void>)[] = [];
 
   get(pattern: string, h: Handler) { this.add('GET', pattern, h); }
@@ -76,7 +77,15 @@ export class Router {
   streamHandler(pathname: string): SseHandler | undefined { return this.streamRoutes.get(pathname); }
   wsHandler(pathname: string): WsHandler | undefined { return this.wsRoutes.get(pathname); }
 
+  trackWs(ws: WebSocket): void { this.wsClients.add(ws); }
+  untrackWs(ws: WebSocket): void { this.wsClients.delete(ws); }
+
   async dispose(): Promise<void> {
+    // 卸载挂载时只关闭该挂载的 WS（终端/LSP），不影响其他工作区。
+    for (const ws of this.wsClients) {
+      try { ws.close(); } catch { /* 已关闭 */ }
+    }
+    this.wsClients.clear();
     await Promise.all(this.disposers.map((dispose) => dispose()));
   }
 }
@@ -121,6 +130,8 @@ export class HttpServer extends Router {
   private staticDir: string;
   private mounts = new Map<string, Router>();
   private bases: string[] = [];
+  /** 宿主工作区路由：挂在 '/' 时作为根路由的 fallback；detach 后为 null。 */
+  private rootWorkspace: Router | null = null;
 
   constructor(opts: { staticDir: string }) {
     super();
@@ -131,6 +142,8 @@ export class HttpServer extends Router {
     // 用 async 回调 + try/catch，与 SSE 路径（await + catch 写错误）同款。
     this.wss.on('connection', async (ws, req) => {
       const router = requestRouters.get(req) ?? this;
+      router.trackWs(ws);
+      ws.on('close', () => router.untrackWs(ws));
       const url = new URL(req.url ?? '/', 'http://localhost');
       const h = router.wsHandler(url.pathname);
       try {
@@ -144,11 +157,19 @@ export class HttpServer extends Router {
 
     this.server.on('upgrade', (req, socket, head) => {
       const resolved = this.resolve(req.url ?? '/');
-      if (resolved.reserved || !resolved.router.wsHandler(resolved.restPath)) {
+      if (resolved.reserved) {
         socket.destroy();
         return;
       }
-      requestRouters.set(req, resolved.router);
+      const candidates = resolved.base === '' && this.rootWorkspace && this.rootWorkspace !== resolved.router
+        ? [resolved.router, this.rootWorkspace]
+        : [resolved.router];
+      const router = candidates.find((candidate) => candidate.wsHandler(resolved.restPath));
+      if (!router) {
+        socket.destroy();
+        return;
+      }
+      requestRouters.set(req, router);
       req.url = resolved.restUrl;
       this.wss.handleUpgrade(req, socket, head, (ws) => this.wss.emit('connection', ws, req));
     });
@@ -160,6 +181,20 @@ export class HttpServer extends Router {
       const base = normalizeBase(raw);
       if (this.mounts.has(base)) throw new Error(`mount already exists: ${base || '/'}`);
       this.mounts.set(base, router);
+    }
+    this.bases = [...this.mounts.keys()].filter(Boolean).sort((a, b) => b.length - a.length);
+  }
+
+  /** 设置/清除宿主工作区；宿主 detach 时传 null。 */
+  setRootWorkspace(router: Router | null) {
+    this.rootWorkspace = router;
+  }
+
+  /** 移除挂载前缀；宿主根路径 '' 不允许卸载。 */
+  unmount(bases: string | string[]) {
+    for (const raw of Array.isArray(bases) ? bases : [bases]) {
+      const base = normalizeBase(raw);
+      if (base !== '') this.mounts.delete(base);
     }
     this.bases = [...this.mounts.keys()].filter(Boolean).sort((a, b) => b.length - a.length);
   }
@@ -189,6 +224,7 @@ export class HttpServer extends Router {
       );
     }
     const routers = new Set<Router>([this, ...this.mounts.values()]);
+    if (this.rootWorkspace) routers.add(this.rootWorkspace);
     await Promise.all([...routers].map((router) => router.dispose()));
   }
 
@@ -236,38 +272,51 @@ export class HttpServer extends Router {
       req.url = resolved.restUrl;
       const { router, restPath } = resolved;
       const query = new URL(resolved.restUrl, 'http://localhost').searchParams;
+      // 根路径的 shell 路由（attach/detach/identity）优先；宿主工作区作为 fallback。
+      const candidates = resolved.base === '' && this.rootWorkspace && this.rootWorkspace !== router
+        ? [router, this.rootWorkspace]
+        : [router];
 
       if (req.method === 'GET' || req.method === 'HEAD') {
-        const streamHandler = router.streamHandler(restPath);
-        if (streamHandler) {
-          await streamHandler(req, res, query);
-          return;
+        for (const candidate of candidates) {
+          const streamHandler = candidate.streamHandler(restPath);
+          if (streamHandler) {
+            await streamHandler(req, res, query);
+            return;
+          }
         }
       }
 
       // SSE 路由：handler 直接拿 res 写流；错误也写在流里。
       if (req.method === 'GET') {
-        const sseHandler = router.sseHandler(restPath);
-        if (sseHandler) {
-          res.writeHead(200, {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            Connection: 'keep-alive',
-          });
-          try {
-            await sseHandler(req, res, query);
-          } catch (e) {
-            if (!res.writableEnded) {
-              const msg = e instanceof HttpError ? e.message : 'internal error';
-              res.write(`data: ${JSON.stringify({ type: 'error', message: msg })}\n\n`);
+        for (const candidate of candidates) {
+          const sseHandler = candidate.sseHandler(restPath);
+          if (sseHandler) {
+            res.writeHead(200, {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              Connection: 'keep-alive',
+            });
+            try {
+              await sseHandler(req, res, query);
+            } catch (e) {
+              if (!res.writableEnded) {
+                const msg = e instanceof HttpError ? e.message : 'internal error';
+                res.write(`data: ${JSON.stringify({ type: 'error', message: msg })}\n\n`);
+              }
             }
+            if (!res.writableEnded) res.end();
+            return;
           }
-          if (!res.writableEnded) res.end();
-          return;
         }
       }
 
-      const handler = router.handler(req.method ?? '', restPath);
+      let handler: Handler | undefined;
+      let handlerRouter: Router | undefined;
+      for (const candidate of candidates) {
+        handler = candidate.handler(req.method ?? '', restPath);
+        if (handler) { handlerRouter = candidate; break; }
+      }
       if (!handler) {
         // 未知 API 永远返回 JSON 404，不能落到 SPA fallback。
         if (restPath.startsWith('/api/')) throw new HttpError(404, 'not found');
@@ -278,7 +327,7 @@ export class HttpServer extends Router {
         throw new HttpError(404, 'not found');
       }
 
-      const binary = req.method === 'POST' && router.isBinaryPost(restPath);
+      const binary = req.method === 'POST' && handlerRouter!.isBinaryPost(restPath);
       const body = await readBody(req, binary);
       const result = await handler(req, body, query);
       res.json(result ?? { ok: true });

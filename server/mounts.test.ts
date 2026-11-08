@@ -9,7 +9,8 @@ import { WebSocket } from 'ws';
 import { HttpServer, Router } from './http.ts';
 import { createWorkspace, registerWorkspaceRoutes } from './workspace.ts';
 import { MountRegistry } from './mounts.ts';
-import { ATTACH_PATH, isLoopback, registerAttachRoute } from './routes/attach.ts';
+import { ATTACH_PATH, DETACH_PATH, isLoopback, registerAttachRoute, registerDetachRoute } from './routes/attach.ts';
+import { registerIdentifyRoutes } from './routes/identify.ts';
 
 async function setup() {
   const root = await mkdtemp(path.join(tmpdir(), 'anther-mount-'));
@@ -28,9 +29,12 @@ async function setup() {
   const attach = { available: true };
   const registry = new MountRegistry(http, () => attach);
   const workspace = createWorkspace(host);
-  registerWorkspaceRoutes(http, workspace, registry.providers());
+  const hostRouter = new Router();
+  registerWorkspaceRoutes(hostRouter, workspace, registry.providers());
+  registerIdentifyRoutes(http, host, registry.providers());
   registerAttachRoute(http, registry, () => attach.available);
-  await registry.addHost(host, workspace);
+  registerDetachRoute(http, registry);
+  await registry.addHost(host, workspace, hostRouter);
   await http.listen(0, '127.0.0.1');
   const base = `http://127.0.0.1:${(http.address() as { port: number }).port}`;
   return { root, host, qlang, otherQlang, http, registry, attach, base };
@@ -210,6 +214,69 @@ test('loopback POST /api/anther/attach：附加、同目录复用、错误和禁
 
     f.attach.available = false;
     assert.equal((await post({ workspace: f.otherQlang })).status, 403);
+  } finally {
+    await f.http.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test('detach：卸载、未挂载返回 null、宿主可卸载并重新挂载复用 index', async () => {
+  const f = await setup();
+  try {
+    const postAttach = (workspace: string) => fetch(f.base + ATTACH_PATH, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspace }),
+    });
+    const postDetach = (workspace: string) => fetch(f.base + DETACH_PATH, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspace }),
+    });
+
+    const attached = await f.registry.attach(f.qlang);
+    assert.equal(attached.mount.index, 0);
+    const detached = await postDetach(f.qlang);
+    assert.equal(detached.status, 200);
+    const detachedBody = await detached.json() as { detached: { index: number } | null };
+    assert.equal(detachedBody.detached?.index, 0);
+    assert.equal((await get(f.base, '/-/qlang/api/list?path=.')).status, 404);
+
+    const notMounted = await postDetach(f.qlang);
+    assert.equal(notMounted.status, 200);
+    assert.equal(((await notMounted.json()) as { detached: unknown }).detached, null);
+
+    // 同一目录重新 attach：复用 index 0 和简写
+    const again = await postAttach(f.qlang);
+    const againBody = await again.json() as { mount: { index: number; shorthand: string | null } };
+    assert.equal(againBody.mount.index, 0);
+    assert.equal(againBody.mount.shorthand, '/-/qlang');
+
+    // 同名不同目录：使用 next index，不复用被 detach 的 0
+    await postDetach(f.qlang);
+    const other = await f.registry.attach(f.otherQlang);
+    assert.equal(other.mount.index, 1);
+    assert.equal(other.mount.shorthand, null);
+
+    // 原目录回来：复用 0；index 1 仍保留
+    const original = await postAttach(f.qlang);
+    const originalBody = await original.json() as { mount: { index: number; shorthand: string | null } };
+    assert.equal(originalBody.mount.index, 0);
+    assert.equal(originalBody.mount.shorthand, '/-/qlang');
+    assert.deepEqual(((await json(f.base, '/-/qlang/api/list?path=.')).body.entries as { name: string }[]).map((e) => e.name), ['q.txt']);
+    assert.deepEqual(((await json(f.base, '/-/qlang/-/1/api/list?path=.')).body.entries as { name: string }[]).map((e) => e.name), ['other.txt']);
+
+    // 宿主也能 detach：/ 变空，但 shell 和 /- 页面仍可用
+    const hostDetach = await postDetach(f.host);
+    const hostBody = await hostDetach.json() as { detached: { legacyRoot: boolean } | null };
+    assert.equal(hostBody.detached?.legacyRoot, true);
+    assert.equal((await json(f.base, '/api/list?path=.')).status, 404);
+    assert.equal((await get(f.base, '/')).status, 200);
+    assert.equal((await json(f.base, '/api/anther')).status, 200);
+
+    // 宿主重新 attach：复用 /、/-/anther、/-/anther/-/0
+    const hostBack = await postAttach(f.host);
+    const hostBackBody = await hostBack.json() as { mount: { index: number; legacyRoot: boolean; shorthand: string | null } };
+    assert.equal(hostBackBody.mount.index, 0);
+    assert.equal(hostBackBody.mount.legacyRoot, true);
+    assert.equal(hostBackBody.mount.shorthand, '/-/anther');
+    assert.deepEqual(((await json(f.base, '/api/list?path=.')).body.entries as { name: string }[]).map((e) => e.name).sort(), ['host.txt', 'index.html']);
   } finally {
     await f.http.close();
     await rm(f.root, { recursive: true, force: true });

@@ -22,6 +22,15 @@ Open `http://localhost:3000` by default. The startup log also shows a LAN addres
 
 If the port is already served by anther, running `anther` in another directory attaches that directory to the existing server instead of failing. Use `--no-attach` to force a normal port-conflict error. `npm run dev` runs with `--no-attach` because development mode is not supported for mounts.
 
+Detach the current directory with:
+
+```bash
+anther --detach
+anther /path/to/project --detach --port 8080
+```
+
+If the directory is not attached, it prints `Not attached` and exits successfully.
+
 ## Multiple workspaces
 
 The first instance owns the port and keeps its legacy URLs:
@@ -36,7 +45,9 @@ Starting anther in another directory on the same port attaches it:
 
 Shorthands only point to index 0. Indexes are kept in memory and reset when the host exits. Starting in a directory that is already mounted reuses the existing URL and does not create another mount. Attaching uses a loopback-only HTTP request to the existing server; LAN clients cannot call it. Attached workspaces share the host process and its frontend build.
 
-`/-` (also `/-/`) lists the host and every attached workspace. Each entry links to the shortest URL: `/` for the host, `/-/<name>/` for index 0, and `/-/<name>/-/<index>/` otherwise. The instances button at the bottom of the sidebar opens this page.
+Indexes belong to workspace paths. Detaching a workspace frees its URL but a different directory with the same basename gets the next index; reattaching the same directory reuses its previous index. The host workspace itself can also be detached, leaving `/` without a workspace; reattaching it restores `/` and its mount URLs.
+
+`/-` (also `/-/`) lists the host and every attached workspace. Each entry links to the shortest URL: `/` for the host, `/-/<name>/` for index 0, and `/-/<name>/-/<index>/` otherwise. The instances button at the bottom of the sidebar opens this page. The close button on an entry detaches it: the first click highlights the button, and the second click performs the detach.
 
 ## Usage
 
@@ -79,6 +90,8 @@ Shorthands only point to index 0. Indexes are kept in memory and reset when the 
 It returns identity and instance context only, not host or hardware details. A launcher can use `name`/`apiVersion` to recognize anther, and `workspace` to check whether a port that is already in use belongs to the same workspace before reusing that instance. `mounts` lists the host and every attached workspace; `attach.available` reports whether `--no-attach` left attaching disabled.
 
 This endpoint is read-only. Attaching is a loopback-only `POST /api/anther/attach` with `{ "workspace": "/absolute/path" }`; LAN clients cannot call it because the server checks the socket's remote address. `--no-attach` disables the route's effect.
+
+`POST /api/anther/detach` with the same body detaches an instance. It is used by `anther --detach` and by the `/-` page, so it is not restricted to loopback clients. If the workspace is not mounted, it returns `{ "detached": null }`.
 
 ## File previews
 

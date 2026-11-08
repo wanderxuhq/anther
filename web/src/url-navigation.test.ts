@@ -1583,14 +1583,29 @@ test('实例列表页 `/-`：列出宿主和所有挂载，链接使用最短地
     if (url.pathname === '/api/anther') {
       return json({ name: 'anther', workspace: '/repo/anther', instanceId: 'x', attach: { available: true }, mounts });
     }
+    if (url.pathname === '/api/anther/detach') return json({ detached: mounts[1] });
   } });
   const dispose = h.w.harness.mountInstances();
   await until(() => h.w.document.querySelectorAll('.instance-row').length === 3);
 
-  const rows = [...h.w.document.querySelectorAll('.instance-row')] as HTMLAnchorElement[];
-  assert.deepEqual(rows.map((row) => row.getAttribute('href')), ['/', '/-/qlang/', '/-/qlang/-/1/']);
+  const rows = [...h.w.document.querySelectorAll('.instance-row')] as HTMLElement[];
+  const links = rows.map((row) => row.querySelector('.instance-link') as HTMLAnchorElement);
+  assert.deepEqual(links.map((link) => link.getAttribute('href')), ['/', '/-/qlang/', '/-/qlang/-/1/']);
   assert.equal(rows[2].querySelector('.instance-name')!.textContent, 'qlang #1');
   assert.ok(rows[0].querySelector('.instance-badge'));
+
+  const detachButtons = rows.map((row) => row.querySelector('.instance-detach') as HTMLButtonElement);
+  assert.equal(detachButtons.length, 3);
+  const detachPath = '/api/anther/detach';
+  assert.equal(h.calls.filter((call) => call.url.pathname === detachPath).length, 0);
+  detachButtons[1].click();
+  await tick();
+  assert.ok(detachButtons[1].classList.contains('armed'));
+  assert.equal(h.calls.filter((call) => call.url.pathname === detachPath).length, 0);
+
+  detachButtons[1].click();
+  await until(() => h.w.document.querySelectorAll('.instance-row').length === 2);
+  assert.ok(h.calls.some((call) => call.url.pathname === detachPath));
   dispose();
 });
 
