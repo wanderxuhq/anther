@@ -112,7 +112,6 @@ a.icon-btn { color: inherit; text-decoration: none; }
 
 /* 终端：同一份屏幕缓冲区，两种纯渲染。html 默认；text 保留经典等宽网格。 */
 :root {
-  --term-bg: #ffffff;
   --term-fg: #1e1e1e;
   --term-cursor-bg: #1e1e1e;
   --term-cursor-fg: #ffffff;
@@ -122,7 +121,6 @@ a.icon-btn { color: inherit; text-decoration: none; }
   --term-ansi-12: #0451a5; --term-ansi-13: #bc05bc; --term-ansi-14: #0598bc; --term-ansi-15: #a5a5a5;
 }
 :root[data-theme='dark'] {
-  --term-bg: #1e1e1e;
   --term-fg: #d4d4d4;
   --term-cursor-bg: #d4d4d4;
   --term-cursor-fg: #1e1e1e;
@@ -144,7 +142,7 @@ a.icon-btn { color: inherit; text-decoration: none; }
 .terminal-scroll {
   position: relative; flex: 0 0 auto; min-height: 0; overflow: auto; overscroll-behavior: contain;
   padding: 6px 8px 10px;
-  background: var(--term-bg); color: var(--term-fg);
+  background: var(--bg); color: var(--term-fg);
   font-family: 'DejaVu Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
   line-height: 1.35; font-variant-ligatures: none;
   -webkit-user-select: text; user-select: text;
@@ -174,7 +172,7 @@ a.icon-btn { color: inherit; text-decoration: none; }
 .term-strike { text-decoration: line-through; }
 .term-overline { text-decoration: overline; }
 .term-hidden { color: transparent; }
-.term-inverse { background: var(--term-fg); color: var(--term-bg); }
+.term-inverse { background: var(--term-fg); color: var(--bg); }
 .term-blink { animation: term-blink 1s steps(1, end) infinite; }
 @keyframes term-blink { 50% { opacity: 0; } }
 
@@ -448,7 +446,6 @@ a.icon-btn { color: inherit; text-decoration: none; }
 .system-info-addresses dd { display: flex; flex-direction: column; gap: 4px; }
 .system-info-address { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .system-info-address-meta { color: var(--muted); font-size: 11px; }
-.system-info-card .dialog-actions { flex: 0 0 auto; }
 
 /* 实例列表（侧边栏底部入口 / `/-` 页面）：点击切换到最短地址 */
 .instances-status { color: var(--muted); font-size: 13px; }

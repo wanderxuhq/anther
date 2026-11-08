@@ -85,6 +85,9 @@ export function TerminalView(props: { id: string }) {
   let renderFrame: number | undefined;
   let composing = false;
   let skipInput = false;
+  let keyBarFocusWasInInput = false;
+  let keyBarSuppressFocusEvents = false;
+  let keyBarFocusRestoreTimer: ReturnType<typeof setTimeout> | undefined;
   let lastCols = 0;
   let lastRows = 0;
   let cellWidth = 0;
@@ -115,6 +118,34 @@ export function TerminalView(props: { id: string }) {
   const sendText = (data: string) => {
     if (!data) return;
     send?.(data);
+  };
+
+  /** 按键条点击前记录软键盘状态；某些移动端浏览器会无视 preventDefault 抢焦点。 */
+  const prepareKeyBarFocus = () => {
+    if (document.activeElement === inputEl) {
+      keyBarFocusWasInInput = true;
+      keyBarSuppressFocusEvents = true;
+      // 兜底：即使 click 没走到，也不让 focus tracking 永久被抑制。
+      clearTimeout(keyBarFocusRestoreTimer);
+      keyBarFocusRestoreTimer = setTimeout(() => {
+        keyBarFocusWasInInput = false;
+        keyBarSuppressFocusEvents = false;
+      }, 2000);
+    }
+  };
+
+  /** 按键动作完成后恢复原焦点；只恢复原本就聚焦的输入框，不主动弹出键盘。 */
+  const restoreKeyBarFocus = () => {
+    if (keyBarFocusWasInInput) inputEl?.focus({ preventScroll: true });
+    if (keyBarSuppressFocusEvents) {
+      clearTimeout(keyBarFocusRestoreTimer);
+      // 再补一次延迟聚焦：某些浏览器会在 click 的默认动作里才移走焦点。
+      keyBarFocusRestoreTimer = setTimeout(() => {
+        if (keyBarFocusWasInInput) inputEl?.focus({ preventScroll: true });
+        keyBarFocusWasInInput = false;
+        keyBarSuppressFocusEvents = false;
+      }, 0);
+    }
   };
 
   const scheduleRender = () => {
@@ -193,7 +224,7 @@ export function TerminalView(props: { id: string }) {
     const scroller = scrollEl;
     const meta = {
       fg: parseCssColor(root.getPropertyValue('--term-fg')) ?? undefined,
-      bg: parseCssColor(root.getPropertyValue('--term-bg')) ?? undefined,
+      bg: parseCssColor(root.getPropertyValue('--bg')) ?? undefined,
       cursor: parseCssColor(root.getPropertyValue('--term-cursor-bg')) ?? undefined,
       pixelWidth: scroller?.clientWidth,
       pixelHeight: scroller?.clientHeight,
@@ -554,6 +585,8 @@ export function TerminalView(props: { id: string }) {
       renderFrame = undefined;
       clearTimeout(resizeTimer);
       resizeTimer = undefined;
+      clearTimeout(keyBarFocusRestoreTimer);
+      keyBarFocusRestoreTimer = undefined;
       resizeObserver?.disconnect();
       resizeObserver = undefined;
       sock.dispose();
@@ -775,7 +808,7 @@ export function TerminalView(props: { id: string }) {
 
   const focusOnPaneClick = (event: MouseEvent) => {
     const target = event.target as HTMLElement | null;
-    if (target?.closest('button, a, input, textarea, select, [role="button"]')) return;
+    if (target?.closest('button, a, input, textarea, select, [role="button"], .terminal-keys')) return;
     // 在终端内容上拖选文本时不抢焦点；点空白/工具栏区域则总是聚焦。
     if (scrollEl?.contains(target) && window.getSelection()?.toString()) return;
     focusInput?.();
@@ -875,11 +908,30 @@ export function TerminalView(props: { id: string }) {
         onPaste={handlePaste}
         onCompositionStart={() => { composing = true; }}
         onCompositionEnd={handleCompositionEnd}
-        onFocus={() => { if (screen?.getMode('focusTracking') === true) sendText('\x1b[I'); }}
-        onBlur={() => { if (screen?.getMode('focusTracking') === true) sendText('\x1b[O'); }}
+        onFocus={() => {
+          if (!keyBarSuppressFocusEvents && screen?.getMode('focusTracking') === true) sendText('\x1b[I');
+        }}
+        onBlur={() => {
+          if (!keyBarSuppressFocusEvents && screen?.getMode('focusTracking') === true) sendText('\x1b[O');
+        }}
       />
 
-      <div class="terminal-keys" classList={{ open: terminalKeyBarOpen() }} role="toolbar" aria-label={t('terminal.keys')}>
+      <div
+        class="terminal-keys"
+        classList={{ open: terminalKeyBarOpen() }}
+        role="toolbar"
+        aria-label={t('terminal.keys')}
+        onPointerDown={(event) => {
+          // 按键条不抢焦点：手机键盘保持原来的打开/关闭状态。
+          prepareKeyBarFocus();
+          if ((event.target as HTMLElement | null)?.closest('.terminal-key')) event.preventDefault();
+        }}
+        onMouseDown={(event) => {
+          prepareKeyBarFocus();
+          if ((event.target as HTMLElement | null)?.closest('.terminal-key')) event.preventDefault();
+        }}
+        onClick={() => restoreKeyBarFocus()}
+      >
         <Show when={!ctrlArmed()} fallback={
           <>
             <div class="terminal-key-scroll">

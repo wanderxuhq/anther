@@ -117,10 +117,6 @@ export function SystemInfoDialog(props: { onClose: () => void }) {
             </dl>
           )}
         </Show>
-
-        <div class="dialog-actions">
-          <button type="button" class="icon-btn" onClick={props.onClose}>{t('system.close')}</button>
-        </div>
       </div>
     </div>
   );
