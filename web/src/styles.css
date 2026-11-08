@@ -1,7 +1,7 @@
 :root { color-scheme: light dark; }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
-body { font-family: system-ui, -apple-system, sans-serif; }
+body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: #000; }
 
 /* 内容行允许收缩到视口内，长文件树不能撑高整页。 */
 .app { display: grid; grid-template-rows: auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); height: var(--vvh, 100dvh); overflow: hidden; }
@@ -14,8 +14,61 @@ body { font-family: system-ui, -apple-system, sans-serif; }
   flex: 0 0 auto;
 }
 .toolbar-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
-/* 面板关闭按钮固定在工具栏最右侧；git 工具栏没有弹性路径，用 auto 外边距靠右。 */
-.panel-close { margin-left: auto; flex: 0 0 auto; }
+/* 主题按钮常驻工具栏最右侧，关闭按钮紧随其右；git 工具栏没有弹性路径，用 auto 外边距靠右。 */
+.theme-toggle { margin-left: auto; flex: 0 0 auto; transition: transform .16s ease; }
+.theme-toggle:active { transform: scale(.88); }
+.theme-icon { display: block; }
+/* 切换到的图标带方向入场：去浅色从左侧转出，去深色从右侧转出，回 Auto 则缩放浮现。 */
+html.theme-switching .theme-icon-light { animation: theme-icon-light .38s cubic-bezier(.34, 1.56, .64, 1); }
+html.theme-switching .theme-icon-dark { animation: theme-icon-dark .38s cubic-bezier(.34, 1.56, .64, 1); }
+html.theme-switching .theme-icon-auto { animation: theme-icon-auto .3s ease; }
+@keyframes theme-icon-light {
+  from { opacity: 0; transform: rotate(-120deg) scale(.55); }
+  to { opacity: 1; transform: rotate(0) scale(1); }
+}
+@keyframes theme-icon-dark {
+  from { opacity: 0; transform: rotate(120deg) scale(.55); }
+  to { opacity: 1; transform: rotate(0) scale(1); }
+}
+@keyframes theme-icon-auto {
+  from { opacity: 0; transform: scale(.6); }
+  to { opacity: 1; transform: scale(1); }
+}
+/* 昼夜切换时只给主要表面加颜色过渡，避免全量 * 过渡拖慢编辑器。 */
+html.theme-switching body,
+html.theme-switching .toolbar,
+html.theme-switching .drawer,
+html.theme-switching .drawer-views,
+html.theme-switching .drawer-content,
+html.theme-switching .editor-area,
+html.theme-switching .markdown-preview,
+html.theme-switching .terminal-pane,
+html.theme-switching .terminal-scroll,
+html.theme-switching .dialog-card,
+html.theme-switching .instances-page,
+html.theme-switching .instances-page-card {
+  transition: background-color .3s ease, color .3s ease, border-color .3s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .theme-toggle { transition: none; }
+  .theme-toggle:active { transform: none; }
+  html.theme-switching .theme-icon-light,
+  html.theme-switching .theme-icon-dark,
+  html.theme-switching .theme-icon-auto { animation: none; }
+  html.theme-switching body,
+  html.theme-switching .toolbar,
+  html.theme-switching .drawer,
+  html.theme-switching .drawer-views,
+  html.theme-switching .drawer-content,
+  html.theme-switching .editor-area,
+  html.theme-switching .markdown-preview,
+  html.theme-switching .terminal-pane,
+  html.theme-switching .terminal-scroll,
+  html.theme-switching .dialog-card,
+  html.theme-switching .instances-page,
+  html.theme-switching .instances-page-card { transition: none; }
+}
+.panel-close { flex: 0 0 auto; }
 .icon-btn {
   background: none; border: none; font-size: 20px;
   padding: 6px 10px; border-radius: 6px; cursor: pointer;

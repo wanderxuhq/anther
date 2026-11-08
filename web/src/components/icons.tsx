@@ -13,7 +13,8 @@ export type IconName =
   | 'archive' | 'database' | 'table' | 'structure'
   | 'sliders' | 'fit' | 'fit-width' | 'zoom-in' | 'zoom-out' | 'actual-size'
   | 'outline' | 'copy' | 'expand' | 'collapse'
-  | 'sort-asc' | 'sort-desc';
+  | 'sort-asc' | 'sort-desc'
+  | 'theme-auto' | 'sun' | 'moon';
 
 type IconPath = () => JSX.Element;
 
@@ -89,6 +90,16 @@ const icons: Record<IconName, IconPath> = {
   collapse: () => <path d="M3 10h7V3m0 7L3 3m18 11h-7v7m0-7 7 7" />,
   'sort-asc': () => <path d="M12 19V5m-5 5 5-5 5 5" />,
   'sort-desc': () => <path d="M12 5v14m-5-5 5 5 5-5" />,
+  // 圈内 A（Auto）：跟随系统主题；太阳/月亮：明确的浅色/深色。
+  'theme-auto': () => <>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M8.5 15.5 12 8.5l3.5 7M9.8 13.4h4.4" />
+  </>,
+  sun: () => <>
+    <circle cx="12" cy="12" r="4" />
+    <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+  </>,
+  moon: () => <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" />,
 };
 
 export function Icon(props: {

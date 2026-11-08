@@ -21,6 +21,7 @@ import {
   editorHandle, setEditorHandle,
   activePanel, selectPanel, drawerOpen, setDrawerOpen, updateFilePosition,
   openGitHistory, openGitBranch, createBranch, currentBranch, setCurrentBranch, gitRefreshTick, setGitRefreshTick,
+  theme, setTheme, applyTheme,
 } from './stores.ts';
 import { createEditor, type EditorHandle } from './editor/index.ts';
 import { describeLanguage, loadLanguage } from './editor/language.ts';
@@ -164,6 +165,23 @@ export function App() {
     const tab = activeTab();
     if (!tab) return;
     void closeAnyTab(tab.id).catch(() => { /* 关闭失败时保留面板 */ });
+  }
+
+  // 主题切换：跟随系统 ⇄ 系统主题的反向。显式主题再次点击回到跟随系统。
+  let themeTransitionTimer: number | undefined;
+  function handleToggleTheme() {
+    const next = theme() === 'auto'
+      ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark')
+      : 'auto';
+    // 临时开启颜色过渡和新图标入场动画；动画结束即移除，避免影响日常交互。
+    document.documentElement.classList.add('theme-switching');
+    setTheme(next);
+    applyTheme(next);
+    pushState();
+    window.clearTimeout(themeTransitionTimer);
+    themeTransitionTimer = window.setTimeout(() => {
+      document.documentElement.classList.remove('theme-switching');
+    }, 420);
   }
 
   // 桌面端 Ctrl+Shift+F → 全局搜索（打开抽屉 + 切到搜索视图；SearchView 挂载时自动聚焦）
@@ -489,6 +507,8 @@ export function App() {
     setBeforeFileMutation(undefined);
     window.removeEventListener('keydown', onKeyDown);
     clearTimeout(saveTimer);
+    window.clearTimeout(themeTransitionTimer);
+    document.documentElement.classList.remove('theme-switching');
     editor?.destroy();
     toastEl?.remove();
   });
@@ -535,7 +555,7 @@ export function App() {
             </button>
           </Show>
           <span class="toolbar-path" title={browsingArchive() ? [currentFile(), ...archiveChain(), archiveEntry()].filter(Boolean).join(' › ') : undefined}>{toolbarPathLabel()}</span>
-          {/* 终端渲染切换与 Markdown 预览共用同一个眼睛/代码按钮。 */}
+          {/* 终端渲染切换与 Markdown 预览共用同一个眼睛/代码按钮；图标表示当前状态。 */}
           <Show when={activeKind() === 'terminal'}>
             <button
               class="icon-btn"
@@ -554,7 +574,7 @@ export function App() {
               aria-label={terminalRenderMode() === 'html' ? t('terminal.showText') : t('terminal.showHtml')}
               onClick={() => setTerminalRenderMode(terminalRenderMode() === 'html' ? 'text' : 'html')}
             >
-              <Icon name={terminalRenderMode() === 'html' ? 'code' : 'eye'} />
+              <Icon name={terminalRenderMode() === 'html' ? 'eye' : 'code'} />
             </button>
           </Show>
           <Show when={canPreviewMarkdown() || canPreviewTable()}>
@@ -564,7 +584,7 @@ export function App() {
               title={canPreviewTable() ? (showTablePreview() ? t('preview.showSource') : t('preview.showTable')) : (showMarkdownPreview() ? t('markdown.showSource') : t('markdown.showPreview'))}
               aria-label={canPreviewTable() ? (showTablePreview() ? t('preview.showSource') : t('preview.showTable')) : (showMarkdownPreview() ? t('markdown.showSource') : t('markdown.showPreview'))}
             >
-              <Icon name={showRenderedDocument() ? 'code' : 'eye'} />
+              <Icon name={showRenderedDocument() ? 'eye' : 'code'} />
             </button>
           </Show>
           <Show when={browsingArchive() || activeDatabase()?.archive}><ArchiveOptions /></Show>
@@ -605,6 +625,21 @@ export function App() {
             </button>
           </Show>
         </Show>
+        <button
+          class="icon-btn theme-toggle"
+          onClick={handleToggleTheme}
+          title={theme() === 'auto' ? t('theme.auto') : theme() === 'dark' ? t('theme.dark') : t('theme.light')}
+          aria-label={theme() === 'auto' ? t('theme.auto') : theme() === 'dark' ? t('theme.dark') : t('theme.light')}
+        >
+          <Show when={theme()} keyed>
+            {(mode) => (
+              <Icon
+                name={mode === 'auto' ? 'theme-auto' : mode === 'dark' ? 'moon' : 'sun'}
+                class={`theme-icon theme-icon-${mode}`}
+              />
+            )}
+          </Show>
+        </button>
         <Show when={activeTab()}>
           <button
             class="icon-btn panel-close"
