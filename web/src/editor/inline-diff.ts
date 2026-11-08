@@ -1,7 +1,7 @@
 // web/src/editor/inline-diff.ts
 // 行内 diff 专用 CM6 编辑器：双 gutter（状态栏 + 新文件行号）+ 行级红绿背景。
 // 不走 createEditor/basicSetup —— 需替换默认行号；只读静态文档，装饰一次构建，无增量更新。
-// 对 brief 代码的两处 API 适配（@codemirror/view@6.43.8）：gutter lineMarker 的 BlockInfo
+// 两处 API 适配（@codemirror/view@6.43.8）：gutter lineMarker 的 BlockInfo
 // 无 number 属性，改用 view.state.doc.lineAt(line.from).number；Decoration.set 返回
 // DecorationSet 非 Extension，须经 EditorView.decorations.of 提供。逻辑与结构不变。
 import { EditorState, type Range } from '@codemirror/state';

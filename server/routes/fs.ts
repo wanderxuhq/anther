@@ -55,9 +55,9 @@ export function registerFsRoutes(http: Router, files: FileStore, archiveOptions?
     await files.write(p, content);
   });
 
-  // 写操作不再校验只读：只读仅由前端编辑器控制，服务端始终放行（用户决策 2026-08-11）。
-  // body 守卫同 PUT /api/file（final-fixes 轮次修复的模式）：空 body 时 readBody 返回
-  // undefined，直接解构抛 TypeError → 500；先判对象形态再解构 → 400。
+  // 写操作不校验只读：只读仅由前端编辑器控制，服务端始终放行。
+  // body 守卫同 PUT /api/file：空 body 时 readBody 返回 undefined，直接解构抛
+  // TypeError → 500；先判对象形态再解构 → 400。
   http.post('/api/mkdir', async (_req, body, q) => {
     if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
     const { path: p, recursive } = body as { path?: string; recursive?: unknown };
@@ -95,7 +95,7 @@ export function registerFsRoutes(http: Router, files: FileStore, archiveOptions?
     await files.del(p);
   });
 
-  // 全局搜索（Task 17）：SSE 流式——每搜完一个有匹配的文件发一个 file 事件，
+  // 全局搜索：SSE 流式——每搜完一个有匹配的文件发一个 file 事件，
   // 结束发 done；客户端断开（req close）→ abort 遍历信号（不浪费服务端 CPU）
   http.sse('/api/search', async (req, res, q) => {
     const query = q.get('q');

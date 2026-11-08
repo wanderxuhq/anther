@@ -124,7 +124,7 @@ export function App() {
     return tab?.kind === 'git-diff' ? tab.path : null;
   };
 
-  // git 相关标签（git 面板 / 历史 / 分支 / 提交）激活 → 工具栏切 git 态（spec §1；git-diff 保持文件态）
+  // git 相关标签（git 面板 / 历史 / 分支 / 提交）激活 → 工具栏切 git 态（git-diff 保持文件态）
   const isGitKind = () => {
     const k = activeTab()?.kind;
     return k === 'git' || k === 'git-history' || k === 'git-branch' || k === 'git-commit';
@@ -186,7 +186,7 @@ export function App() {
   let toastEl: HTMLDivElement | undefined;
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
 
-  // 最小 Toast（spec §8：Toast + 降级，不弹窗打断）。完整系统留给 Task 14/15。
+  // 最小 Toast：Toast + 降级，不弹窗打断。
   function showToast(message: string, kind: 'success' | 'error') {
     if (!toastEl) {
       toastEl = document.createElement('div');
@@ -202,7 +202,7 @@ export function App() {
   }
 
   /** 保存链：api.writeFile(path, text)；失败每 1s 重试共 3 次，仍失败 Toast。
-   *  只读仅控制编辑器（用户决策 2026-08-11）：保存不传 ro，服务端始终放行 */
+   *  只读仅控制编辑器：保存不传 ro，服务端始终放行 */
   async function saveWithRetry(path: string, text: string) {
     for (let attempt = 0; ; attempt++) {
       try {
@@ -291,12 +291,12 @@ export function App() {
   }
 
   /**
-   * 切换分支保护（spec §5.4，用户规则）：
+   * 切换分支保护（用户规则）：
    * 1) flushSave() 立即保存防抖中的待写内容
    * 2) setRoMode(true) → 编辑器转只读（handleEditorChange 的 roMode guard 同时生效 → 只读期间不自动保存）
    * 3) api.git.checkout(name)
    * 4) 成功 → currentBranch 更新 + gitRefreshTick bump（git 面板/历史/分支全部重拉）；
-   *    已打开的文件标签不关闭（用户要求），切回文件标签时 currentFile 变化 → loadDoc 自动从新分支重读；
+   *    已打开的文件标签不关闭，切回文件标签时 currentFile 变化 → loadDoc 自动从新分支重读；
    *    编辑器保持只读（用户规则），用户回文件标签按 ✎ 可自行切回可写
    * 5) 失败 → Toast git 原始 stderr；分支不变；编辑器保持「已保存 + 只读」（flushSave 已把防抖内容落盘旧分支，改动不丢）
    */
@@ -455,13 +455,13 @@ export function App() {
   // 只读切换 → Compartment reconfigure（effect 只读 roMode，无需重读文件）
   // 注意：必须先求值 roMode() 再调用——editor 由异步加载延迟创建，effect 首次运行时
   // 仍为 undefined，`editor?.setReadOnly(roMode())` 的可选链会短路并跳过参数求值，
-  // 依赖永不建立，✎ 切换永不生效（2026-08-08 修复）。
+  // 依赖永不建立，✎ 切换永不生效。
   createEffect(() => {
     const ro = documentReadOnly() || fileMutationLocked(currentFile());
     editor?.setReadOnly(ro);
   });
 
-  // 搜索跳转消费（Task 17）：目标文件加载完成后执行 gotoLine。
+  // 搜索跳转消费：目标文件加载完成后执行 gotoLine。
   // 条件 docLoadedPath() === g.path 保证 editor 持有的就是目标文档——
   // currentFile 在 openTab 里同步变化，而文档是异步加载的，只看 currentFile 会
   // 在加载完成前对旧文档 gotoLine（行号错位/越界钳制到旧文档末尾行）

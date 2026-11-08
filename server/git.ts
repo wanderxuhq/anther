@@ -316,7 +316,7 @@ export class Git {
     }
   }
 
-  /** 提交日志：branch 缺省(null)=当前分支；提供则必须 ∈ branches()（白名单，防注入）。limit∈[1,1000]、skip≥0 整数。非仓库 → isRepo:false 空态（spec §6.1）。 */
+  /** 提交日志：branch 缺省(null)=当前分支；提供则必须 ∈ branches()（白名单，防注入）。limit∈[1,1000]、skip≥0 整数。非仓库 → isRepo:false 空态。 */
   async log(branch: string | null, limit: number, skip: number): Promise<GitLog> {
     if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new HttpError(400, 'invalid limit');
     if (!Number.isInteger(skip) || skip < 0) throw new HttpError(400, 'invalid skip');

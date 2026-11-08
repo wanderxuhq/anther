@@ -1,5 +1,5 @@
 // web/src/views/search.tsx
-// 全局搜索视图（Task 17）：关键词 + 大小写 + 排除框 → SSE 流式结果，
+// 全局搜索视图：关键词 + 大小写 + 排除框 → SSE 流式结果，
 // 按文件分组（VS Code 式），点击匹配跳转到文件对应行。
 import { createEffect, createSignal, For, on, onCleanup, Show } from 'solid-js';
 import { searchStream, type SearchFile } from '../api.ts';

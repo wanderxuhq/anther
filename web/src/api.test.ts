@@ -101,7 +101,7 @@ test('fallbackUuid 生成 v4 格式（非安全上下文降级路径）', () => 
   assert.notEqual(fallbackUuid(), fallbackUuid());
 });
 
-// ---- searchStream SSE 客户端（Task 17） ----
+// ---- searchStream SSE 客户端 ----
 function mockSse(chunks: string[], status = 200) {
   (globalThis as Record<string, unknown>).fetch = async (_url: string, init: RequestInit = {}) => {
     if (init.signal) (init.signal as AbortSignal).throwIfAborted();
@@ -117,8 +117,7 @@ function mockSse(chunks: string[], status = 200) {
 
 test('searchStream 解析 file/done 事件（含跨帧拼接）', async () => {
   // 一条完整事件拆成两个 chunk：验证帧缓冲拼接
-  // （brief 原 chunk1 末尾带 \n，会把 data: 帧在第 20 字符处截断成畸形行；去掉该 \n，
-  //  让整行跨 chunk 边界由帧缓冲拼接——正是本测试要验证的行为）
+  // （chunk1 末尾不带 \n，整行跨 chunk 边界由帧缓冲拼接——正是本测试要验证的行为）
   const half = JSON.stringify({ type: 'file', path: 'a.txt', matches: [{ line: 1, col: 0, text: 'hello' }] });
   mockSse([`data: ${half.slice(0, 20)}`, `${half.slice(20)}\n\n`, 'data: {"type":"done","truncated":false,"fileCount":1,"matchCount":1}\n\n']);
   const files: SearchFile[] = [];
@@ -176,7 +175,7 @@ test('searchStream cancel 触发 abort（静默，不触发 onError）', async (
   assert.equal(err, '');
 });
 
-// ---- connectTerminal WS 客户端（Task 8/11 修复：CONNECTING 发送队列） ----
+// ---- connectTerminal WS 客户端（CONNECTING 发送队列） ----
 test('connectTerminal：CONNECTING 期间 input/resize 不抛，open 后帧送达', async () => {
   const received: string[] = [];
   const server = createServer();

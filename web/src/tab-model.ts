@@ -1,13 +1,12 @@
+// web/src/tab-model.ts
+// Content-specific identities are created here; tab presentation and lifecycle use only ids.
+// 纯函数，node --test 可测；stores/视图层共用。
 import { fileTargetKey, type ArchiveLocation } from './file-target.ts';
 import type { DatabaseObject, DatabaseSort, DatabaseRowsRequest } from './database/types.ts';
 import type { TablePosition } from './preview-state.ts';
 export type DatabaseTarget = { archive?: ArchiveLocation; object: DatabaseObject | null; mode: 'data' | 'structure'; sort?: DatabaseSort;
   filter?: DatabaseRowsRequest['filter']; offset?: number; cursor?: string; table?: TablePosition };
 export type DatabaseTab = DatabaseTarget & { kind: 'database'; id: string; path: string };
-
-// web/src/tab-model.ts
-// Content-specific identities are created here; tab presentation and lifecycle use only ids.
-// 纯函数，node --test 可测；stores/视图层共用。
 export type TabItem =
   | DatabaseTab
   | { kind: 'file'; id: string; path: string }
@@ -37,7 +36,7 @@ export function currentFilePath(tabs: TabItem[], currentId: string | null): stri
   return t?.kind === 'file' ? t.path : null;
 }
 
-/** 关闭当前标签后的回退：文件优先，否则任意剩余标签，无则 null（spec §9 回文件或空） */
+/** 关闭当前标签后的回退：文件优先，否则任意剩余标签，无则 null（回文件或空） */
 export function nextActiveTabId(tabs: TabItem[], closedId: string): string | null {
   const rest = tabs.filter((t) => t.id !== closedId);
   return rest.find((t) => t.kind === 'file')?.id ?? rest[0]?.id ?? null;

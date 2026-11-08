@@ -1,9 +1,9 @@
+// web/src/stores.ts
 import { isArchiveFile } from './archive.ts';
 import { pathWithin } from './file-operations.ts';
 import { isArchiveLocation } from './file-target.ts';
 import { fileTargetKey } from './file-target.ts';
 import type { ReadingLocation } from './readers/location.ts';
-// web/src/stores.ts
 import { batch, createSignal, createMemo } from 'solid-js';
 import { DEFAULT_STATE, DEFAULT_EXCLUDE, parseUrl, serializeUrl, type UrlState, type Panel, type LineRange } from './url-state.ts';
 import { api, loadTabsSnapshot, saveTabsSnapshot, type TerminalInfo } from './api.ts';
@@ -56,7 +56,7 @@ export const activeTab = createMemo<TabItem | null>(() => {
   if (!id) return null;
   return tabs().find((t) => t.id === id) ?? null;
 });
-/** 当前前台文件路径：当前标签是文件才有值，终端/无标签为 null（spec §5.3 主区域二选一） */
+/** 当前前台文件路径：当前标签是文件才有值，终端/无标签为 null（主区域二选一） */
 export const currentFile = createMemo<string | null>(() => currentFilePath(tabs(), currentTabId()));
 /** 当前文件标签对应的压缩包内部路径；切换到其他文件或普通打开时清空。 */
 export const activeArchiveRoot = createMemo(() => {
@@ -77,7 +77,7 @@ export const archiveChain = createMemo<string[]>(() => {
   return location?.path === currentFile() ? location.chain : EMPTY_ARCHIVE_CHAIN;
 });
 
-// 搜索跳转管道 / 文档加载路径 / 编辑器句柄（原样保留）
+// 搜索跳转管道 / 文档加载路径 / 编辑器句柄
 export const [pendingGoto, setPendingGoto] = createSignal<{ path: string; line0: number; endLine0?: number; reveal?: boolean } | null>(null);
 export const [docLoadedPath, setDocLoadedPath] = createSignal<string | null>(null);
 export const [editorHandle, setEditorHandle] = createSignal<EditorHandle | null>(null);
@@ -349,7 +349,7 @@ export async function openArchiveEntry(path: string, entry: string | null, chain
   await openTab(path, null, entry, chain);
 }
 
-/** 搜索跳转统一入口（原逻辑，currentFile 已为 memo） */
+/** 搜索跳转统一入口 */
 export function gotoLine0(path: string, line0: number): void {
   const line = Math.max(1, line0 + 1);
   void openTab(path, { start: line, end: line }).catch(() => {});
@@ -452,7 +452,7 @@ export function openGitCommit(hash: string): void {
 
 /**
  * 新建分支（checkout -b）。成功后当前分支即新分支 → 更新 currentBranch + bump gitRefreshTick
- * （分支视图列表 / 工具栏 ⑂ 名自动刷新）。不涉及工作区改动，无需切换保护（spec §5.4 只保护切换已有分支）。
+ * （分支视图列表 / 工具栏 ⑂ 名自动刷新）。不涉及工作区改动，无需切换保护（只保护切换已有分支）。
  * 失败抛错，调用方 Toast / 错误条。
  */
 export async function createBranch(name: string): Promise<void> {

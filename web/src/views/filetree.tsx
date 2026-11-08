@@ -1,8 +1,7 @@
-import { withFileMutation } from '../file-operations.ts';
 // web/src/views/filetree.tsx
 // 文件树视图：懒加载目录（点击展开/收起）、文件点击打开、当前文件高亮。
 //
-// 响应式方案（偏离 brief 参考实现的「可变 Node + setRoot({...root()!}) 强制刷新」）：
+// 响应式方案（不使用「可变 Node + setRoot({...root()!}) 强制刷新」）：
 // Solid 不追踪对普通对象属性的直接修改，且 For 对相同数组引用不做 diff、
 // TreeNode 的 props 非响应式，顶层信号变化不会让已挂载子树重渲染。
 // 因此把目录状态放进 createStore（solid-js/store，solid-js 自带，零新增依赖），
@@ -10,6 +9,7 @@ import { withFileMutation } from '../file-operations.ts';
 //   nodes[path] → { expanded, loaded?, loading? }   （'.' 为根目录键）
 // 渲染时在组件作用域内直接读 nodes[path]（响应式），更新时 setNodes 精确命中该 path，
 // 每次展开/收起只触发对应子树重渲染。
+import { withFileMutation } from '../file-operations.ts';
 import { createEffect, createSignal, ErrorBoundary, For, lazy, Show, Suspense, onCleanup } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { api, type DirEntry } from '../api.ts';
@@ -40,7 +40,7 @@ const uploading = () => upload() !== null;
 /** 拖拽文件悬停的目标路径（'.' 为根），用于高亮可放置位置。 */
 const [dropTarget, setDropTarget] = createSignal<string | null>(null);
 
-// ---- 文件管理（Task 16）：菜单 + 命名对话框 + 两击确认删除 ----
+// ---- 文件管理：菜单 + 命名对话框 + 两击确认删除 ----
 type MenuTarget = { path: string; kind: 'dir' | 'file' | 'root' };
 const [menu, setMenu] = createSignal<MenuTarget | null>(null);
 const [dialog, setDialog] = createSignal<DialogState | null>(null);
@@ -84,7 +84,7 @@ async function ensureRoot(): Promise<void> {
   }
 }
 
-// 只读仅控制编辑器内容（用户决策 2026-08-11）：文件树写操作不校验 roMode，随时可用
+// 只读仅控制编辑器内容：文件树写操作不校验 roMode，随时可用
 /** 操作完成后刷新父目录列表（保持 loaded 数组与磁盘一致） */
 async function refreshParent(parent: string) {
   const { entries } = await api.list(parent);
@@ -282,7 +282,7 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
   const onRowClick = () => {
     setMenu(null); // 点击行任意位置关闭操作菜单（点 ⋯ 按钮会 stopPropagation，不走到这里）
     if (isDir) void onToggle();
-    // 文件与 link 条目同待遇：点击走 openTab（服务器对损坏链接会 400，MVP 可接受）
+    // 文件与 link 条目同待遇：点击走 openTab（服务器对损坏链接会 400）
     else if (database()) { setDatabaseExpanded(true); openDatabaseTab(props.path); }
     else void openTab(props.path).catch((e) => setError((e as Error).message));
   };

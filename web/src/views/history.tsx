@@ -1,6 +1,6 @@
 // web/src/views/history.tsx
 // 历史视图（图）：分支选择器 + 提交图（泳道岔线/合并菱形）+ 分支徽标。
-// 图取代扁平列表（spec §5.3）：log 一次拉 1000 条 topo 序 → layoutGraph 逐行渲染。
+// 图取代扁平列表：log 一次拉 1000 条 topo 序 → layoutGraph 逐行渲染。
 // 每行整条是点击区 → openGitCommit(hash)；超 1000 截断提示。
 import { createEffect, createSignal, Show, For, onCleanup } from 'solid-js';
 import { api, type GitBranches, type GitCommit } from '../api.ts';

@@ -40,7 +40,7 @@ test('read 返回内容', async () => {
   assert.equal(((await res.json()) as { content: string }).content, 'hello');
 });
 
-// 只读仅由前端编辑器控制（用户决策 2026-08-11）：服务端不校验 ro，写请求始终放行
+// 只读仅由前端编辑器控制：服务端不校验 ro，写请求始终放行
 test('write 不带 ro 参数始终放行', async () => {
   const ok = await fetch(`${base}/api/file?path=a.txt`, {
     method: 'PUT',
@@ -176,7 +176,7 @@ test('取消流式下载后服务器仍可正常处理请求', async () => {
   assert.equal(await next.text(), 'hello');
 });
 
-// ---- 全局搜索 SSE（Task 17） ----
+// ---- 全局搜索 SSE ----
 async function collectSse(url: string): Promise<{ status: number; ctype: string; events: Record<string, unknown>[] }> {
   const res = await fetch(url);
   assert.equal(res.status, 200);

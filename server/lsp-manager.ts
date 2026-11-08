@@ -1,5 +1,5 @@
 // server/lsp-manager.ts
-// 语言服务注册表（框架先行：加语言 = LSP_ENGINES 加一行）+ 会话懒启动/崩溃重建/空闲回收。
+// 语言服务注册表（加语言 = 在 defaultEngines() 里加一项）+ 会话懒启动/崩溃重建/空闲回收。
 // 多 WS 连接的 open 状态与诊断缓存集中在这里（全局计数，跨连接共享同一 tsserver）。
 import { createRequire } from 'node:module';
 import path from 'node:path';

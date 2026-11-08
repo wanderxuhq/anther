@@ -19,7 +19,7 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 .icon-btn {
   background: none; border: none; font-size: 20px;
   padding: 6px 10px; border-radius: 6px; cursor: pointer;
-  /* 触控区 ≥ 40px（spec §7.4 移动端可触达性）：inline-flex 使字形在最小尺寸内居中 */
+  /* 触控区 ≥ 40px（移动端可触达性）：inline-flex 使字形在最小尺寸内居中 */
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 40px; min-height: 40px;
 }
@@ -29,7 +29,7 @@ a.icon-btn { color: inherit; text-decoration: none; }
 
 .editor-area { min-width: 0; min-height: 0; overflow: hidden; grid-column: 1; grid-row: 2; position: relative; }
 
-/* 编辑器容器（Task 13）：高度链撑满 editor-area，代码等宽字体 */
+/* 编辑器容器：高度链撑满 editor-area，代码等宽字体 */
 .editor-container { height: 100%; min-height: 0; }
 .editor-container .cm-editor { height: 100%; }
 .editor-container .cm-scroller {
@@ -197,7 +197,7 @@ a.icon-btn { color: inherit; text-decoration: none; }
 .terminal-key.active { background: var(--accent); color: white; border-color: var(--accent); }
 .terminal-key-grid-letters .terminal-key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
-/* 最小 Toast（Task 13；完整系统留给 Task 14/15）：固定定位、3s 自动消失 */
+/* 最小 Toast：固定定位、3s 自动消失 */
 .toast {
   position: fixed; left: 50%; bottom: 28px;
   transform: translateX(-50%) translateY(8px);
@@ -233,7 +233,7 @@ a.icon-btn { color: inherit; text-decoration: none; }
 .drawer-views { display: flex; flex-direction: column; gap: 4px; padding: 8px 4px; border-right: 1px solid var(--border); }
 .drawer-views .view-tab {
   background: none; border: none; font-size: 18px; padding: 8px; border-radius: 6px;
-  /* 触控区 ≥ 40px（spec §7.4，核查补充）：view-tab 也是抽屉内主要点击目标 */
+  /* 触控区 ≥ 40px（移动端可触达性）：view-tab 也是抽屉内主要点击目标 */
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 40px; min-height: 40px;
   color: inherit; text-decoration: none;
@@ -245,7 +245,7 @@ a.icon-btn { color: inherit; text-decoration: none; }
 
 .view-placeholder { color: var(--muted); padding: 12px; font-size: 13px; }
 
-/* 文件树（Task 11） */
+/* 文件树 */
 .filetree { font-size: 13px; user-select: none; }
 .error-banner {
   margin-bottom: 8px; padding: 8px 10px; border-radius: 6px;
@@ -255,7 +255,7 @@ a.icon-btn { color: inherit; text-decoration: none; }
   display: flex; align-items: center; gap: 4px;
   padding: 3px 6px; border-radius: 5px; cursor: pointer;
   white-space: nowrap; overflow: hidden;
-  min-height: 40px; /* 文件树行在触屏上是主要点击目标，行高 ≥ 40px（spec §7.4） */
+  min-height: 40px; /* 文件树行在触屏上是主要点击目标，行高 ≥ 40px */
 }
 .tree-row:hover { background: var(--row-hover); }
 .tree-row.active { background: var(--accent); color: white; }
@@ -267,7 +267,7 @@ a.icon-btn { color: inherit; text-decoration: none; }
 .tree-name { overflow: hidden; text-overflow: ellipsis; }
 .tree-children { margin-left: 10px; border-left: 1px solid var(--border); padding-left: 4px; }
 
-/* 标签列表（Task 12） */
+/* 标签列表 */
 .tab-list {
   list-style: none; margin: 0; padding: 0;
   display: flex; flex-direction: column; gap: 2px;
@@ -284,7 +284,7 @@ a.icon-btn { color: inherit; text-decoration: none; }
   flex: 0 0 auto; background: none; border: none;
   color: var(--muted); font-size: 14px; line-height: 1;
   padding: 2px 6px; border-radius: 4px; cursor: pointer;
-  /* 触控区 ≥ 40px（spec §7.4）：字形居中，视觉不变大 */
+  /* 触控区 ≥ 40px：字形居中，视觉不变大 */
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 40px; min-height: 40px;
 }
@@ -338,7 +338,7 @@ a.icon-btn { color: inherit; text-decoration: none; }
   .editor-area { grid-column: 2; grid-row: 2; }
 }
 
-/* ---- 文件管理菜单/对话框（Task 16） ---- */
+/* ---- 文件管理菜单/对话框 ---- */
 .filetree-toolbar { padding: 4px 8px; border-bottom: 1px solid var(--border); position: relative; }
 /* overflow: visible 覆盖上方既有 hidden：行内绝对定位的操作菜单（row-menu）会伸出行外，
    不覆盖则被行裁掉（CSS overflow 会裁掉包含块链经过该元素的后代）。行内文本截断由
@@ -444,7 +444,7 @@ a.icon-btn { color: inherit; text-decoration: none; }
   .instances-page-card { max-height: calc(100dvh - 24px); }
 }
 
-/* ---- 全局搜索（Task 17） ---- */
+/* ---- 全局搜索 ---- */
 .search-view { font-size: 13px; display: flex; flex-direction: column; gap: 8px; }
 .search-inputs { display: flex; flex-direction: column; gap: 6px; }
 .search-query, .search-exclude {
@@ -479,7 +479,7 @@ a.icon-btn { color: inherit; text-decoration: none; }
 .search-match-text mark { background: #fde047; color: #000; border-radius: 2px; }
 :root[data-theme='dark'] .search-match-text mark { background: #a16207; color: #fff; }
 
-/* ---- Git 面板（2026-08-09，2026-10 增加暂存/同步） ---- */
+/* ---- Git 面板 ---- */
 .git-view { font-size: 13px; display: flex; flex-direction: column; gap: 6px; height: 100%; min-height: 0; }
 .git-sync-bar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -556,7 +556,7 @@ a.icon-btn { color: inherit; text-decoration: none; }
 .git-diff-editor .cm-editor { height: 100%; }
 .git-diff-editor .cm-scroller { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
-/* ---- 历史 / 分支 / 提交 视图 + git 工具栏（2026-08-09） ---- */
+/* ---- 历史 / 分支 / 提交 视图 + git 工具栏 ---- */
 .git-toolbar-action { flex-shrink: 0; color: inherit; }
 .git-toolbar-action svg { display: block; }
 .git-branch-btn { min-width: 64px; max-width: 160px; padding: 6px 10px; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -611,7 +611,7 @@ a.icon-btn { color: inherit; text-decoration: none; }
 .git-commit-meta { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); }
 .git-commit-subject { font-size: 14px; }
 
-/* 行内 diff（2026-08-10）：双 gutter + 行级红绿 + 文件卡 */
+/* 行内 diff：双 gutter + 行级红绿 + 文件卡 */
 :root {
   --diff-add-bg: #e6ffed;
   --diff-del-bg: #ffeef0;
@@ -648,7 +648,7 @@ a.icon-btn { color: inherit; text-decoration: none; }
 .git-commit-file .git-diff-editor { max-height: 50vh; overflow: hidden; }
 .git-commit-binary { padding: 10px; color: var(--muted); font-size: 13px; }
 
-/* 历史图（2026-08-10）：泳道配色 + 徽标 + 行布局 + 截断提示 */
+/* 历史图：泳道配色 + 徽标 + 行布局 + 截断提示 */
 :root {
   --graph-lane-0: #3b82f6; --graph-lane-1: #16a34a; --graph-lane-2: #d97706;
   --graph-lane-3: #7c3aed; --graph-lane-4: #dc2626; --graph-lane-5: #0891b2;
@@ -677,7 +677,7 @@ a.icon-btn { color: inherit; text-decoration: none; }
 }
 .history-truncated { padding: 6px 10px; color: var(--muted); font-size: 12px; }
 
-/* 悬浮补全按钮（Task 3）：editor-area 相对定位锚定，⌘ 手动触发 startCompletion */
+/* 悬浮补全按钮：editor-area 相对定位锚定，⌘ 手动触发 startCompletion */
 .complete-btn {
   position: absolute;
   right: 16px;

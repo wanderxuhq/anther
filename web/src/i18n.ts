@@ -1,6 +1,6 @@
 // web/src/i18n.ts
 // 国际化：默认英语，按浏览器语言自动切换（zh* → 中文，其余 → 英语），
-// ?lang=en|zh 可覆盖（测试/调试用）。轻量字典实现，零新增依赖。
+// ?lang=en|zh 可覆盖。轻量字典实现，零新增依赖。
 // 初始加载和浏览器历史恢复都会应用语言；t() 读 lang 信号即时更新界面。
 import { createSignal } from 'solid-js';
 import { parseUrl } from './url-state.ts';
@@ -101,7 +101,6 @@ const messages: Record<Lang, Record<string, string>> = {
     'instances.loading': 'Loading instances…',
     'instances.failed': 'Unable to load instances: {msg}',
     'instances.empty': 'No instances',
-    'instances.current': 'Current',
     'instances.host': 'Host',
     'instances.refresh': 'Refresh',
     'instances.close': 'Close',
@@ -182,7 +181,6 @@ const messages: Record<Lang, Record<string, string>> = {
     'toast.terminalCreateFail': 'Failed to create terminal: {msg}',
     'toast.saveFail': 'Failed to save: {msg}',
     'toast.restored': 'Save restored',
-    'toast.notUtf8': 'Non-UTF-8 file — only UTF-8 save is supported',
     'toast.openFail': 'Failed to open: {msg}',
     'toast.lspUnavailable': 'Language server unavailable: {msg}',
     'toast.lspRestarted': 'Language server restarted',
@@ -224,7 +222,6 @@ const messages: Record<Lang, Record<string, string>> = {
     'terminal.showText': 'Show plain text',
     'terminal.showHtml': 'Show rendered HTML',
     'terminal.input': 'Terminal input',
-    'terminal.fileNotFound': 'File not found: {path}',
     'terminal.showKeys': 'Show terminal keys',
     'terminal.hideKeys': 'Hide terminal keys',
     'panel.close': 'Close panel',
@@ -362,7 +359,6 @@ const messages: Record<Lang, Record<string, string>> = {
     'instances.loading': '正在加载实例…',
     'instances.failed': '无法加载实例：{msg}',
     'instances.empty': '暂无实例',
-    'instances.current': '当前',
     'instances.host': '宿主',
     'instances.refresh': '刷新',
     'instances.close': '关闭',
@@ -445,7 +441,6 @@ const messages: Record<Lang, Record<string, string>> = {
     'toast.terminalCreateFail': '新建终端失败：{msg}',
     'toast.saveFail': '保存失败：{msg}',
     'toast.restored': '已恢复保存',
-    'toast.notUtf8': '非 UTF-8 文件，仅支持 UTF-8 保存',
     'toast.openFail': '打开失败：{msg}',
     'toast.lspUnavailable': '语言服务不可用：{msg}',
     'toast.lspRestarted': '语言服务已重启',
@@ -487,7 +482,6 @@ const messages: Record<Lang, Record<string, string>> = {
     'terminal.showText': '切换为纯文字',
     'terminal.showHtml': '切换为 HTML 渲染',
     'terminal.input': '终端输入',
-    'terminal.fileNotFound': '找不到文件：{path}',
     'terminal.showKeys': '显示终端按键',
     'terminal.hideKeys': '隐藏终端按键',
     'panel.close': '关闭面板',

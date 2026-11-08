@@ -35,7 +35,7 @@ export function BranchView(props: { onCheckout: (name: string) => void }) {
       await createBranch(name); // 成功 → stores bump tick → 列表自动重拉
       setNewName('');
     } catch (e) {
-      setError((e as Error).message); // git 原始 stderr（spec §6.1）
+      setError((e as Error).message); // git 原始 stderr
     } finally {
       setCreating(false);
     }
@@ -64,7 +64,7 @@ export function BranchView(props: { onCheckout: (name: string) => void }) {
         <For each={data()?.branches ?? []}>
           {(b) => (
             <li>
-              {/* 当前分支行禁用点击（spec §6.1：切到已是当前的分支 → 无操作） */}
+              {/* 当前分支行禁用点击（切到已是当前的分支 → 无操作） */}
               <button class="branch-row" disabled={b.current} onClick={() => setConfirmName(b.name)}>
                 <span class="branch-current">{b.current ? <Icon name="check" size={16} /> : ''}</span>
                 <span class="branch-name">{b.name}</span>
@@ -75,7 +75,7 @@ export function BranchView(props: { onCheckout: (name: string) => void }) {
         </For>
       </ul>
 
-      {/* 切换确认 dialog（复用 dialog-backdrop/dialog-card，spec §2） */}
+      {/* 切换确认 dialog（复用 dialog-backdrop/dialog-card） */}
       <Show when={confirmName()}>
         <div class="dialog-backdrop" onClick={() => setConfirmName(null)}>
           <div class="dialog-card" onClick={(e) => e.stopPropagation()}>

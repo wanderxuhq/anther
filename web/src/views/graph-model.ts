@@ -1,6 +1,6 @@
 // web/src/views/graph-model.ts
 // 历史图纯函数：lane-tracing 布局 + %D 徽标解析。独立 .ts 模块 → node --test 直接导入可测。
-// 渲染端按 col % 6 上色；徽标只保留分支名（tag 暂不做徽标，用户选定）。
+// 渲染端按 col % 6 上色；徽标只保留分支名（tag 暂不做徽标）。
 import type { GitCommit } from '../api.ts';
 
 /** 线段：行顶泳道 a → 行底泳道 b（a===b 竖线；否则斜线）。 */

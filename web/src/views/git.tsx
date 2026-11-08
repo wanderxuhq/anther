@@ -50,7 +50,7 @@ export function GitView() {
       await api.git[action](paths);
       await refresh();
     } catch (e) {
-      setError((e as Error).message); // git 原始错误（spec §6.1）
+      setError((e as Error).message); // git 原始错误
     } finally {
       setBusy(null);
     }

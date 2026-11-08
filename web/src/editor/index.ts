@@ -1,7 +1,7 @@
 // web/src/editor/index.ts
 // CodeMirror 6 适配层：createEditor(container, opts) → EditorHandle。
 //
-// 两处对 brief 参考代码的有意偏离（详见 task-13-report.md）：
+// 两处有意设计：
 // 1. updateListener 只对「用户输入产生的 doc 变更」触发 onChange：
 //    isUserEvent 前缀匹配（'input.type.compose'、'input.paste' 等均命中），
 //    程序性 dispatch（setDoc 切换文件、Compartment reconfigure）不带 userEvent，
@@ -126,7 +126,7 @@ export function createEditor(container: HTMLElement, opts: EditorOptions): Edito
           ...(lsp ? [lsp.extension] : []),
         ]),
       });
-      // 只读门控（Task 17）：6.7.1 的 replaceNext/replaceAll 已检查 state.readOnly
+      // 只读门控：6.7.1 的 replaceNext/replaceAll 已检查 state.readOnly
       // （只读时替换区整个不渲染），closeSearchPanel 作为纵深防御 + VS Code 式
       // UX——只读文件不显示替换面板（内部 togglePanel effect 不导出，无公开关闭
       // 替换区的 API，故关掉整个面板）

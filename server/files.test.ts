@@ -162,7 +162,7 @@ test('rename 源不存在 → 404（回归）', async () => {
   await assert.rejects(store.rename('nope.txt', 'x.txt'), (e: HttpError) => e.status === 404);
 });
 
-// ---- 搜索（Task 17） ----
+// ---- 搜索 ----
 test('search 基础匹配：路径、行号、列号、行文本', async () => {
   const got: { path: string; matches: { line: number; col: number; text: string }[] }[] = [];
   const r = await store.search('.', 'hello', { onFile: (path, matches) => got.push({ path, matches }) });
@@ -242,6 +242,6 @@ test('search 每行只报首个匹配，列号正确', async () => {
   await store.write('col.txt', 'aaa hello bbb hello');
   const got: { line: number; col: number }[] = [];
   await store.search('.', 'hello', { onFile: (_p, m) => got.push(...m) });
-  // SearchMatch 恒带 text（brief 类型契约），期望值需包含
+  // SearchMatch 恒带 text，期望值需包含
   assert.deepEqual(got, [{ line: 1, col: 4, text: 'aaa hello bbb hello' }]);
 });

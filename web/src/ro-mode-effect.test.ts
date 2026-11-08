@@ -1,5 +1,5 @@
 // web/src/ro-mode-effect.test.ts
-// 回归测试（2026-08-08 铅笔切换无效）：App.tsx 的只读切换 effect 里，
+// 回归测试（铅笔切换无效）：App.tsx 的只读切换 effect 里，
 // `editor?.setReadOnly(roMode())` 在 editor 未创建（异步加载中）时被可选链短路，
 // 参数 roMode() 不求值 → Solid 依赖追踪未建立 → 之后切换 roMode 信号不触发 effect。
 // 修复：先 `const ro = roMode()` 求值建立依赖，再调用。此测试锁定修复后行为。

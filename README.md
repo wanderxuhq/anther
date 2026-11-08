@@ -43,7 +43,7 @@ Shorthands only point to index 0. Indexes are kept in memory and reset when the 
 - Files open read-only. Click the pencil icon in the toolbar to edit.
 - Upload files or whole folders from **New** or a file-list ⋯ menu. Select several files at once, or drag files and folders from your desktop onto the tree; dropping on a folder uploads into it. There are no added size or type restrictions, and existing files are not overwritten.
 - Use the Git toolbar to switch between pending changes, history, and branch management. The changes panel stages and unstages files, discards changes, amends the last commit, and runs fetch/pull/push with ahead/behind status. Pull is fast-forward only.
-- Files, database objects, and terminals share a tab bar, with independent tabs for each. Refreshing reconnects terminals and restores their full screen and scrollback; closing a terminal tab ends its process. The keyboard button in the terminal toolbar toggles the key bar with Esc, Tab, arrows and Ctrl combinations; it starts open on touch/narrow screens and closed on desktop.
+- Files, database objects, and terminals share a tab bar, with independent tabs for each. Refreshing reconnects terminals and restores their full screen and scrollback; closing a terminal tab ends its process. The keyboard button in the main toolbar toggles the key bar with Esc, Tab, arrows and Ctrl combinations; it starts open on touch/narrow screens and closed on desktop.
 - The terminal renders as HTML by default: file and directory paths in output are clickable and open the existing file preview (full screen on phones, in the main pane on desktop), and Markdown output (including tables) is rendered with the project's Markdown viewer. Use the eye/code button in the main toolbar to switch to the classic plain-text grid; switching only changes rendering, never the shell session, scrollback, or running process. The panel close button in the top-right returns to the terminal.
 - The terminal box grows with its content and only takes the height it needs; once the content exceeds the available area it keeps a fixed height with a scrollbar.
 - Click ⓘ at the bottom of the drawer for server information: host, all local network addresses, OS, CPU, memory, disk, uptime, Node.js and Anther versions, and the workspace path. The dialog can refresh in place.
@@ -149,7 +149,7 @@ Image `x/y` specify the center as fractions of the original dimensions (0–1); 
 
 ## Platform notes
 
-File browsing and editing work across platforms. Terminals require `script` and `stty`: Linux, Termux, WSL, and macOS are supported; Windows terminals are unavailable.
+File browsing and editing work across platforms. Terminals require util-linux `script`, GNU `stty`, and `bash`. Linux and WSL provide them; Termux and macOS may need them installed; use WSL on Windows.
 
 Git sync uses your existing git configuration. Interactive credential prompts are disabled, so configure an SSH agent, a credential helper, or an HTTPS token before pushing over the network.
 

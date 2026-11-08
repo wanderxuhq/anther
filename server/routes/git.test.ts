@@ -18,7 +18,7 @@ let base: string;
 
 beforeEach(async () => {
   repoDir = await mkdtemp(path.join(os.tmpdir(), 'anther-git-api-'));
-  await execFileP('git', ['init', '-qb', 'main'], { cwd: repoDir }); // 强制初始分支名 main（环境 init.defaultBranch 未配置时默认 master），Task 2 新测试硬编码 main
+  await execFileP('git', ['init', '-qb', 'main'], { cwd: repoDir }); // 强制初始分支名 main（环境 init.defaultBranch 未配置时默认 master）
   await execFileP('git', ['config', 'user.email', 't@t'], { cwd: repoDir });
   await execFileP('git', ['config', 'user.name', 't'], { cwd: repoDir });
   await writeFile(path.join(repoDir, 'a.txt'), 'one\n');

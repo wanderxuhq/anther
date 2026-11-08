@@ -1,5 +1,5 @@
 // server/pty.test.ts
-// PTY 集成测试：依赖 util-linux `script`（Linux/macOS）。无 script 时跳过。
+// PTY 集成测试：依赖 util-linux `script`、GNU `stty` 与 bash（Linux）。无 script 时跳过。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';

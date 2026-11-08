@@ -1,7 +1,7 @@
 // server/terminal-queries.ts
 // 终端查询的“本地快速回应”：直接扫描 PTY 原始输出，命中 DA/DSR/OSC/窗口尺寸
-// 就立刻写回 PTY。浏览器端回应要经过 40ms 批处理 + WebSocket 往返，readline
-// 的查询窗口通常等不到，迟到的回应会被当成输入回显。
+// 就立刻写回 PTY。若等浏览器渲染后再回传，要经过 40ms 批处理 + WebSocket 往返，
+// readline 的查询窗口通常等不到，迟到的回应会被当成输入回显。
 //
 // 这里只处理不需要屏幕光标状态的查询：
 // - DA1 / DA2
@@ -113,7 +113,7 @@ export class TerminalQueryResponder {
 
     if (final === 'n' && prefix === '') {
       if (p(0) === '5') this.write('\x1b[0n');
-      // DSR 6 需要光标位置，服务端不知道；不回应，避免回错。
+      // DSR 6 需要光标位置；本类不跟踪屏幕，由 Terminal 里的 TerminalScreen 回应。
       return;
     }
 

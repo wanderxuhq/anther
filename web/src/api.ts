@@ -195,7 +195,7 @@ export type SearchFile = { path: string; matches: SearchMatch[] };
 export type SearchDone = { truncated: boolean; fileCount: number; matchCount: number };
 
 /**
- * 全局搜索 SSE 客户端（Task 17）：fetch + ReadableStream 逐行解析 `data:` 帧，
+ * 全局搜索 SSE 客户端：fetch + ReadableStream 逐行解析 `data:` 帧，
  * 按 type 分发 file/done/error。返回 { cancel() }：取消后服务端收到断开即停止遍历。
  * 主动取消（abort）静默——不触发 onError；非 2xx 与解析错误走 onError；
  * 流异常中断（EOF 但无 done 帧，如服务端被 kill/代理断连）→ onError('搜索连接中断')。

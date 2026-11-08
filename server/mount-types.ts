@@ -1,5 +1,5 @@
 // server/mount-types.ts
-// 挂载与附加的跨层数据结构：HTTP 身份接口、挂载表、本地 IPC 共用。
+// 挂载与附加的跨层数据结构：HTTP 身份接口与挂载表共用。
 
 /** 一个工作区挂载的对外描述；workspace/base 均为规范值，不含 origin。 */
 export type MountWire = {
