@@ -507,6 +507,90 @@ export const css = `
 .op-auth-actions .op-btn { display: inline-flex; align-items: center; gap: 6px; }
 .op-auth-hint { color: color-mix(in srgb, currentColor 65%, transparent); font-size: 10px; }
 .op-auth-empty { color: var(--op-muted); font-size: 11.5px; }
+.op-mcp-panel {
+  width: min(680px, 100%);
+  max-height: min(84vh, 760px);
+}
+.op-mcp-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 12px 12px;
+}
+.op-mcp-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 8px 0 10px;
+  padding: 8px 9px;
+  border: 1px solid color-mix(in srgb, #f59e0b 30%, var(--op-border));
+  border-radius: var(--op-radius);
+  background: color-mix(in srgb, #f59e0b 6%, transparent);
+  color: var(--op-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.op-mcp-note > svg { flex: 0 0 auto; color: #b45309; margin-top: 1px; }
+.op-mcp-list { display: flex; flex-direction: column; gap: 1px; margin-bottom: 10px; }
+.op-mcp-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  border-radius: var(--op-radius);
+}
+.op-mcp-row:hover { background: var(--op-menu-hover); }
+.op-mcp-icon {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: var(--op-radius);
+  color: var(--op-accent);
+  background: color-mix(in srgb, var(--op-accent) 11%, transparent);
+}
+.op-mcp-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.op-mcp-name { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.op-mcp-target {
+  color: var(--op-muted);
+  font: 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.op-mcp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid var(--op-border);
+  border-radius: var(--op-radius);
+  background: color-mix(in srgb, var(--op-muted) 4%, transparent);
+}
+.op-mcp-form-row { display: flex; gap: 7px; }
+.op-mcp-form-row .op-input:first-child { flex: 1; min-width: 0; }
+.op-mcp-transport { flex: 0 0 110px; }
+.op-mcp-textarea {
+  min-height: 54px;
+  padding: 7px 9px;
+  resize: vertical;
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.op-mcp-hint { color: #b45309; font-size: 10.5px; line-height: 1.4; }
+.op-mcp-form-actions { display: flex; justify-content: flex-end; }
+.op-mcp-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--op-menu-border);
+  color: var(--op-muted);
+  font-size: 10px;
+}
+.op-mcp-foot-actions { display: flex; gap: 7px; }
 .op-chatbar {
   flex: 0 0 auto;
   min-height: 40px;
@@ -1506,7 +1590,9 @@ export const css = `
   .op-pending { padding: 8px 12px 0; }
   .op-resume-backdrop { padding: 16px 12px; }
   .op-resume-panel { max-height: calc(100dvh - 32px); }
-  .op-skills-panel .op-resume-agent { display: none; }
+  .op-skills-panel .op-resume-agent, .op-mcp-panel .op-resume-agent { display: none; }
+  .op-mcp-form-row { flex-direction: column; }
+  .op-mcp-transport { flex: 0 0 auto; }
   .op-source-row { flex-direction: column; align-items: stretch; }
   .op-source-row .op-btn { width: 100%; }
   .op-skill-preview-foot { flex-direction: column; align-items: stretch; }

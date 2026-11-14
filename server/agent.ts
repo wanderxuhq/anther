@@ -10,6 +10,7 @@ import { discoverAgents, type DiscoveredAgent } from './agent-profiles.ts';
 import { formFromElicitation, formResponse, type AgentForm } from './agent-forms.ts';
 import { collectSessionPages } from './agent-session-list.ts';
 import { AgentFileSystem } from './agent-fs.ts';
+import { filterMcpServers } from './mcp.ts';
 import { AcpTerminalManager } from './agent-terminal.ts';
 import { FileStore } from './files.ts';
 
@@ -140,6 +141,7 @@ export class AgentRuntime {
     private readonly dir: string,
     private readonly discovered: DiscoveredAgent,
     private readonly files: FileStore,
+    private readonly mcpServers: () => acp.McpServer[] = () => [],
   ) {
     this.agentFiles = new AgentFileSystem(dir, files);
     this.acpTerminals = new AcpTerminalManager(dir, (event) => this.emit(event));
@@ -346,11 +348,22 @@ export class AgentRuntime {
     return this.context;
   }
 
+  private sessionMcpServers(): acp.McpServer[] {
+    const capabilities = this.init?.agentCapabilities?.mcpCapabilities as
+      | { http?: boolean; sse?: boolean }
+      | undefined;
+    return filterMcpServers(this.mcpServers(), capabilities);
+  }
+
+  invalidateBootstrap(): void {
+    if (!this.bootstrapUsed) this.boot = undefined;
+  }
+
   private async createBootstrap(): Promise<Bootstrap> {
     const ctx = await this.ensure();
     const result = await ctx.request(acp.methods.agent.session.new, {
       cwd: this.dir,
-      mcpServers: [],
+      mcpServers: this.sessionMcpServers(),
     });
     const configOptions = result.configOptions ?? [];
     const modes = modeStateFrom(result.modes, configOptions);
@@ -488,7 +501,7 @@ export class AgentRuntime {
     const ctx = await this.ensure();
     const result = await ctx.request(acp.methods.agent.session.new, {
       cwd: this.dir,
-      mcpServers: [],
+      mcpServers: this.sessionMcpServers(),
     });
     const configOptions = result.configOptions ?? [];
     const modes = modeStateFrom(result.modes, configOptions);
@@ -523,7 +536,7 @@ export class AgentRuntime {
       const result = await ctx.request(acp.methods.agent.session.load, {
         sessionId: id,
         cwd: this.dir,
-        mcpServers: [],
+        mcpServers: this.sessionMcpServers(),
       });
       if (result.configOptions) this.configs.set(id, result.configOptions);
       const modes = modeStateFrom(result.modes, result.configOptions ?? cachedConfigs);
@@ -666,7 +679,7 @@ export class AgentRuntime {
 
   async fork(sessionID: string): Promise<{ id: string; title: string; time: { created: number; updated: number }; configOptions: acp.SessionConfigOption[]; modes?: AgentModeState }> {
     const ctx = await this.ensure();
-    const result = await ctx.request('session/fork', { sessionId: sessionID, cwd: this.dir, mcpServers: [] }) as {
+    const result = await ctx.request('session/fork', { sessionId: sessionID, cwd: this.dir, mcpServers: this.sessionMcpServers() }) as {
       sessionId: string;
       configOptions?: acp.SessionConfigOption[];
       modes?: acp.SessionModeState | null;
@@ -844,6 +857,7 @@ export class AgentRuntime {
 
 export class AcpAgent {
   private available?: DiscoveredAgent[];
+  private mcp: acp.McpServer[] = [];
   private selectedID?: string;
   private active?: AgentRuntime;
   private readonly runtimes = new Map<string, AgentRuntime>();
@@ -891,11 +905,21 @@ export class AcpAgent {
     return agents;
   }
 
+  mcpServers(): acp.McpServer[] {
+    return this.mcp;
+  }
+
+  setMcpServers(servers: acp.McpServer[]): acp.McpServer[] {
+    this.mcp = servers;
+    for (const runtime of this.runtimes.values()) runtime.invalidateBootstrap();
+    return this.mcp;
+  }
+
   private runtimeFor(discovered: DiscoveredAgent): AgentRuntime {
     const id = discovered.profile.id;
     let runtime = this.runtimes.get(id);
     if (!runtime) {
-      runtime = new AgentRuntime(this.dir, discovered, this.files);
+      runtime = new AgentRuntime(this.dir, discovered, this.files, () => this.mcp);
       runtime.subscribe((event) => {
         if (this.active === runtime) this.emit(event);
       });

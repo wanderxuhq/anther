@@ -5,7 +5,7 @@ export type IconName =
   | 'copy' | 'check' | 'x' | 'trash' | 'edit' | 'fork' | 'search'
   | 'menu' | 'brain' | 'file' | 'alert'
   | 'refresh' | 'sparkles' | 'arrow-down'
-  | 'shield' | 'info' | 'message' | 'list' | 'puzzle' | 'terminal' | 'sliders' | 'paperclip';
+  | 'shield' | 'info' | 'message' | 'list' | 'puzzle' | 'terminal' | 'sliders' | 'paperclip' | 'server';
 
 const paths: Record<IconName, () => JSX.Element> = {
   plus: () => <><path d="M12 5v14" /><path d="M5 12h14" /></>,
@@ -34,6 +34,7 @@ const paths: Record<IconName, () => JSX.Element> = {
   terminal: () => <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></>,
   sliders: () => <><path d="M4 6h16M4 12h16M4 18h16" /><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none" /><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none" /><circle cx="7" cy="18" r="2" fill="currentColor" stroke="none" /></>,
   paperclip: () => <path d="m21.4 11.6-8.9 8.9a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" />,
+  server: () => <><rect x="3" y="4" width="18" height="7" rx="2" /><rect x="3" y="13" width="18" height="7" rx="2" /><path d="M7 7h.01M7 16h.01" /></>,
 };
 
 export function Icon(props: { name: IconName; size?: number; class?: string; strokeWidth?: number }) {

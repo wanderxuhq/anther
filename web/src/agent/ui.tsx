@@ -37,6 +37,7 @@ import {
   type AuthMethod,
   type ConfigOption,
   type PromptContent,
+  type McpServer,
 } from './api.ts';
 import { Icon, type IconName } from './icons.tsx';
 import { copyText, enhanceMarkdown, renderMarkdown } from './markdown.ts';
@@ -62,6 +63,7 @@ import {
   type PromptAttachment,
   type PromptCapabilities,
 } from './attachment.ts';
+import { loadMcpServers, mcpStorageKey, parseKeyValueLines, parseLines, storeMcpServers } from './mcp.ts';
 import { configChoices, modeStateFromOptions, secondaryConfigOptions } from './config.ts';
 import { css } from './styles.ts';
 
@@ -2320,10 +2322,220 @@ function SkillsPanel(props: {
   );
 }
 
+function McpPanel(props: {
+  servers: McpServer[];
+  saving: boolean;
+  error: string | null;
+  capabilities?: { http?: boolean; sse?: boolean };
+  onSave: (servers: McpServer[]) => void;
+  onClose: () => void;
+}) {
+  const [list, setList] = createSignal<McpServer[]>([...props.servers]);
+  const [name, setName] = createSignal('');
+  const [transport, setTransport] = createSignal<'stdio' | 'http' | 'sse'>('stdio');
+  const [command, setCommand] = createSignal('');
+  const [args, setArgs] = createSignal('');
+  const [env, setEnv] = createSignal('');
+  const [url, setUrl] = createSignal('');
+  const [headers, setHeaders] = createSignal('');
+  const [formError, setFormError] = createSignal<string | null>(null);
+
+  const add = (): void => {
+    const serverName = name().trim();
+    if (!serverName || (transport() === 'stdio' ? !command().trim() : !url().trim())) {
+      setFormError(t('agent.mcpMissing'));
+      return;
+    }
+    if (list().some((server) => server.name === serverName)) {
+      setFormError(t('agent.mcpDuplicate'));
+      return;
+    }
+    const next: McpServer = transport() === 'stdio'
+      ? {
+          type: 'stdio',
+          name: serverName,
+          command: command().trim(),
+          args: parseLines(args()),
+          env: parseKeyValueLines(env(), '='),
+        }
+      : {
+          type: transport() as 'http' | 'sse',
+          name: serverName,
+          url: url().trim(),
+          headers: parseKeyValueLines(headers(), ':'),
+        };
+    setList((current) => [...current, next]);
+    setName('');
+    setCommand('');
+    setArgs('');
+    setEnv('');
+    setUrl('');
+    setHeaders('');
+    setFormError(null);
+  };
+
+  const remove = (index: number): void => {
+    setList((current) => current.filter((_, item) => item !== index));
+  };
+
+  const unsupported = createMemo(() => transport() === 'http'
+    ? props.capabilities?.http === false
+    : transport() === 'sse'
+      ? props.capabilities?.sse === false
+      : false);
+
+  return (
+    <div class="op-resume-backdrop" onClick={props.onClose}>
+      <div
+        class="op-resume-panel op-mcp-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('agent.mcpServers')}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div class="op-resume-title-row">
+          <div class="op-resume-heading">
+            <span class="op-resume-title">{t('agent.mcpServers')}</span>
+            <span class="op-resume-agent">{t('agent.mcpAppliesToNew')}</span>
+          </div>
+          <IconButton icon="x" title={t('agent.close')} onClick={props.onClose} />
+        </div>
+        <div class="op-mcp-body">
+          <div class="op-mcp-note">
+            <Icon name="shield" size={14} />
+            <span>{t('agent.mcpSecurity')}</span>
+          </div>
+          <Show
+            when={list().length > 0}
+            fallback={<div class="op-skills-empty"><Icon name="server" size={22} /><strong>{t('agent.mcpEmpty')}</strong></div>}
+          >
+            <div class="op-mcp-list">
+              <For each={list()}>
+                {(server, index) => (
+                  <div class="op-mcp-row">
+                    <div class="op-mcp-icon"><Icon name="server" size={15} /></div>
+                    <div class="op-mcp-main">
+                      <span class="op-mcp-name">{server.name}</span>
+                      <span class="op-mcp-target">
+                        {server.type === 'stdio' ? `${server.command} ${server.args.join(' ')}` : server.url}
+                      </span>
+                    </div>
+                    <span class="op-skill-chip">{server.type}</span>
+                    <IconButton
+                      icon="trash"
+                      title={t('agent.mcpRemove')}
+                      onClick={() => remove(index())}
+                    />
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
+
+          <div class="op-mcp-form">
+            <div class="op-mcp-form-row">
+              <input
+                class="op-input"
+                value={name()}
+                placeholder={t('agent.mcpName')}
+                aria-label={t('agent.mcpName')}
+                onInput={(event) => setName(event.currentTarget.value)}
+              />
+              <select
+                class="op-input op-mcp-transport"
+                value={transport()}
+                aria-label={t('agent.mcpTransport')}
+                onChange={(event) => setTransport(event.currentTarget.value as 'stdio' | 'http' | 'sse')}
+              >
+                <option value="stdio">stdio</option>
+                <option value="http">http</option>
+                <option value="sse">sse</option>
+              </select>
+            </div>
+            <Show
+              when={transport() === 'stdio'}
+              fallback={
+                <>
+                  <input
+                    class="op-input"
+                    value={url()}
+                    placeholder={t('agent.mcpUrl')}
+                    aria-label={t('agent.mcpUrl')}
+                    onInput={(event) => setUrl(event.currentTarget.value)}
+                  />
+                  <textarea
+                    class="op-input op-mcp-textarea"
+                    value={headers()}
+                    placeholder={t('agent.mcpHeaders')}
+                    aria-label={t('agent.mcpHeaders')}
+                    onInput={(event) => setHeaders(event.currentTarget.value)}
+                  />
+                </>
+              }
+            >
+              <input
+                class="op-input"
+                value={command()}
+                placeholder={t('agent.mcpCommand')}
+                aria-label={t('agent.mcpCommand')}
+                onInput={(event) => setCommand(event.currentTarget.value)}
+              />
+              <textarea
+                class="op-input op-mcp-textarea"
+                value={args()}
+                placeholder={t('agent.mcpArgs')}
+                aria-label={t('agent.mcpArgs')}
+                onInput={(event) => setArgs(event.currentTarget.value)}
+              />
+              <textarea
+                class="op-input op-mcp-textarea"
+                value={env()}
+                placeholder={t('agent.mcpEnv')}
+                aria-label={t('agent.mcpEnv')}
+                onInput={(event) => setEnv(event.currentTarget.value)}
+              />
+            </Show>
+            <Show when={unsupported()}>
+              <div class="op-mcp-hint">
+                {transport() === 'http' ? t('agent.mcpUnsupportedHttp') : t('agent.mcpUnsupportedSse')}
+              </div>
+            </Show>
+            <div class="op-mcp-form-actions">
+              <button type="button" class="op-btn" onClick={add}>{t('agent.mcpAdd')}</button>
+            </div>
+          </div>
+
+          <Show when={formError()}>
+            <div class="op-skills-error"><Icon name="alert" size={14} /><span>{formError()}</span></div>
+          </Show>
+          <Show when={props.error}>
+            <div class="op-skills-error"><Icon name="alert" size={14} /><span>{props.error}</span></div>
+          </Show>
+        </div>
+        <div class="op-mcp-foot">
+          <span>{t('agent.mcpAppliesToNew')}</span>
+          <div class="op-mcp-foot-actions">
+            <button type="button" class="op-btn" onClick={props.onClose}>{t('agent.cancel')}</button>
+            <button
+              type="button"
+              class="op-btn primary"
+              disabled={props.saving}
+              onClick={() => props.onSave(list())}
+            >
+              <Show when={props.saving} fallback={t('agent.mcpSave')}><Spinner size={12} /></Show>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App(props: {
   api: Api;
   storageKey: string;
   runtimeStorageKey: string;
+  mcpStorageKey: string;
   theme: string;
   lang: string;
   path: string;
@@ -2367,6 +2579,10 @@ function App(props: {
   const [authRequired, setAuthRequired] = createSignal(false);
   const [authBusy, setAuthBusy] = createSignal(false);
   const [authDismissed, setAuthDismissed] = createSignal(false);
+  const [mcpOpen, setMcpOpen] = createSignal(false);
+  const [mcpServers, setMcpServers] = createSignal<McpServer[]>([]);
+  const [mcpSaving, setMcpSaving] = createSignal(false);
+  const [mcpError, setMcpError] = createSignal<string | null>(null);
   let events: EventSource | undefined;
   let disposed = false;
   const updatesBySession = new Map<string, any[]>();
@@ -2393,6 +2609,8 @@ function App(props: {
   });
   const promptCapabilities = createMemo<PromptCapabilities>(() =>
     (capabilities()?.promptCapabilities as PromptCapabilities | undefined) ?? {});
+  const mcpCapabilities = createMemo(() =>
+    (capabilities()?.mcpCapabilities as { http?: boolean; sse?: boolean } | undefined) ?? {});
   onMount(() => {
     void initialize();
     const onKey = (event: KeyboardEvent) => {
@@ -2459,6 +2677,12 @@ function App(props: {
       icon: 'puzzle',
       disabled: switchingAgent(),
       onClick: () => setSkillsOpen(true),
+    }, {
+      id: 'mcp',
+      title: t('agent.mcpServers'),
+      icon: 'server',
+      disabled: switchingAgent(),
+      onClick: () => { setMcpError(null); setMcpOpen(true); },
     }];
     if (session) {
       const caps = capabilities()?.sessionCapabilities as Record<string, unknown> | undefined;
@@ -2498,6 +2722,20 @@ function App(props: {
           // status below reports the server's selected agent
         }
         if (disposed) return;
+      }
+
+      const storedMcp = loadMcpServers(window.localStorage, props.mcpStorageKey);
+      try {
+        const mcp = storedMcp.length > 0
+          ? await props.api.setMcp(storedMcp)
+          : await props.api.mcp();
+        if (disposed) return;
+        setMcpServers(mcp.data ?? []);
+        if (storedMcp.length > 0) {
+          storeMcpServers(window.localStorage, props.mcpStorageKey, mcp.data ?? []);
+        }
+      } catch {
+        // MCP config is optional; status below still loads the agent.
       }
 
       const status = await props.api.status();
@@ -2641,6 +2879,26 @@ function App(props: {
       setError(formatError(failure));
     } finally {
       setAuthBusy(false);
+    }
+  }
+
+  async function saveMcp(servers: McpServer[]): Promise<void> {
+    if (mcpSaving()) return;
+    setMcpSaving(true);
+    setMcpError(null);
+    try {
+      const result = await props.api.setMcp(servers);
+      if (disposed) return;
+      setMcpServers(result.data ?? []);
+      storeMcpServers(window.localStorage, props.mcpStorageKey, result.data ?? []);
+      await props.api.status().catch(() => {});
+      if (disposed) return;
+      setMcpOpen(false);
+      showToast(t('agent.mcpSaved'));
+    } catch (error) {
+      if (!disposed) setMcpError(formatError(error));
+    } finally {
+      if (!disposed) setMcpSaving(false);
     }
   }
 
@@ -3405,6 +3663,16 @@ function App(props: {
           onToast={showToast}
         />
       </Show>
+      <Show when={mcpOpen()}>
+        <McpPanel
+          servers={mcpServers()}
+          saving={mcpSaving()}
+          error={mcpError()}
+          capabilities={mcpCapabilities()}
+          onSave={(servers) => void saveMcp(servers)}
+          onClose={() => setMcpOpen(false)}
+        />
+      </Show>
       <Show when={resumeOpen()}>
         <ResumePicker
           agentName={agentName()}
@@ -3450,12 +3718,14 @@ export function mount(el: HTMLElement, props: FeatureUiProps): FeatureUiHandle {
   const api = createApi(props.base);
   const storageKey = agentModelStorageKey(props.base);
   const runtimeStorageKey = agentRuntimeStorageKey(props.base);
+  const mcpKey = mcpStorageKey(props.base);
 
   const dispose = render(() => (
     <App
       api={api}
       storageKey={storageKey}
       runtimeStorageKey={runtimeStorageKey}
+      mcpStorageKey={mcpKey}
       theme={theme()}
       lang={lang()}
       path={path()}

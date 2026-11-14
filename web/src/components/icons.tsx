@@ -9,7 +9,7 @@ export type IconName =
   | 'refresh' | 'info' | 'locate' | 'sparkles' | 'edit' | 'trash' | 'eye' | 'code'
   | 'download' | 'check' | 'alert' | 'undo' | 'lock'
   | 'terminal' | 'terminal-plus' | 'files' | 'file' | 'tabs' | 'instances' | 'keyboard'
-  | 'git-branch' | 'git-changes' | 'git-history' | 'commit' | 'diff' | 'puzzle'
+  | 'git-branch' | 'git-changes' | 'git-history' | 'commit' | 'diff' | 'puzzle' | 'server'
   | 'archive' | 'database' | 'table' | 'structure'
   | 'sliders' | 'fit' | 'fit-width' | 'zoom-in' | 'zoom-out' | 'actual-size'
   | 'outline' | 'copy' | 'expand' | 'collapse'
@@ -41,6 +41,7 @@ const icons: Record<IconName, IconPath> = {
     <path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15Z" />
   </>,
   puzzle: () => <path d="M19.44 7.85c-.05.32.06.65.29.88l1.57 1.57c.47.47.7 1.08.7 1.7s-.23 1.23-.7 1.7l-1.61 1.61a.98.98 0 0 1-.84.28c-.47-.07-.8-.48-.97-.93a2.5 2.5 0 1 0-3.21 3.22c.44.16.85.5.92.97a.98.98 0 0 1-.27.83l-1.61 1.61c-.47.47-1.09.71-1.71.71s-1.23-.24-1.7-.71l-1.57-1.57a1.03 1.03 0 0 0-.88-.29c-.49.08-.84.51-1.02.97a2.5 2.5 0 1 1-3.23-3.24c.46-.18.89-.52.96-1.02a1.03 1.03 0 0 0-.29-.87L3.7 13.7A2.4 2.4 0 0 1 3 12c0-.62.24-1.23.71-1.7l1.53-1.53c.24-.24.58-.35.92-.3.51.08.87.53 1.07 1.01a2.5 2.5 0 1 0 3.26-3.26c-.48-.2-.93-.56-1.01-1.07-.05-.34.06-.68.3-.92l1.53-1.53c.47-.47 1.08-.7 1.7-.7s1.24.24 1.71.71l1.57 1.57c.23.23.55.34.87.29.5-.07.85-.5 1.02-.97a2.5 2.5 0 1 1 3.24 3.24c-.47.18-.9.53-.97 1.02Z" />,
+  server: () => <><rect x="3" y="4" width="18" height="7" rx="2" /><rect x="3" y="13" width="18" height="7" rx="2" /><path d="M7 7h.01M7 16h.01" /></>,
   edit: () => <><path d="M4 20h4L19 9l-4-4L4 16v4Z" /><path d="m13 7 4 4" /></>,
   trash: () => <><path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M10 11v6M14 11v6" /></>,
   eye: () => <><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="2.75" /></>,

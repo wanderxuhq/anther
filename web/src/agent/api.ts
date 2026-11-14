@@ -71,6 +71,12 @@ export type AuthMethod = {
   env?: Record<string, string>;
 };
 
+export type McpHeader = { name: string; value: string };
+
+export type McpServer =
+  | { type: 'stdio'; name: string; command: string; args: string[]; env: McpHeader[] }
+  | { type: 'http' | 'sse'; name: string; url: string; headers: McpHeader[] };
+
 export type Status = {
   ready: boolean;
   starting?: boolean;
@@ -287,6 +293,11 @@ export function createApi(base: string) {
     status: () => request<Status>('/status'),
     discovery: () => request<AgentDiscovery>('/discovery'),
     selectAgent: (agentID: string) => post<AgentDiscovery>('/select-agent', { agentID }),
+    mcp: () => request<{ data: McpServer[] }>('/mcp'),
+    setMcp: (servers: McpServer[]) => request<{ data: McpServer[] }>('/mcp', {
+      method: 'PUT',
+      body: JSON.stringify({ servers }),
+    }),
     authenticate: (methodID: string) => post<Status>('/auth', { methodID }),
     logout: () => post<Status>('/logout'),
     models: () => request<ModelList>('/models'),

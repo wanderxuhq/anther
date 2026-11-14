@@ -57,6 +57,8 @@ test('t：Agent 面板静态文案在中英文都存在', () => {
   assert.equal(t('agent.noPermissionOptions'), 'The agent did not provide permission options.');
   assert.equal(t('agent.attach'), 'Attach files');
   assert.equal(t('agent.richImage'), 'Attached image');
+  assert.equal(t('agent.mcpServers'), 'MCP servers');
+  assert.equal(t('agent.mcpSecurity').startsWith('MCP servers can run'), true);
   setLang('zh');
   assert.equal(t('agent.newChat'), '新会话');
   assert.equal(t('agent.empty.title'), '需要我做什么？');
@@ -71,4 +73,6 @@ test('t：Agent 面板静态文案在中英文都存在', () => {
   assert.equal(t('agent.noPermissionOptions'), 'Agent 没有提供权限选项。');
   assert.equal(t('agent.attach'), '添加附件');
   assert.equal(t('agent.richImage'), '附加图片');
+  assert.equal(t('agent.mcpServers'), 'MCP 服务');
+  assert.equal(t('agent.mcpSecurity').startsWith('MCP 服务可以'), true);
 });
