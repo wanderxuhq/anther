@@ -5,7 +5,7 @@ import type * as acp from '@agentclientprotocol/sdk';
 import type { Router } from '../http.ts';
 import type { AcpAgent, AgentEvent } from '../agent.ts';
 import { HttpError } from '../http-error.ts';
-import { normalizeMcpServers } from '../mcp.ts';
+import { normalizeMcpServers, wireMcpServers } from '../mcp.ts';
 
 function required(value: unknown, name: string): string {
   if (typeof value !== 'string' || value === '') throw new HttpError(400, `${name} is required`);
@@ -107,11 +107,11 @@ export function registerAgentRoutes(router: Router, agent: AcpAgent): void {
     }
   });
 
-  router.get('/_/agent/api/mcp', () => ({ data: agent.mcpServers() }));
+  router.get('/_/agent/api/mcp', () => ({ data: wireMcpServers(agent.mcpServers()) }));
   router.put('/_/agent/api/mcp', async (_req, body) => {
     const input = record(body);
     try {
-      return { data: agent.setMcpServers(normalizeMcpServers(input.servers)) };
+      return { data: wireMcpServers(agent.setMcpServers(normalizeMcpServers(input.servers))) };
     } catch (error) {
       throw new HttpError(400, error instanceof Error ? error.message : String(error));
     }

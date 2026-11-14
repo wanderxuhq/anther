@@ -10,7 +10,7 @@ import { discoverAgents, type DiscoveredAgent } from './agent-profiles.ts';
 import { formFromElicitation, formResponse, type AgentForm } from './agent-forms.ts';
 import { collectSessionPages } from './agent-session-list.ts';
 import { AgentFileSystem } from './agent-fs.ts';
-import { filterMcpServers } from './mcp.ts';
+import { filterMcpServers, mcpServersEqual } from './mcp.ts';
 import { AcpTerminalManager } from './agent-terminal.ts';
 import { FileStore } from './files.ts';
 
@@ -118,7 +118,11 @@ export class AgentRuntime {
   private error?: string;
   private disposed = false;
   private boot?: Bootstrap;
+  private bootPending?: Promise<Bootstrap>;
+  private bootEpoch = 0;
   private bootstrapUsed = false;
+  private readonly retiredBootstraps = new Set<string>();
+  private readonly sessionMcp = new Map<string, acp.McpServer[]>();
   private commands: acp.AvailableCommand[] = [];
   private readonly listeners = new Set<(event: AgentEvent) => void>();
   private readonly pending = new Map<string, PendingPermission>();
@@ -312,8 +316,9 @@ export class AgentRuntime {
   async status(): Promise<AgentStatus> {
     try {
       await this.start();
+      let boot: Bootstrap | undefined;
       try {
-        this.boot ??= await this.createBootstrap();
+        boot = await this.ensureBootstrap();
       } catch (error) {
         if (!this.isAuthRequired(error)) throw error;
         this.authRequired = true;
@@ -323,10 +328,10 @@ export class AgentRuntime {
         ready: true,
         agent: this.init?.agentInfo ?? undefined,
         capabilities: this.init?.agentCapabilities,
-        defaultModel: this.defaultModel(),
-        modes: this.boot?.modes,
-        configOptions: this.boot?.configOptions ?? [],
-        bootstrapSessionID: this.bootstrapUsed ? undefined : this.boot?.sessionId,
+        defaultModel: this.defaultModel(boot?.configOptions),
+        modes: boot?.modes,
+        configOptions: boot?.configOptions ?? [],
+        bootstrapSessionID: this.bootstrapUsed ? undefined : boot?.sessionId,
         authMethods: this.init?.authMethods ?? [],
         authenticated: this.authenticated,
         authRequired: this.authRequired,
@@ -356,14 +361,68 @@ export class AgentRuntime {
   }
 
   invalidateBootstrap(): void {
-    if (!this.bootstrapUsed) this.boot = undefined;
+    if (this.bootstrapUsed) return;
+    this.bootEpoch += 1;
+    const boot = this.boot;
+    this.boot = undefined;
+    if (boot) this.retireBootstrap(boot.sessionId);
+  }
+
+  private async ensureBootstrap(): Promise<Bootstrap> {
+    for (;;) {
+      if (this.boot) return this.boot;
+      if (!this.bootPending) {
+        const epoch = this.bootEpoch;
+        const pending = this.createBootstrap()
+          .then((bootstrap) => {
+            if (epoch === this.bootEpoch && !this.disposed) {
+              this.boot = bootstrap;
+            } else {
+              this.retireBootstrap(bootstrap.sessionId);
+            }
+            return bootstrap;
+          })
+          .finally(() => {
+            if (this.bootPending === pending) this.bootPending = undefined;
+          });
+        this.bootPending = pending;
+      }
+      await this.bootPending;
+    }
+  }
+
+  private retireBootstrap(sessionID: string): void {
+    this.configs.delete(sessionID);
+    this.modeStates.delete(sessionID);
+    this.titles.delete(sessionID);
+    this.history.delete(sessionID);
+    this.sessionMcp.delete(sessionID);
+    if (this.boot?.sessionId === sessionID) this.boot = undefined;
+    if (this.disposed) return;
+    this.retiredBootstraps.add(sessionID);
+    void this.deleteSession(sessionID);
+  }
+
+  private async deleteSession(sessionID: string): Promise<void> {
+    const capabilities = this.init?.agentCapabilities?.sessionCapabilities as
+      | acp.SessionCapabilities
+      | undefined;
+    const ctx = this.context;
+    if (!capabilities?.delete || !ctx) return;
+    try {
+      await ctx.request(acp.methods.agent.session.delete, { sessionId: sessionID });
+      this.retiredBootstraps.delete(sessionID);
+    } catch {
+      // Keep hiding the retired bootstrap for the rest of this process.
+    }
   }
 
   private async createBootstrap(): Promise<Bootstrap> {
     const ctx = await this.ensure();
+    const mcpServers = this.sessionMcpServers();
     const result = await ctx.request(acp.methods.agent.session.new, {
       cwd: this.dir,
-      mcpServers: this.sessionMcpServers(),
+      mcpServers,
     });
     const configOptions = result.configOptions ?? [];
     const modes = modeStateFrom(result.modes, configOptions);
@@ -372,13 +431,16 @@ export class AgentRuntime {
     if (result.sessionId) {
       this.configs.set(result.sessionId, configOptions);
       this.history.set(result.sessionId, []);
+      this.sessionMcp.set(result.sessionId, mcpServers);
       if (modes) this.modeStates.set(result.sessionId, modes);
     }
     return { sessionId: result.sessionId, configOptions, modes: modes?.state };
   }
 
-  private defaultModel(): { providerID: string; id: string } | null {
-    const model = this.modelOption(this.boot?.configOptions ?? []);
+  private defaultModel(
+    options: acp.SessionConfigOption[] = this.boot?.configOptions ?? [],
+  ): { providerID: string; id: string } | null {
+    const model = this.modelOption(options);
     if (!model || typeof model.currentValue !== 'string') return null;
     return splitModel(model.currentValue);
   }
@@ -435,20 +497,22 @@ export class AgentRuntime {
         list = [];
       }
     }
+    let boot: Bootstrap | undefined;
     try {
-      this.boot ??= await this.createBootstrap();
+      boot = await this.ensureBootstrap();
     } catch (error) {
       if (!this.isAuthRequired(error)) throw error;
       this.authRequired = true;
       this.authenticated = false;
       return [];
     }
-    const boot = this.boot;
     // The bootstrap session exists to obtain model/mode config. Keep it out of
-    // the UI until the user sends the first message.
+    // the UI until the user sends the first message. Retired bootstraps are
+    // hidden too, even when the agent cannot delete them.
     const hideBoot = !this.bootstrapUsed;
     const sessions = list
-      .filter((session) => !(hideBoot && session.sessionId === boot.sessionId))
+      .filter((session) => !this.retiredBootstraps.has(session.sessionId))
+      .filter((session) => !(hideBoot && session.sessionId === boot?.sessionId))
       .map((session) => {
         const parsed = session.updatedAt ? Date.parse(session.updatedAt) : NaN;
         const updated = Number.isFinite(parsed) ? parsed : Date.now();
@@ -460,7 +524,7 @@ export class AgentRuntime {
           modes: this.modeStates.get(session.sessionId)?.state,
         };
       });
-    if (!hideBoot && !sessions.some((session) => session.id === boot.sessionId)) {
+    if (!hideBoot && boot && !sessions.some((session) => session.id === boot.sessionId)) {
       sessions.unshift({
         id: boot.sessionId,
         title: this.titles.get(boot.sessionId) ?? 'New chat',
@@ -487,26 +551,28 @@ export class AgentRuntime {
 
   async createSession(): Promise<{ id: string; title: string; time: { created: number; updated: number }; configOptions: acp.SessionConfigOption[]; modes?: AgentModeState }> {
     await this.start();
-    this.boot ??= await this.createBootstrap();
+    const boot = await this.ensureBootstrap();
     if (!this.bootstrapUsed) {
       this.bootstrapUsed = true;
       return {
-        id: this.boot.sessionId,
-        title: this.titles.get(this.boot.sessionId) ?? 'New chat',
+        id: boot.sessionId,
+        title: this.titles.get(boot.sessionId) ?? 'New chat',
         time: { created: Date.now(), updated: Date.now() },
-        configOptions: this.boot.configOptions,
-        modes: this.boot.modes,
+        configOptions: boot.configOptions,
+        modes: boot.modes,
       };
     }
     const ctx = await this.ensure();
+    const mcpServers = this.sessionMcpServers();
     const result = await ctx.request(acp.methods.agent.session.new, {
       cwd: this.dir,
-      mcpServers: this.sessionMcpServers(),
+      mcpServers,
     });
     const configOptions = result.configOptions ?? [];
     const modes = modeStateFrom(result.modes, configOptions);
     this.configs.set(result.sessionId, configOptions);
     this.history.set(result.sessionId, []);
+    this.sessionMcp.set(result.sessionId, mcpServers);
     if (modes) this.modeStates.set(result.sessionId, modes);
     return {
       id: result.sessionId,
@@ -532,11 +598,13 @@ export class AgentRuntime {
     if (cached && cached.length > 0) return { updates: cached, configOptions: cachedConfigs, modes: cachedModes };
     const replay: acp.SessionUpdate[] = [];
     this.replays.set(id, replay);
+    const mcpServers = this.sessionMcp.get(id) ?? this.sessionMcpServers();
+    this.sessionMcp.set(id, mcpServers);
     try {
       const result = await ctx.request(acp.methods.agent.session.load, {
         sessionId: id,
         cwd: this.dir,
-        mcpServers: this.sessionMcpServers(),
+        mcpServers,
       });
       if (result.configOptions) this.configs.set(id, result.configOptions);
       const modes = modeStateFrom(result.modes, result.configOptions ?? cachedConfigs);
@@ -588,8 +656,7 @@ export class AgentRuntime {
     await ctx.request(acp.methods.agent.authenticate, { methodId: methodID });
     this.authenticated = true;
     this.authRequired = false;
-    this.boot = undefined;
-    this.bootstrapUsed = false;
+    this.resetBootstrapState();
   }
 
   async logout(): Promise<void> {
@@ -599,8 +666,16 @@ export class AgentRuntime {
     await ctx.request(acp.methods.agent.logout, {});
     this.authenticated = false;
     this.authRequired = (this.init?.authMethods?.length ?? 0) > 0;
+    this.resetBootstrapState();
+  }
+
+  private resetBootstrapState(): void {
+    this.bootEpoch += 1;
+    const boot = this.boot;
+    const wasUsed = this.bootstrapUsed;
     this.boot = undefined;
     this.bootstrapUsed = false;
+    if (boot && !wasUsed) this.retireBootstrap(boot.sessionId);
   }
 
   private isAuthRequired(error: unknown): boolean {
@@ -670,7 +745,10 @@ export class AgentRuntime {
     this.modeStates.delete(sessionID);
     this.titles.delete(sessionID);
     this.history.delete(sessionID);
+    this.sessionMcp.delete(sessionID);
+    this.retiredBootstraps.delete(sessionID);
     if (this.boot?.sessionId === sessionID) {
+      this.bootEpoch += 1;
       this.boot = undefined;
       this.bootstrapUsed = false;
     }
@@ -679,7 +757,8 @@ export class AgentRuntime {
 
   async fork(sessionID: string): Promise<{ id: string; title: string; time: { created: number; updated: number }; configOptions: acp.SessionConfigOption[]; modes?: AgentModeState }> {
     const ctx = await this.ensure();
-    const result = await ctx.request('session/fork', { sessionId: sessionID, cwd: this.dir, mcpServers: this.sessionMcpServers() }) as {
+    const mcpServers = this.sessionMcpServers();
+    const result = await ctx.request('session/fork', { sessionId: sessionID, cwd: this.dir, mcpServers }) as {
       sessionId: string;
       configOptions?: acp.SessionConfigOption[];
       modes?: acp.SessionModeState | null;
@@ -687,6 +766,7 @@ export class AgentRuntime {
     const configOptions = result.configOptions ?? [];
     const modes = modeStateFrom(result.modes, configOptions);
     this.configs.set(result.sessionId, configOptions);
+    this.sessionMcp.set(result.sessionId, mcpServers);
     if (modes) this.modeStates.set(result.sessionId, modes);
     return {
       id: result.sessionId,
@@ -836,8 +916,12 @@ export class AgentRuntime {
     this.error = undefined;
     this.authRequired = false;
     this.authenticated = false;
+    this.bootEpoch += 1;
     this.boot = undefined;
+    this.bootPending = undefined;
     this.bootstrapUsed = false;
+    this.retiredBootstraps.clear();
+    this.sessionMcp.clear();
     this.commands = [];
     this.configs.clear();
     this.modeStates.clear();
@@ -850,6 +934,13 @@ export class AgentRuntime {
   }
 
   async close(): Promise<void> {
+    const unusedBoot = this.bootstrapUsed ? undefined : this.boot;
+    if (unusedBoot) {
+      await Promise.race([
+        this.deleteSession(unusedBoot.sessionId),
+        new Promise((resolve) => setTimeout(resolve, 2000)),
+      ]);
+    }
     this.disposed = true;
     await this.stopProcess();
   }
@@ -910,6 +1001,7 @@ export class AcpAgent {
   }
 
   setMcpServers(servers: acp.McpServer[]): acp.McpServer[] {
+    if (mcpServersEqual(this.mcp, servers)) return this.mcp;
     this.mcp = servers;
     for (const runtime of this.runtimes.values()) runtime.invalidateBootstrap();
     return this.mcp;

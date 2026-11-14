@@ -2331,6 +2331,7 @@ function McpPanel(props: {
   onClose: () => void;
 }) {
   const [list, setList] = createSignal<McpServer[]>([...props.servers]);
+  const [dirty, setDirty] = createSignal(false);
   const [name, setName] = createSignal('');
   const [transport, setTransport] = createSignal<'stdio' | 'http' | 'sse'>('stdio');
   const [command, setCommand] = createSignal('');
@@ -2339,6 +2340,10 @@ function McpPanel(props: {
   const [url, setUrl] = createSignal('');
   const [headers, setHeaders] = createSignal('');
   const [formError, setFormError] = createSignal<string | null>(null);
+
+  createEffect(on(() => props.servers, (servers) => {
+    if (!dirty()) setList([...servers]);
+  }, { defer: true }));
 
   const add = (): void => {
     const serverName = name().trim();
@@ -2365,6 +2370,7 @@ function McpPanel(props: {
           headers: parseKeyValueLines(headers(), ':'),
         };
     setList((current) => [...current, next]);
+    setDirty(true);
     setName('');
     setCommand('');
     setArgs('');
@@ -2376,13 +2382,22 @@ function McpPanel(props: {
 
   const remove = (index: number): void => {
     setList((current) => current.filter((_, item) => item !== index));
+    setDirty(true);
   };
 
-  const unsupported = createMemo(() => transport() === 'http'
-    ? props.capabilities?.http === false
-    : transport() === 'sse'
-      ? props.capabilities?.sse === false
-      : false);
+  const unsupported = createMemo(() => {
+    if (!props.capabilities) return false;
+    if (transport() === 'http') return props.capabilities.http !== true;
+    if (transport() === 'sse') return props.capabilities.sse !== true;
+    return false;
+  });
+
+  const unsupportedServer = (server: McpServer): boolean => {
+    if (!props.capabilities) return false;
+    if (server.type === 'http') return props.capabilities.http !== true;
+    if (server.type === 'sse') return props.capabilities.sse !== true;
+    return false;
+  };
 
   return (
     <div class="op-resume-backdrop" onClick={props.onClose}>
@@ -2421,6 +2436,14 @@ function McpPanel(props: {
                       </span>
                     </div>
                     <span class="op-skill-chip">{server.type}</span>
+                    <Show when={unsupportedServer(server)}>
+                      <span
+                        class="op-mcp-warn"
+                        title={server.type === 'http' ? t('agent.mcpUnsupportedHttp') : t('agent.mcpUnsupportedSse')}
+                      >
+                        <Icon name="alert" size={12} />
+                      </span>
+                    </Show>
                     <IconButton
                       icon="trash"
                       title={t('agent.mcpRemove')}
@@ -2581,6 +2604,8 @@ function App(props: {
   const [authDismissed, setAuthDismissed] = createSignal(false);
   const [mcpOpen, setMcpOpen] = createSignal(false);
   const [mcpServers, setMcpServers] = createSignal<McpServer[]>([]);
+  const [mcpReady, setMcpReady] = createSignal(false);
+  const [mcpLoading, setMcpLoading] = createSignal(false);
   const [mcpSaving, setMcpSaving] = createSignal(false);
   const [mcpError, setMcpError] = createSignal<string | null>(null);
   let events: EventSource | undefined;
@@ -2618,11 +2643,17 @@ function App(props: {
         setConfirmDelete(null);
       }
     };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== props.mcpStorageKey) return;
+      setMcpServers(loadMcpServers(window.localStorage, props.mcpStorageKey));
+    };
     window.addEventListener('keydown', onKey);
+    window.addEventListener('storage', onStorage);
     onCleanup(() => {
       disposed = true;
       events?.close();
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('storage', onStorage);
     });
   });
 
@@ -2681,8 +2712,8 @@ function App(props: {
       id: 'mcp',
       title: t('agent.mcpServers'),
       icon: 'server',
-      disabled: switchingAgent(),
-      onClick: () => { setMcpError(null); setMcpOpen(true); },
+      disabled: switchingAgent() || !ready() || !mcpReady() || mcpLoading(),
+      onClick: () => void openMcp(),
     }];
     if (session) {
       const caps = capabilities()?.sessionCapabilities as Record<string, unknown> | undefined;
@@ -2709,6 +2740,7 @@ function App(props: {
     try {
       setInitError(null);
       setCapabilities(null);
+      setMcpReady(false);
       const discovery = await props.api.discovery().catch((): AgentDiscovery => ({ agents: [] }));
       if (disposed) return;
       const discovered = discovery.agents ?? [];
@@ -2734,9 +2766,27 @@ function App(props: {
         if (storedMcp.length > 0) {
           storeMcpServers(window.localStorage, props.mcpStorageKey, mcp.data ?? []);
         }
-      } catch {
-        // MCP config is optional; status below still loads the agent.
+      } catch (error) {
+        if (disposed) return;
+        setMcpError(formatError(error));
+        // The local copy may be stale or invalid; fall back to the server list
+        // so the manager never shows an empty list while the server has config.
+        try {
+          const mcp = await props.api.mcp();
+          if (disposed) return;
+          const list = mcp.data ?? [];
+          setMcpServers(list);
+          // Do not overwrite a valid local copy with an empty server list after
+          // a failed sync; the next reload can retry the PUT.
+          if (list.length > 0) {
+            storeMcpServers(window.localStorage, props.mcpStorageKey, list);
+          }
+        } catch {
+          // MCP config is optional; status below still loads the agent.
+        }
       }
+      if (disposed) return;
+      setMcpReady(true);
 
       const status = await props.api.status();
       if (disposed) return;
@@ -2882,6 +2932,23 @@ function App(props: {
     }
   }
 
+  async function openMcp(): Promise<void> {
+    if (mcpLoading() || mcpSaving()) return;
+    setMcpLoading(true);
+    setMcpError(null);
+    try {
+      const result = await props.api.mcp();
+      if (disposed) return;
+      setMcpServers(result.data ?? []);
+      storeMcpServers(window.localStorage, props.mcpStorageKey, result.data ?? []);
+    } catch (error) {
+      if (!disposed) setMcpError(formatError(error));
+    } finally {
+      if (!disposed) setMcpLoading(false);
+    }
+    if (!disposed) setMcpOpen(true);
+  }
+
   async function saveMcp(servers: McpServer[]): Promise<void> {
     if (mcpSaving()) return;
     setMcpSaving(true);
@@ -2891,8 +2958,20 @@ function App(props: {
       if (disposed) return;
       setMcpServers(result.data ?? []);
       storeMcpServers(window.localStorage, props.mcpStorageKey, result.data ?? []);
-      await props.api.status().catch(() => {});
+      const status = await props.api.status().catch(() => null);
       if (disposed) return;
+      if (status?.ready) {
+        setDraftSessionID(status.bootstrapSessionID ?? null);
+        setDefaultModes(status.modes ?? null);
+        setDefaultConfigOptions(status.configOptions ?? []);
+        if (!currentID()) {
+          const nextModel = modelFromConfig(status.configOptions ?? [], models());
+          if (nextModel) setSelectedModel(nextModel);
+        }
+      } else {
+        // The old draft bootstrap was deleted; do not keep pointing at it.
+        setDraftSessionID(null);
+      }
       setMcpOpen(false);
       showToast(t('agent.mcpSaved'));
     } catch (error) {
@@ -3668,7 +3747,7 @@ function App(props: {
           servers={mcpServers()}
           saving={mcpSaving()}
           error={mcpError()}
-          capabilities={mcpCapabilities()}
+          capabilities={capabilities() ? mcpCapabilities() : undefined}
           onSave={(servers) => void saveMcp(servers)}
           onClose={() => setMcpOpen(false)}
         />

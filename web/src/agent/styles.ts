@@ -578,6 +578,7 @@ export const css = `
   font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .op-mcp-hint { color: #b45309; font-size: 10.5px; line-height: 1.4; }
+.op-mcp-warn { display: inline-flex; color: #b45309; flex: 0 0 auto; }
 .op-mcp-form-actions { display: flex; justify-content: flex-end; }
 .op-mcp-foot {
   flex: 0 0 auto;
