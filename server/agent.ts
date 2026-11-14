@@ -271,6 +271,10 @@ export class AgentRuntime {
           : Promise.reject(RequestError.internalError(undefined, 'agent connection closed')))
         .onNotification(acp.methods.client.session.update, (ctx) => {
           if (this.child === child) this.onUpdate(ctx.params);
+        })
+        .onNotification(acp.methods.client.elicitation.complete, () => {
+          // URL completion is informational; the UI already dismissed the
+          // elicitation when the user consented to open the link.
         });
 
       this.startTimer = setTimeout(() => {
@@ -290,7 +294,7 @@ export class AgentRuntime {
               notices: {},
               compaction: {},
             },
-            elicitation: { form: {} },
+            elicitation: { form: {}, url: {} },
           },
           clientInfo: { name: 'anther', version: '1' },
         });

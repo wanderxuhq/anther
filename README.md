@@ -42,7 +42,7 @@ A mobile-first, browser-based web IDE. Run one stateless Node process in a proje
 - The Agent panel exposes a searchable session list through `/resume`. Opening a session adds it to anther's tab bar; other sessions stay out of the tabs.
 - New chat opens a draft tab without creating an agent session; the session is created on the first message.
 - The first native ACP agent is the local `opencode` CLI (`opencode acp`). It uses OpenCode's own config, login, tools, and session storage; anther does not embed the OpenCode SDK.
-- Tool cards, diffs, Markdown, permissions, ACP elicitation forms, model selection, fork/delete, and streaming replies are rendered by anther.
+- Tool cards, diffs, Markdown, permissions, ACP elicitation forms and consented URL links, model selection, fork/delete, and streaming replies are rendered by anther.
 - Built-in Skills installer (toolbar puzzle icon) backed by `vercel-labs/skills`: preview a GitHub/git/local source, pick skills and target ACP agents, then install or remove them. Telemetry is disabled.
 - ACP client filesystem and terminal capabilities: agents can read/write workspace text files and run non-interactive commands, with live terminal output in tool cards. Agent authentication methods are surfaced in the panel.
 - Rich ACP content: images, audio, resource links, and embedded resources render in messages and tool cards. The composer can attach images, audio, and files, gated by the agent's prompt capabilities.
@@ -115,9 +115,11 @@ not embed the OpenCode SDK and does not manage provider keys or the agent
 database. Configure OpenCode as you normally would (for example
 `~/.config/opencode/opencode.json(c)` and `~/.local/share/opencode/opencode.db`).
 
-anther advertises ACP `elicitation.form` support and renders session-scoped
-form requests as pending cards. This includes OpenCode's `question` tool: pick
-an option or type a custom answer, and the agent continues the same turn.
+anther advertises ACP `elicitation.form` and `elicitation.url` support and
+renders session-scoped form requests as pending cards. This includes OpenCode's
+`question` tool: pick an option or type a custom answer, and the agent continues
+the same turn. URL requests show the full address and require explicit consent
+before opening the link in a new tab; invalid or non-HTTP(S) URLs are rejected.
 
 The model picker remembers your last explicit choice per workspace and applies
 it to new chats with ACP `session/set_config_option`. ACP itself defines the

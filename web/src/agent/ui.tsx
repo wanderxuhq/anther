@@ -57,6 +57,7 @@ import { t, lang } from '../i18n.ts';
 import { stripTerminalControl, terminalIdsFromContent } from './terminal.ts';
 import { planEntries, upsertPlan, type PlanEntry, type PlanItem } from './plan.ts';
 import { richContent, type RichContent } from './content.ts';
+import { externalHttpUrl } from './external.ts';
 import {
   prepareAttachment,
   promptContentForAttachment,
@@ -1225,6 +1226,7 @@ function PermissionCard(props: {
 function FormCard(props: {
   form: FormInfo;
   onReply: (answer: Record<string, unknown>) => void;
+  onDecline: () => void;
   onCancel: () => void;
 }) {
   const defaults = Object.fromEntries(
@@ -1258,6 +1260,46 @@ function FormCard(props: {
     }
     props.onReply(values());
   };
+  if (props.form.mode === 'url') {
+    const target = () => externalHttpUrl(props.form.url);
+    const open = () => {
+      const url = target();
+      if (!url) return;
+      window.open(url.toString(), '_blank', 'noopener,noreferrer');
+      props.onReply({});
+    };
+    return (
+      <div class="op-form op-url-form">
+        <div class="op-form-head">
+          <span class="op-form-icon"><Icon name="shield" size={16} /></span>
+          <div>
+            <div class="op-form-title">{props.form.title || t('agent.urlElicitation')}</div>
+            <div class="op-form-subtitle">
+              {props.form.message || t('agent.urlElicitationHint')}
+            </div>
+          </div>
+        </div>
+        <div class="op-url-target">
+          <span class="op-url-host">{target()?.host ?? props.form.url ?? ''}</span>
+          <code class="op-url-full">{target()?.toString() ?? props.form.url ?? ''}</code>
+        </div>
+        <div class="op-url-warning">
+          <Icon name="alert" size={13} />
+          <span>{t('agent.urlWarning')}</span>
+        </div>
+        <Show when={!target()}>
+          <div class="op-form-error">{t('agent.invalidUrl')}</div>
+        </Show>
+        <div class="op-form-actions">
+          <button type="button" class="op-btn primary" disabled={!target()} onClick={open}>
+            {t('agent.openLink')}
+          </button>
+          <button type="button" class="op-btn" onClick={props.onDecline}>{t('agent.decline')}</button>
+          <button type="button" class="op-btn" onClick={props.onCancel}>{t('agent.cancel')}</button>
+        </div>
+      </div>
+    );
+  }
   return (
     <div class="op-form">
       <div class="op-form-head">
@@ -3506,6 +3548,15 @@ function App(props: {
     }
   }
 
+  async function declineForm(form: FormInfo): Promise<void> {
+    try {
+      await props.api.replyForm(form.id, 'decline');
+      setForms((prev) => prev.filter((item) => item.id !== form.id));
+    } catch (error) {
+      showToast(formatError(error), true);
+    }
+  }
+
   async function interrupt(): Promise<void> {
     const id = currentID();
     if (!id) return;
@@ -3910,6 +3961,7 @@ function App(props: {
                       <FormCard
                         form={form}
                         onReply={(answer) => void replyForm(form, answer)}
+                        onDecline={() => void declineForm(form)}
                         onCancel={() => void cancelForm(form)}
                       />
                     )}

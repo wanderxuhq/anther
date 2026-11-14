@@ -110,7 +110,38 @@ test('falls back to the message when the schema has no title', () => {
   assert.deepEqual(form?.fields, []);
 });
 
-test('declines unsupported elicitation scopes and modes', () => {
+test('maps a URL elicitation and rejects unsafe URLs', () => {
+  const form = formFromElicitation('form_5', {
+    mode: 'url',
+    sessionId: 'ses_1',
+    elicitationId: 'url_1',
+    url: 'https://example.com/oauth?state=abc',
+    message: 'Connect your account',
+  } as acp.CreateElicitationRequest);
+  assert.ok(form);
+  assert.equal(form.mode, 'url');
+  assert.equal(form.title, 'Connect your account');
+  assert.equal(form.url, 'https://example.com/oauth?state=abc');
+  assert.equal(form.elicitationID, 'url_1');
+  assert.deepEqual(form.fields, []);
+
+  assert.equal(formFromElicitation('form_6', {
+    mode: 'url',
+    sessionId: 'ses_1',
+    elicitationId: 'url_2',
+    url: 'javascript:alert(1)',
+    message: 'Unsafe',
+  } as acp.CreateElicitationRequest), undefined);
+  assert.equal(formFromElicitation('form_7', {
+    mode: 'url',
+    sessionId: 'ses_1',
+    elicitationId: 'url_3',
+    url: 'file:///etc/passwd',
+    message: 'Unsafe',
+  } as acp.CreateElicitationRequest), undefined);
+});
+
+test('declines request-scoped elicitations and unknown modes', () => {
   assert.equal(formFromElicitation('form_4', {
     mode: 'form',
     requestId: 'req_1',
@@ -118,12 +149,10 @@ test('declines unsupported elicitation scopes and modes', () => {
     requestedSchema: { type: 'object', properties: {} },
   } as acp.CreateElicitationRequest), undefined);
 
-  assert.equal(formFromElicitation('form_5', {
-    mode: 'url',
+  assert.equal(formFromElicitation('form_8', {
+    mode: 'custom',
     sessionId: 'ses_1',
-    elicitationId: 'url_1',
-    url: 'https://example.com',
-    message: 'Open this',
+    message: 'Unknown',
   } as acp.CreateElicitationRequest), undefined);
 });
 
@@ -134,4 +163,5 @@ test('builds accept, decline and cancel responses', () => {
   });
   assert.deepEqual(formResponse('decline'), { action: 'decline' });
   assert.deepEqual(formResponse('cancel'), { action: 'cancel' });
+  assert.deepEqual(formResponse('accept', {}), { action: 'accept' });
 });

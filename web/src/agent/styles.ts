@@ -1165,6 +1165,31 @@ export const css = `
 .op-check { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--op-fg); }
 .op-check input { accent-color: var(--op-accent); }
 .op-external { color: var(--op-accent); font-size: 12px; text-decoration: underline; text-underline-offset: 2px; }
+.op-url-target {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 9px;
+  border: 1px solid var(--op-border);
+  border-radius: var(--op-radius);
+  background: color-mix(in srgb, var(--op-muted) 4%, transparent);
+}
+.op-url-host { color: var(--op-fg); font-size: 12px; font-weight: 650; }
+.op-url-full {
+  color: var(--op-muted);
+  font: 10.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.op-url-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: #b45309;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.op-url-warning > svg { flex: 0 0 auto; margin-top: 1px; }
 
 .op-composer {
   flex: 0 0 auto;

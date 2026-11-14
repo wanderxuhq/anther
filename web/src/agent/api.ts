@@ -237,9 +237,12 @@ export type FormField = {
 export type FormInfo = {
   id: string;
   sessionID: string;
+  mode: 'form' | 'url';
   title: string;
   message?: string;
   toolCallID?: string;
+  url?: string;
+  elicitationID?: string;
   fields: FormField[];
   metadata?: Record<string, unknown>;
   state?: { status: string; answer?: Record<string, unknown>; message?: string };

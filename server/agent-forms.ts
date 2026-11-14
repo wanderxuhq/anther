@@ -26,9 +26,12 @@ export type AgentFormField = {
 export type AgentForm = {
   id: string;
   sessionID: string;
+  mode: 'form' | 'url';
   title: string;
   message?: string;
   toolCallID?: string;
+  url?: string;
+  elicitationID?: string;
   fields: AgentFormField[];
   metadata?: Record<string, unknown>;
   state: { status: 'pending' };
@@ -37,13 +40,42 @@ export type AgentForm = {
 type JsonSchema = Record<string, unknown>;
 
 /**
- * Only session-scoped form elicitations can be attached to an anther session
- * tab. Request-scoped and URL-mode elicitations are declined.
+ * Only session-scoped elicitations can be attached to an anther session tab.
+ * Request-scoped requests are declined. URL elicitations are surfaced with the
+ * target URL; the browser UI obtains consent before opening it.
  */
 export function formFromElicitation(id: string, params: acp.CreateElicitationRequest): AgentForm | undefined {
-  if (params.mode !== 'form') return undefined;
-  const scope = params as unknown as { sessionId?: unknown; requestedSchema?: unknown; message?: unknown; toolCallId?: unknown };
+  const scope = params as unknown as {
+    sessionId?: unknown;
+    requestedSchema?: unknown;
+    message?: unknown;
+    toolCallId?: unknown;
+    url?: unknown;
+    elicitationId?: unknown;
+  };
   if (typeof scope.sessionId !== 'string' || !scope.sessionId) return undefined;
+  const message = typeof scope.message === 'string' && scope.message ? scope.message : undefined;
+  const metadata = isRecord(params._meta) ? params._meta : undefined;
+
+  if (params.mode === 'url') {
+    const url = httpUrl(scope.url);
+    if (!url) return undefined;
+    return {
+      id,
+      sessionID: scope.sessionId,
+      mode: 'url',
+      title: message ?? '',
+      message,
+      toolCallID: typeof scope.toolCallId === 'string' ? scope.toolCallId : undefined,
+      url,
+      elicitationID: typeof scope.elicitationId === 'string' ? scope.elicitationId : undefined,
+      fields: [],
+      metadata,
+      state: { status: 'pending' },
+    };
+  }
+  if (params.mode !== 'form') return undefined;
+
   const schema = isRecord(scope.requestedSchema) ? scope.requestedSchema : undefined;
   if (!schema) return undefined;
 
@@ -63,6 +95,7 @@ export function formFromElicitation(id: string, params: acp.CreateElicitationReq
   return {
     id,
     sessionID: scope.sessionId,
+    mode: 'form',
     title: typeof schema.title === 'string' && schema.title
       ? schema.title
       : typeof scope.message === 'string' && scope.message
@@ -71,7 +104,7 @@ export function formFromElicitation(id: string, params: acp.CreateElicitationReq
     message: typeof scope.message === 'string' && scope.message ? scope.message : undefined,
     toolCallID: typeof scope.toolCallId === 'string' ? scope.toolCallId : undefined,
     fields,
-    metadata: isRecord(params._meta) ? params._meta : undefined,
+    metadata,
     state: { status: 'pending' },
   };
 }
@@ -81,7 +114,9 @@ export function formResponse(
   content?: Record<string, unknown>,
 ): acp.CreateElicitationResponse {
   if (action === 'accept') {
-    return { action, content: content as acp.ElicitationAcceptAction['content'] };
+    return content && Object.keys(content).length > 0
+      ? { action, content: content as acp.ElicitationAcceptAction['content'] }
+      : { action };
   }
   return { action };
 }
@@ -164,6 +199,19 @@ function optionsFrom(value: unknown): AgentFormOption[] | undefined {
 
 function numberOrUndefined(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function httpUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const raw = value.trim();
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, any> {

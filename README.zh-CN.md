@@ -42,7 +42,7 @@
 - Agent 面板通过 `/resume` 命令提供可搜索的会话列表；点开某个会话才会把它加入 anther 的标签栏，其他会话不会占用标签。
 - 新建会话只打开空白草稿，不会立即创建 agent 会话；发送第一条消息时才创建。
 - 首个原生 ACP agent 是本地 `opencode` CLI（`opencode acp`）。它使用 OpenCode 自己的配置、登录、工具和会话存储；anther 不再嵌入 OpenCode SDK。
-- 工具卡、diff、Markdown、权限、ACP elicitation 表单、模型选择、fork/delete 和流式回复都由 anther 渲染。
+- 工具卡、diff、Markdown、权限、ACP elicitation 表单和经用户确认的 URL 链接、模型选择、fork/delete 和流式回复都由 anther 渲染。
 - 内置技能安装器（工具栏拼图图标），基于 `vercel-labs/skills`：预览 GitHub/Git/本地来源，选择技能和目标 ACP agent，然后安装或移除。遥测已关闭。
 - 支持 ACP 客户端文件系统和终端能力：agent 可以读写工作区文本文件、运行非交互命令，终端输出会实时显示在工具卡片里。Agent 的认证方式也会显示在面板中。
 - 支持 ACP 富内容：图片、音频、resource link 和嵌入资源会显示在消息和工具卡片中。输入框可以附加图片、音频和文件，并根据 agent 的 prompt capability 自动限制。
@@ -111,9 +111,10 @@ anther 使用 agent 自己的配置、登录、工具和会话存储，不再嵌
 管理 provider key 或 agent 数据库。OpenCode 按它自己的方式配置即可（例如
 `~/.config/opencode/opencode.json(c)` 和 `~/.local/share/opencode/opencode.db`）。
 
-anther 会声明 ACP `elicitation.form` 能力，并把会话级表单请求显示为待处理卡片。
-OpenCode 的 `question` 工具也走这条链路：选择选项或填写自定义答案后，agent 会在同
-一轮对话中继续。
+anther 会声明 ACP `elicitation.form` 和 `elicitation.url` 能力，并把会话级表单请求
+显示为待处理卡片。OpenCode 的 `question` 工具也走这条链路：选择选项或填写自定义
+答案后，agent 会在同一轮对话中继续。URL 请求会显示完整地址，只有用户明确确认后
+才会在新标签页打开；非法或非 HTTP(S) 的 URL 会被拒绝。
 
 模型选择器会按工作区记住你最后一次明确选择的模型，并在新会话创建后通过 ACP
 `session/set_config_option` 应用。ACP 本身只定义会话级模型，所以 agent 自己的配置
