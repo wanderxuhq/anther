@@ -2814,6 +2814,10 @@ function App(props: {
     (capabilities()?.promptCapabilities as PromptCapabilities | undefined) ?? {});
   const mcpCapabilities = createMemo(() =>
     (capabilities()?.mcpCapabilities as { http?: boolean; sse?: boolean } | undefined) ?? {});
+  const canCloseSession = createMemo(() => {
+    const caps = capabilities()?.sessionCapabilities as Record<string, unknown> | undefined;
+    return Boolean(caps?.close && caps?.list && (capabilities()?.loadSession || caps?.resume));
+  });
   onMount(() => {
     void initialize();
     const onKey = (event: KeyboardEvent) => {
@@ -2907,9 +2911,6 @@ function App(props: {
       });
     }
     if (session) {
-      if (caps?.close && caps?.list && (capabilities()?.loadSession || caps?.resume)) {
-        actions.push({ id: 'close-session', title: t('agent.closeSession'), icon: 'close', disabled: currentBusy() || switchingAgent(), onClick: () => void closeSession(session.id) });
-      }
       if (caps?.fork) {
         actions.push({ id: 'fork', title: t('agent.forkChat'), icon: 'git-branch', disabled: currentBusy() || switchingAgent(), onClick: () => void forkSession(session.id) });
       }
@@ -3979,6 +3980,17 @@ function App(props: {
                   }
                 >
                   <span class="op-chatbar-working"><Spinner size={11} /><span>{t('agent.switching')}</span></span>
+                </Show>
+                <Show when={currentSession() && canCloseSession()}>
+                  <IconButton
+                    icon="x"
+                    title={t('agent.closeSession')}
+                    disabled={currentBusy() || switchingAgent()}
+                    onClick={() => {
+                      const session = currentSession();
+                      if (session) void closeSession(session.id);
+                    }}
+                  />
                 </Show>
               </div>
               <MessageList
