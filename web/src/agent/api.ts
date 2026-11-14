@@ -1,5 +1,17 @@
 // web/src/agent/api.ts
 // Browser client for the built-in ACP agent bridge.
+export type ConfigOptionChoice = {
+  value: string;
+  name: string;
+  description?: string | null;
+};
+
+export type ConfigOptionGroup = {
+  group: string;
+  name: string;
+  options: ConfigOptionChoice[];
+};
+
 export type ConfigOption = {
   id: string;
   name: string;
@@ -7,7 +19,7 @@ export type ConfigOption = {
   category?: string | null;
   type: 'select' | 'boolean';
   currentValue: string | boolean;
-  options?: Array<{ value: string; name: string; description?: string | null }>;
+  options?: Array<ConfigOptionChoice | ConfigOptionGroup>;
 };
 
 export type Model = {

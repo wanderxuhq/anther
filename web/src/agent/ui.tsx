@@ -35,6 +35,7 @@ import {
   type TerminalExit,
   type TerminalOutput,
   type AuthMethod,
+  type ConfigOption,
 } from './api.ts';
 import { Icon, type IconName } from './icons.tsx';
 import { copyText, enhanceMarkdown, renderMarkdown } from './markdown.ts';
@@ -52,6 +53,8 @@ import {
 import type { FeatureTabPatch } from '../feature-types.ts';
 import { t, lang } from '../i18n.ts';
 import { stripTerminalControl, terminalIdsFromContent } from './terminal.ts';
+import { planEntries, upsertPlan, type PlanEntry, type PlanItem } from './plan.ts';
+import { modeStateFromOptions } from './config.ts';
 import { css } from './styles.ts';
 
 export type FeatureTabSpec = {
@@ -126,6 +129,7 @@ type AssistantItem = {
 type ChatItem =
   | { kind: 'user'; id: string; text: string; time: number }
   | AssistantItem
+  | PlanItem
   | { kind: 'system'; id: string; text: string; textKey?: string; textParams?: Record<string, string | number>; tone: 'info' | 'error' | 'retry' | 'compaction'; time: number };
 
 let localID = 0;
@@ -388,6 +392,17 @@ function normalizeHistory(updates: any[]): ChatItem[] {
           tone,
           time: Date.now(),
         });
+        break;
+      }
+      case 'plan': {
+        const entries = planEntries(update);
+        if (!entries) break;
+        const plan: PlanItem = { kind: 'plan', id: 'plan', entries, time: Date.now() };
+        out.splice(0, out.length, ...upsertPlan(out, plan));
+        assistant = null;
+        assistantID = null;
+        user = null;
+        userID = null;
         break;
       }
       default:
@@ -1136,6 +1151,41 @@ function FormCard(props: {
   );
 }
 
+function PlanStatusIcon(props: { status: PlanEntry['status'] }) {
+  if (props.status === 'completed') return <Icon name="check" size={12} />;
+  if (props.status === 'in_progress') return <Spinner size={11} />;
+  return <span class="op-plan-dot" />;
+}
+
+function PlanCard(props: { entries: PlanEntry[] }) {
+  const done = createMemo(() => props.entries.filter((entry) => entry.status === 'completed').length);
+  return (
+    <div class="op-plan">
+      <div class="op-plan-head">
+        <Icon name="list" size={14} />
+        <span>{t('agent.plan')}</span>
+        <span class="op-plan-progress">
+          {t('agent.planProgress', { done: done(), total: props.entries.length })}
+        </span>
+      </div>
+      <div class="op-plan-list">
+        <For each={props.entries}>
+          {(entry) => (
+            <div class={`op-plan-row ${entry.status}`}>
+              <span class="op-plan-status"><PlanStatusIcon status={entry.status} /></span>
+              <span class="op-plan-content">{entry.content}</span>
+              <span
+                class={`op-plan-priority ${entry.priority}`}
+                title={t(`agent.planPriority.${entry.priority}`)}
+              />
+            </div>
+          )}
+        </For>
+      </div>
+    </div>
+  );
+}
+
 function MessageItem(props: {
   item: ChatItem;
   agentName: string;
@@ -1147,23 +1197,29 @@ function MessageItem(props: {
   onCancelForm: (form: FormInfo) => void;
 }) {
   if (props.item.kind === 'user') {
+    const user = props.item;
     return (
       <div class="op-message op-user">
-        <div class="op-user-bubble">{props.item.text}</div>
+        <div class="op-user-bubble">{user.text}</div>
         <div class="op-message-foot">
-          <span>{formatRelative(props.item.time)}</span>
-          <IconButton icon="copy" title={t('agent.copyMessage')} onClick={() => props.onCopy(props.item.text)} />
+          <span>{formatRelative(user.time)}</span>
+          <IconButton icon="copy" title={t('agent.copyMessage')} onClick={() => props.onCopy(user.text)} />
         </div>
       </div>
     );
   }
   if (props.item.kind === 'system') {
+    const system = props.item;
     return (
-      <div class={`op-system ${props.item.tone}`}>
-        <Icon name={props.item.tone === 'error' ? 'alert' : props.item.tone === 'compaction' ? 'refresh' : 'info'} size={13} />
-        <span>{props.item.textKey ? t(props.item.textKey, props.item.textParams) : props.item.text}</span>
+      <div class={`op-system ${system.tone}`}>
+        <Icon name={system.tone === 'error' ? 'alert' : system.tone === 'compaction' ? 'refresh' : 'info'} size={13} />
+        <span>{system.textKey ? t(system.textKey, system.textParams) : system.text}</span>
       </div>
     );
+  }
+  if (props.item.kind === 'plan') {
+    const plan = props.item;
+    return <PlanCard entries={plan.entries} />;
   }
   const item = () => props.item as AssistantItem;
   return (
@@ -2604,6 +2660,30 @@ function App(props: {
     return { tokens: { input, output, reasoning } };
   }
 
+  function applySessionStateUpdate(sessionID: string, update: Record<string, any>): void {
+    if (update.sessionUpdate === 'current_mode_update' && typeof update.currentModeId === 'string') {
+      const currentModeId = update.currentModeId;
+      setSessions((prev) => prev.map((session) => session.id === sessionID
+        ? { ...session, modes: session.modes ? { ...session.modes, currentModeId } : session.modes }
+        : session));
+      if (sessionID === currentID()) {
+        setModes((prev) => prev ? { ...prev, currentModeId } : prev);
+      }
+    }
+    if (update.sessionUpdate === 'config_option_update' && Array.isArray(update.configOptions)) {
+      const options = update.configOptions as ConfigOption[];
+      const nextModes = modeStateFromOptions(options);
+      setSessions((prev) => prev.map((session) => session.id === sessionID
+        ? { ...session, configOptions: options, modes: nextModes ?? session.modes }
+        : session));
+      if (sessionID === currentID()) {
+        if (nextModes) setModes(nextModes);
+        const nextModel = modelFromConfig(options, models());
+        if (nextModel) setSelectedModel(nextModel);
+      }
+    }
+  }
+
   function handleEvent(event: AgentEvent): void {
     switch (event.type) {
       case 'state':
@@ -2618,12 +2698,15 @@ function App(props: {
         }
         break;
       case 'update': {
+        const update = event.update as Record<string, any>;
+        if (update.sessionUpdate === 'current_mode_update' || update.sessionUpdate === 'config_option_update') {
+          applySessionStateUpdate(event.sessionID, update);
+        }
         if (event.sessionID !== currentID()) return;
         const list = updatesBySession.get(event.sessionID) ?? [];
         list.push(event.update);
         updatesBySession.set(event.sessionID, list);
         setItems(normalizeHistory(list));
-        const update = event.update as Record<string, any>;
         if (update.sessionUpdate === 'available_commands_update') {
           setCommands((update.availableCommands ?? []) as Command[]);
         } else if (update.sessionUpdate === 'session_info_update') {

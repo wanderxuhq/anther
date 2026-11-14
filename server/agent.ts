@@ -766,6 +766,27 @@ export class AgentRuntime {
       this.titles.set(params.sessionId, update.title);
       this.emit({ type: 'sessions_changed' });
     }
+    if (update.sessionUpdate === 'current_mode_update') {
+      const stored = this.modeStates.get(params.sessionId);
+      if (stored) {
+        stored.state.currentModeId = update.currentModeId;
+        if (params.sessionId === this.boot?.sessionId) {
+          this.boot = { ...this.boot, modes: stored.state };
+        }
+      }
+    }
+    if (update.sessionUpdate === 'config_option_update') {
+      this.configs.set(params.sessionId, update.configOptions);
+      const modes = modeStateFrom(undefined, update.configOptions);
+      if (modes) {
+        this.modeStates.set(params.sessionId, modes);
+        if (params.sessionId === this.boot?.sessionId) {
+          this.boot = { ...this.boot, configOptions: update.configOptions, modes: modes.state };
+        }
+      } else if (params.sessionId === this.boot?.sessionId) {
+        this.boot = { ...this.boot, configOptions: update.configOptions };
+      }
+    }
     this.emit({ type: 'update', sessionID: params.sessionId, update, created: Date.now() });
   }
 
