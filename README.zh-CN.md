@@ -43,12 +43,12 @@
 - 新建会话只打开空白草稿，不会立即创建 agent 会话；发送第一条消息时才创建。
 - 首个原生 ACP agent 是本地 `opencode` CLI（`opencode acp`）。它使用 OpenCode 自己的配置、登录、工具和会话存储；anther 不再嵌入 OpenCode SDK。
 - 工具卡、diff、Markdown、权限、ACP elicitation 表单和经用户确认的 URL 链接、模型选择、fork/delete 和流式回复都由 anther 渲染。
-- 内置技能安装器（工具栏拼图图标），基于 `vercel-labs/skills`：预览 GitHub/Git/本地来源，选择技能和目标 ACP agent，然后安装或移除。遥测已关闭。
+- 内置技能安装器（`/skills` 命令），基于 `vercel-labs/skills`：预览 GitHub/Git/本地来源，选择技能和目标 ACP agent，然后安装或移除。遥测已关闭。
 - 支持 ACP 客户端文件系统和终端能力：agent 可以读写工作区文本文件、运行非交互命令，终端输出会实时显示在工具卡片里。Agent 的认证方式也会显示在面板中。
 - 支持 ACP 富内容：图片、音频、resource link 和嵌入资源会显示在消息和工具卡片中。输入框可以附加图片、音频和文件，并根据 agent 的 prompt capability 自动限制。
 - ACP 的 notice 和上下文压缩会以行内状态显示在时间线中；压缩摘要会流式追加，并更新同一个条目。
 - 按工作区设置 ACP 会话的追加系统提示词，仅在 agent 声明支持 `sessionCapabilities.systemPrompt` 时发送。
-- 按工作区配置 ACP 会话的 MCP 服务：在工具栏添加 stdio/HTTP/SSE 服务，按 agent capability 过滤不支持的传输方式，并注入到新建和重新打开的会话。
+- 按工作区配置 ACP 会话的 MCP 服务：使用 `/mcp` 添加 stdio/HTTP/SSE 服务，按 agent capability 过滤不支持的传输方式，并注入到新建和重新打开的会话。
 
 **多工作区与导航**
 
@@ -129,22 +129,21 @@ Mode 选择器使用 ACP `session/set_mode` 或 agent 的 `mode` 配置项；可
 `session/list`，anther 会跟随 `nextCursor` 取完所有分页。点开会话时才加入标签，并
 同时加载历史和配置，因此模型和模式会自动恢复，不需要额外请求。如果 agent 支持
 `session/resume` 但不支持 `session/load`，anther 会在不回放历史的情况下恢复会话，
-仍然可以继续发送消息。当 agent 同时支持 `session/list` 时，也可以从工具栏关闭会话
-以释放 agent 资源而不删除它；会话会保留在 `/resume` 中，重新打开时再加载。
+仍然可以继续发送消息。关闭标签会把会话保留在 `/resume` 中；只有删除操作才会移除它。
 
 ACP 的 `plan` 更新会以持续更新的清单形式显示在 Agent 时间线中。agent 自己切换
 mode 或配置项时，当前会话和会话列表会立即同步。ACP 的 notice 会以行内状态提示
 显示；上下文压缩更新会在时间线中保持同一个条目，并流式追加摘要内容。notice 属于
 实时事件，重新打开会话时不会回放。
 
-Agent 工具栏提供 MCP 服务管理器。可以添加 stdio、HTTP 或 SSE 服务，填写命令/URL
+`/mcp` 命令会打开 MCP 服务管理器。可以添加 stdio、HTTP 或 SSE 服务，填写命令/URL
 以及环境变量或请求头；配置会保存到浏览器存储，并同步到当前工作区的服务端。agent
 没有声明的 ACP 传输方式会被过滤掉。MCP 修改会应用到新建会话。本次运行中创建或
 加载过的会话会保留捕获时的服务集合；服务重启后重新打开会话时使用当前列表。MCP
 服务可以执行命令并接收凭据，配置（包括环境变量和请求头）会保存在浏览器存储中，
 请只添加可信服务。
 
-Agent 工具栏还可以设置按工作区生效的系统提示词。当选中的 agent 声明支持
+`/prompt` 命令还可以设置按工作区生效的系统提示词。当选中的 agent 声明支持
 `sessionCapabilities.systemPrompt` 时，anther 会把提示词追加到新建会话以及本次运行中之后加载的会话；会话会保留创建或加载时的
 提示词快照。文本保存在浏览器存储中，并通过 ACP `systemPrompt`（`mode: "append"`）
 发送。
@@ -153,7 +152,7 @@ Agent 工具栏还可以设置按工作区生效的系统提示词。当选中�
 设置会应用到之后新建的会话。权限卡片会按 agent 提供的选项渲染，不再固定为
 允许一次/始终允许/拒绝三个按钮。
 
-Agent 工具栏中的“技能”操作基于 `vercel-labs/skills`，可以直接在 anther 里安装可复用的
+`/skills` 命令基于 `vercel-labs/skills`，可以直接在 anther 里安装可复用的
 Agent 指令。输入 GitHub 简写、Git URL 或工作区内的本地路径，预览发现的技能，选择要安装到的 ACP
 agent（OpenCode 使用 `.agents/skills`，Command Code 使用 `.commandcode/skills`），
 然后安装。已安装的技能可以在同一面板中移除。安装会启用严格的重名/符号链接检查，将
@@ -172,8 +171,8 @@ resource link 以及嵌入的文本/二进制资源。输入框最多可以附�
 上限。`@file` 工作区提及暂未实现。
 
 `initialize.authMethods` 返回的认证方式会显示在面板中。agent 类型的认证可以直接
-在面板里完成；如果 agent 支持 logout，工具栏会显示退出登录。terminal 类型的认证
-目前显示为暂不支持。
+在面板里完成；如果 agent 支持 logout，可以使用 `/logout` 命令退出登录。terminal
+类型的认证目前显示为暂不支持。
 
 ### 可选功能
 

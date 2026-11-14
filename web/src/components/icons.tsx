@@ -6,7 +6,7 @@ import type { JSX } from 'solid-js';
 export type IconName =
   | 'menu' | 'search' | 'close' | 'plus' | 'minus' | 'more'
   | 'chevron-right' | 'chevron-down' | 'chevron-left'
-  | 'refresh' | 'info' | 'locate' | 'sparkles' | 'edit' | 'trash' | 'eye' | 'code'
+  | 'refresh' | 'info' | 'locate' | 'sparkles' | 'brain' | 'edit' | 'trash' | 'eye' | 'code'
   | 'download' | 'check' | 'alert' | 'undo' | 'lock'
   | 'terminal' | 'terminal-plus' | 'files' | 'file' | 'tabs' | 'instances' | 'keyboard'
   | 'git-branch' | 'git-changes' | 'git-history' | 'commit' | 'diff' | 'puzzle' | 'server'
@@ -39,6 +39,11 @@ const icons: Record<IconName, IconPath> = {
   sparkles: () => <>
     <path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3Z" />
     <path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15Z" />
+  </>,
+  brain: () => <>
+    <path d="M9.5 4A3.5 3.5 0 0 0 6 7.5 3.5 3.5 0 0 0 4.5 14 3.5 3.5 0 0 0 8 18.5 3.5 3.5 0 0 0 12 20" />
+    <path d="M14.5 4A3.5 3.5 0 0 1 18 7.5a3.5 3.5 0 0 1 1.5 6.5 3.5 3.5 0 0 1-3.5 4.5 3.5 3.5 0 0 1-4 1.5" />
+    <path d="M12 4v16M8 8h2M14 8h2M8 14h2M14 14h2" />
   </>,
   puzzle: () => <path d="M19.44 7.85c-.05.32.06.65.29.88l1.57 1.57c.47.47.7 1.08.7 1.7s-.23 1.23-.7 1.7l-1.61 1.61a.98.98 0 0 1-.84.28c-.47-.07-.8-.48-.97-.93a2.5 2.5 0 1 0-3.21 3.22c.44.16.85.5.92.97a.98.98 0 0 1-.27.83l-1.61 1.61c-.47.47-1.09.71-1.71.71s-1.23-.24-1.7-.71l-1.57-1.57a1.03 1.03 0 0 0-.88-.29c-.49.08-.84.51-1.02.97a2.5 2.5 0 1 1-3.23-3.24c.46-.18.89-.52.96-1.02a1.03 1.03 0 0 0-.29-.87L3.7 13.7A2.4 2.4 0 0 1 3 12c0-.62.24-1.23.71-1.7l1.53-1.53c.24-.24.58-.35.92-.3.51.08.87.53 1.07 1.01a2.5 2.5 0 1 0 3.26-3.26c-.48-.2-.93-.56-1.01-1.07-.05-.34.06-.68.3-.92l1.53-1.53c.47-.47 1.08-.7 1.7-.7s1.24.24 1.71.71l1.57 1.57c.23.23.55.34.87.29.5-.07.85-.5 1.02-.97a2.5 2.5 0 1 1 3.24 3.24c-.47.18-.9.53-.97 1.02Z" />,
   server: () => <><rect x="3" y="4" width="18" height="7" rx="2" /><rect x="3" y="13" width="18" height="7" rx="2" /><path d="M7 7h.01M7 16h.01" /></>,

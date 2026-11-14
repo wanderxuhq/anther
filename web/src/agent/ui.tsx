@@ -816,6 +816,47 @@ function RuntimeAgentPicker(props: {
   );
 }
 
+function AgentPicker(props: {
+  agents: DiscoveredAgent[];
+  value: string | null;
+  onPick: (id: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div class="op-resume-backdrop" onClick={props.onClose}>
+      <div
+        class="op-resume-panel op-agent-picker"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('agent.acpAgent')}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div class="op-resume-title-row">
+          <div class="op-resume-heading">
+            <span class="op-resume-title">{t('agent.acpAgent')}</span>
+          </div>
+          <IconButton icon="x" title={t('agent.close')} onClick={props.onClose} />
+        </div>
+        <div class="op-resume-list">
+          <For each={props.agents}>
+            {(agent) => (
+              <button
+                type="button"
+                class={`op-agent-option ${agent.id === props.value ? 'active' : ''}`}
+                onClick={() => props.onPick(agent.id)}
+              >
+                <span class="op-agent-option-icon"><Icon name="sparkles" size={16} /></span>
+                <span class="op-agent-option-name">{agent.name}</span>
+                <Show when={agent.id === props.value}><Icon name="check" size={15} /></Show>
+              </button>
+            )}
+          </For>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CommandMenu(props: {
   commands: Command[];
   query: string;
@@ -866,6 +907,7 @@ function Composer(props: {
   attachments: PromptAttachment[];
   attachmentBusy: boolean;
   commands: Command[];
+  localCommands: Command[];
   disabled: boolean;
   onDraft: (value: string) => void;
   onSend: () => void;
@@ -876,15 +918,23 @@ function Composer(props: {
   onAttach: (files: FileList | File[]) => void;
   onRemoveAttachment: (id: string) => void;
   onCommand: (command: Command) => void;
+  onLocalCommand: (name: string) => void;
   onResume: () => void;
 }) {
   let textarea!: HTMLTextAreaElement;
   let fileInput!: HTMLInputElement;
   const [commandOpen, setCommandOpen] = createSignal(false);
-  const commands = createMemo(() => [
-    { name: 'resume', description: t('agent.resumeCommand') },
-    ...props.commands.filter((command) => command.name !== 'resume'),
-  ]);
+  const local = createMemo(() => props.localCommands);
+  const isLocal = (name: string): boolean => name === 'resume'
+    || local().some((command) => command.name === name);
+  const commands = createMemo(() => {
+    const names = new Set(['resume', ...local().map((command) => command.name)]);
+    return [
+      { name: 'resume', description: t('agent.resumeCommand') },
+      ...local(),
+      ...props.commands.filter((command) => !names.has(command.name)),
+    ];
+  });
   const slashQuery = createMemo(() => {
     const value = props.draft;
     if (!value.startsWith('/') || value.includes(' ')) return null;
@@ -904,23 +954,30 @@ function Composer(props: {
     resize();
   });
 
+  function runLocal(name: string): void {
+    props.onDraft('');
+    if (name === 'resume') props.onResume();
+    else props.onLocalCommand(name);
+    setCommandOpen(false);
+  }
+
   function submit() {
-    if (props.busy || props.disabled || props.attachmentBusy) return;
-    if (props.draft.trim() === '/resume') {
-      props.onDraft('');
-      props.onResume();
-      setCommandOpen(false);
-      return;
+    const value = props.draft.trim();
+    if (value.startsWith('/') && !value.includes(' ')) {
+      const name = value.slice(1);
+      if (isLocal(name)) {
+        runLocal(name);
+        return;
+      }
     }
+    if (props.busy || props.disabled || props.attachmentBusy) return;
     props.onSend();
     setCommandOpen(false);
   }
 
   function pickCommand(command: Command) {
-    if (command.name === 'resume') {
-      props.onDraft('');
-      props.onResume();
-      setCommandOpen(false);
+    if (isLocal(command.name)) {
+      runLocal(command.name);
       return;
     }
     props.onCommand(command);
@@ -2803,6 +2860,7 @@ function App(props: {
   const currentBusy = createMemo(() => busy());
   const [resumeOpen, setResumeOpen] = createSignal(false);
   const [skillsOpen, setSkillsOpen] = createSignal(false);
+  const [agentPickerOpen, setAgentPickerOpen] = createSignal(false);
   const currentModelLabel = createMemo(() => modelLabel(selectedModel()));
   const authBlocked = createMemo(() => !authenticated() && (authRequired() || authMethods().length > 0));
   const showAuth = createMemo(() => authBlocked() && !authDismissed());
@@ -2814,9 +2872,23 @@ function App(props: {
     (capabilities()?.promptCapabilities as PromptCapabilities | undefined) ?? {});
   const mcpCapabilities = createMemo(() =>
     (capabilities()?.mcpCapabilities as { http?: boolean; sse?: boolean } | undefined) ?? {});
-  const canCloseSession = createMemo(() => {
+  const localCommands = createMemo<Command[]>(() => {
+    const list: Command[] = [
+      { name: 'new', description: t('agent.command.new') },
+      { name: 'skills', description: t('agent.command.skills') },
+    ];
+    if (ready()) list.push({ name: 'mcp', description: t('agent.command.mcp') });
+    if (promptReady()) list.push({ name: 'prompt', description: t('agent.command.prompt') });
+    const session = currentSession();
     const caps = capabilities()?.sessionCapabilities as Record<string, unknown> | undefined;
-    return Boolean(caps?.close && caps?.list && (capabilities()?.loadSession || caps?.resume));
+    if (session) {
+      if (caps?.fork) list.push({ name: 'fork', description: t('agent.command.fork') });
+      if (caps?.delete) list.push({ name: 'delete', description: t('agent.command.delete') });
+    }
+    if (authenticated() && canLogout()) {
+      list.push({ name: 'logout', description: t('agent.command.logout') });
+    }
+    return list;
   });
   onMount(() => {
     void initialize();
@@ -2878,55 +2950,17 @@ function App(props: {
     setBusy(false);
   }, { defer: true }));
 
-  // Actions live in anther's main toolbar while this panel is active.
+  // The only agent control in anther's main toolbar is the runtime selector.
+  // Feature actions live in the composer's `/` command menu.
   createEffect(() => {
-    const session = currentSession();
-    const actions: FeatureToolbarAction[] = [{
-      id: 'new',
-      title: t('agent.newChat'),
-      icon: 'plus',
-      disabled: switchingAgent(),
-      onClick: () => newChat(),
-    }, {
-      id: 'skills',
-      title: t('agent.skills'),
-      icon: 'puzzle',
-      disabled: switchingAgent(),
-      onClick: () => setSkillsOpen(true),
-    }, {
-      id: 'mcp',
-      title: t('agent.mcpServers'),
-      icon: 'server',
-      disabled: switchingAgent() || !ready() || !mcpReady() || mcpLoading(),
-      onClick: () => void openMcp(),
-    }];
-    const caps = capabilities()?.sessionCapabilities as Record<string, unknown> | undefined;
-    if (promptReady() && (caps?.systemPrompt || promptText().trim())) {
-      actions.push({
-        id: 'system-prompt',
-        title: t('agent.systemPrompt'),
-        icon: 'edit',
-        disabled: switchingAgent() || !promptReady() || promptLoading() || promptSaving(),
-        onClick: () => void openSystemPrompt(),
-      });
-    }
-    if (session) {
-      if (caps?.fork) {
-        actions.push({ id: 'fork', title: t('agent.forkChat'), icon: 'git-branch', disabled: currentBusy() || switchingAgent(), onClick: () => void forkSession(session.id) });
-      }
-      if (caps?.delete) {
-        actions.push({ id: 'delete', title: t('agent.deleteChat'), icon: 'trash', danger: true, disabled: currentBusy() || switchingAgent(), onClick: () => setConfirmDelete(session.id) });
-      }
-    }
-    if (authenticated() && canLogout()) {
-      actions.push({
-        id: 'logout',
-        title: t('agent.signOut'),
-        icon: 'lock',
-        disabled: authBusy() || switchingAgent(),
-        onClick: () => void logout(),
-      });
-    }
+    const agents = runtimeAgents();
+    const actions: FeatureToolbarAction[] = agents.length > 1 ? [{
+      id: 'runtime-agent',
+      title: t('agent.acpAgent'),
+      icon: 'brain',
+      disabled: switchingAgent() || currentBusy(),
+      onClick: () => setAgentPickerOpen(true),
+    }] : [];
     untrack(() => props.onToolbar?.(actions));
   });
 
@@ -3395,6 +3429,36 @@ function App(props: {
     setModes(defaultModes());
   }
 
+  function runLocalCommand(name: string): void {
+    switch (name) {
+      case 'new':
+        newChat();
+        break;
+      case 'skills':
+        if (!switchingAgent()) setSkillsOpen(true);
+        break;
+      case 'mcp':
+        void openMcp();
+        break;
+      case 'prompt':
+        void openSystemPrompt();
+        break;
+      case 'fork': {
+        const session = currentSession();
+        if (session && !currentBusy() && !switchingAgent()) void forkSession(session.id);
+        break;
+      }
+      case 'delete': {
+        const session = currentSession();
+        if (session && !currentBusy() && !switchingAgent()) setConfirmDelete(session.id);
+        break;
+      }
+      case 'logout':
+        if (authenticated() && canLogout()) void logout();
+        break;
+    }
+  }
+
   async function createSession(): Promise<Session | null> {
     if (switchingAgent()) return null;
     try {
@@ -3535,27 +3599,6 @@ function App(props: {
         props.onClosePath?.(`/${encodeURIComponent(id)}`);
       }
       showToast(t('agent.deleted'));
-    } catch (error) {
-      showToast(formatError(error), true);
-    }
-  }
-
-  async function closeSession(id: string): Promise<void> {
-    try {
-      await props.api.closeSession(id);
-      updatesBySession.delete(id);
-      if (currentID() === id) {
-        setCurrentID(null);
-        setItems([]);
-        setPermissions([]);
-        setForms([]);
-        setBusy(false);
-        setModes(defaultModes());
-        props.onOpenPath?.('');
-        props.onClosePath?.(`/${encodeURIComponent(id)}`);
-      }
-      await refreshSessions();
-      showToast(t('agent.sessionClosed'));
     } catch (error) {
       showToast(formatError(error), true);
     }
@@ -3951,48 +3994,6 @@ function App(props: {
               when={sessionReady() || routeMissing()}
               fallback={<div class="op-loading"><Spinner size={18} /><span>{t('agent.openingSession')}</span></div>}
             >
-              <div class="op-chatbar">
-                <span class="op-chatbar-title">{currentSession() ? sessionTitle(currentSession()) : t('agent.newChat')}</span>
-                <button
-                  type="button"
-                  class="op-chatbar-sessions"
-                  onClick={openResume}
-                  title={t('agent.resumeSession')}
-                  aria-label={t('agent.resumeSession')}
-                >
-                  <Icon name="list" size={15} />
-                  <span>{t('agent.resume')}</span>
-                </button>
-                <Show when={runtimeAgents().length > 1}>
-                  <RuntimeAgentPicker
-                    agents={runtimeAgents()}
-                    value={selectedRuntime()}
-                    disabled={currentBusy() || switchingAgent()}
-                    onChange={(id) => void changeRuntimeAgent(id)}
-                  />
-                </Show>
-                <Show
-                  when={switchingAgent()}
-                  fallback={
-                    <Show when={currentBusy()}>
-                      <span class="op-chatbar-working"><Spinner size={11} /><span>{t('agent.working')}</span></span>
-                    </Show>
-                  }
-                >
-                  <span class="op-chatbar-working"><Spinner size={11} /><span>{t('agent.switching')}</span></span>
-                </Show>
-                <Show when={currentSession() && canCloseSession()}>
-                  <IconButton
-                    icon="x"
-                    title={t('agent.closeSession')}
-                    disabled={currentBusy() || switchingAgent()}
-                    onClick={() => {
-                      const session = currentSession();
-                      if (session) void closeSession(session.id);
-                    }}
-                  />
-                </Show>
-              </div>
               <MessageList
                 items={items()}
                 busy={currentBusy()}
@@ -4040,6 +4041,7 @@ function App(props: {
                 attachments={attachments()}
                 attachmentBusy={attachmentBusy()}
                 commands={commands()}
+                localCommands={localCommands()}
                 disabled={!ready() || switchingAgent() || authBlocked()}
                 onDraft={setDraft}
                 onSend={() => void send()}
@@ -4050,6 +4052,7 @@ function App(props: {
                 onAttach={(files) => void addAttachments(files)}
                 onRemoveAttachment={removeAttachment}
                 onCommand={(command) => setDraft(`/${command.name} `)}
+                onLocalCommand={runLocalCommand}
                 onResume={openResume}
               />
             </Show>
@@ -4081,6 +4084,17 @@ function App(props: {
           error={promptError()}
           onSave={(text) => void saveSystemPrompt(text)}
           onClose={() => setPromptOpen(false)}
+        />
+      </Show>
+      <Show when={agentPickerOpen()}>
+        <AgentPicker
+          agents={runtimeAgents()}
+          value={selectedRuntime()}
+          onPick={(id) => {
+            setAgentPickerOpen(false);
+            void changeRuntimeAgent(id);
+          }}
+          onClose={() => setAgentPickerOpen(false)}
         />
       </Show>
       <Show when={resumeOpen()}>

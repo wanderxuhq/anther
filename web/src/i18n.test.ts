@@ -63,8 +63,6 @@ test('t：Agent 面板静态文案在中英文都存在', () => {
   assert.equal(t('agent.compaction.failedGeneric'), 'Compaction failed');
   assert.equal(t('agent.systemPrompt'), 'System prompt');
   assert.equal(t('agent.systemPromptClear'), 'Clear');
-  assert.equal(t('agent.closeSession'), 'Close session');
-  assert.equal(t('agent.sessionClosed'), 'Session closed');
   assert.equal(t('agent.openLink'), 'Open link');
   assert.equal(t('agent.decline'), 'Decline');
   setLang('zh');
@@ -87,8 +85,6 @@ test('t：Agent 面板静态文案在中英文都存在', () => {
   assert.equal(t('agent.compaction.failedGeneric'), '上下文压缩失败');
   assert.equal(t('agent.systemPrompt'), '系统提示词');
   assert.equal(t('agent.systemPromptClear'), '清除');
-  assert.equal(t('agent.closeSession'), '关闭会话');
-  assert.equal(t('agent.sessionClosed'), '已关闭会话');
   assert.equal(t('agent.openLink'), '打开链接');
   assert.equal(t('agent.decline'), '拒绝');
 });

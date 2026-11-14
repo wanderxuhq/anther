@@ -316,7 +316,6 @@ export function createApi(base: string) {
     messages: (sessionID: string) => request<MessageList>(`/messages?sessionID=${encodeURIComponent(sessionID)}`),
     createSession: () => post<Session>('/sessions'),
     removeSession: (sessionID: string) => post<void>('/sessions/remove', { sessionID }),
-    closeSession: (sessionID: string) => post<void>('/sessions/close', { sessionID }),
     forkSession: (sessionID: string) => post<Session>('/sessions/fork', { sessionID }),
     setConfig: (sessionID: string, configID: string, value: string | boolean) =>
       post<{ data: ConfigOption[] }>('/sessions/config', { sessionID, configID, value }),

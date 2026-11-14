@@ -43,12 +43,12 @@ A mobile-first, browser-based web IDE. Run one stateless Node process in a proje
 - New chat opens a draft tab without creating an agent session; the session is created on the first message.
 - The first native ACP agent is the local `opencode` CLI (`opencode acp`). It uses OpenCode's own config, login, tools, and session storage; anther does not embed the OpenCode SDK.
 - Tool cards, diffs, Markdown, permissions, ACP elicitation forms and consented URL links, model selection, fork/delete, and streaming replies are rendered by anther.
-- Built-in Skills installer (toolbar puzzle icon) backed by `vercel-labs/skills`: preview a GitHub/git/local source, pick skills and target ACP agents, then install or remove them. Telemetry is disabled.
+- Built-in Skills installer (`/skills` command) backed by `vercel-labs/skills`: preview a GitHub/git/local source, pick skills and target ACP agents, then install or remove them. Telemetry is disabled.
 - ACP client filesystem and terminal capabilities: agents can read/write workspace text files and run non-interactive commands, with live terminal output in tool cards. Agent authentication methods are surfaced in the panel.
 - Rich ACP content: images, audio, resource links, and embedded resources render in messages and tool cards. The composer can attach images, audio, and files, gated by the agent's prompt capabilities.
 - ACP notices and context compaction render as inline timeline rows; compaction summaries stream and update the same entry in place.
 - Per-workspace append system prompt for ACP sessions, sent only when the agent advertises `sessionCapabilities.systemPrompt` support.
-- Per-workspace MCP servers for ACP sessions: add stdio/HTTP/SSE servers from the toolbar, filter unsupported transports by agent capability, and pass them to new and reopened sessions.
+- Per-workspace MCP servers for ACP sessions: add stdio/HTTP/SSE servers with `/mcp`, filter unsupported transports by agent capability, and pass them to new and reopened sessions.
 
 **Workspaces and navigation**
 
@@ -137,10 +137,8 @@ ACP `session/list`, including every `nextCursor` page. Opening a session adds a
 tab and loads its history and config options together, so its model and mode
 are restored without a separate request. When the agent supports
 `session/resume` but not `session/load`, anther resumes the session without
-history replay so it can still be prompted. When the agent also supports
-`session/list`, a session can be closed from the toolbar to release agent
-resources without deleting it; it stays in `/resume` and is reloaded when
-reopened.
+history replay so it can still be prompted. Closing the tab keeps the session
+in `/resume`; it is only removed by the delete action.
 
 ACP `plan` updates are rendered as a persistent checklist in the Agent timeline.
 Mode and configuration changes made by the agent are applied to the active
@@ -149,7 +147,7 @@ status rows, and context compaction updates keep a single timeline entry whose
 summary streams in place. Notices are live events and are not replayed when a
 session is reopened.
 
-The Agent toolbar exposes an MCP server manager. Add stdio, HTTP, or SSE servers
+The `/mcp` command opens an MCP server manager. Add stdio, HTTP, or SSE servers
 with commands/URLs and environment variables or headers; the list is persisted
 in browser storage and synced to the server for this workspace. ACP transports
 the selected agent does not advertise are filtered out. MCP changes apply to new
@@ -159,7 +157,7 @@ list. MCP servers can run commands and receive credentials, and the list
 (including env values and headers) is stored in browser storage, so only add
 trusted servers.
 
-The Agent toolbar can also set a per-workspace system prompt. When the selected
+The `/prompt` command can also set a per-workspace system prompt. When the selected
 agent advertises `sessionCapabilities.systemPrompt`, anther appends the prompt
 to new sessions and to
 sessions loaded later in this run; sessions keep the prompt snapshot they were
@@ -171,7 +169,7 @@ boolean switches; new-chat draft settings are applied to new sessions.
 Permission cards render the options supplied by the agent instead of a fixed
 allow-once/always/deny set.
 
-The Skills action in the Agent toolbar uses `vercel-labs/skills` to install
+The `/skills` command uses `vercel-labs/skills` to install
 reusable agent instructions without leaving anther. Enter a GitHub shorthand,
 git URL, or a local path inside the workspace, preview the discovered skills, choose the ACP agents to
 install for (OpenCode uses `.agents/skills`, Command Code uses
@@ -196,7 +194,7 @@ to resource links. The final prompt JSON is checked against the request body
 limit before sending. `@file` workspace mentions are not implemented yet.
 
 Agent authentication methods from `initialize.authMethods` are surfaced in the
-panel. Agent-type methods can be completed in place, and logout is available
+panel. Agent-type methods can be completed in place, and `/logout` is available
 when the agent advertises it. Terminal-type authentication methods are shown as
 unsupported for now.
 

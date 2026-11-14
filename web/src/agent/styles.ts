@@ -129,6 +129,32 @@ export const css = `
   font-size: 13px;
 }
 .op-resume-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 8px; }
+.op-agent-picker { width: min(360px, 100%); }
+.op-agent-option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: var(--op-radius);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.op-agent-option:hover, .op-agent-option.active { background: var(--op-hover); }
+.op-agent-option-icon {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: var(--op-radius);
+  color: var(--op-accent);
+  background: color-mix(in srgb, var(--op-accent) 11%, transparent);
+}
+.op-agent-option-name { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .op-resume-group {
   position: sticky;
   top: 0;
@@ -612,38 +638,6 @@ export const css = `
   font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .op-prompt-count { align-self: flex-end; color: var(--op-muted); font-size: 10px; }
-.op-chatbar {
-  flex: 0 0 auto;
-  min-height: 40px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 24px;
-  border-bottom: 1px solid var(--op-border);
-}
-.op-chatbar-sessions {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 30px;
-  padding: 0 7px;
-  border: 1px solid transparent;
-  border-radius: var(--op-radius);
-  background: transparent;
-  color: var(--op-muted);
-  font-size: 13px;
-}
-.op-chatbar-sessions:hover { background: var(--op-hover); color: var(--op-fg); }
-.op-chatbar-title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--op-fg);
-  font-size: 14px;
-}
-.op-chatbar-working { display: inline-flex; align-items: center; gap: 5px; color: var(--op-muted); font-size: 11px; }
 .op-plan {
   margin: 10px 0;
   padding: 10px 12px;
@@ -1672,7 +1666,6 @@ export const css = `
   .op-skill-preview-foot { flex-direction: column; align-items: stretch; }
   .op-skill-preview-foot .op-btn { width: 100%; }
   .op-auth { margin: 8px 12px 0; }
-  .op-chatbar { padding: 0 12px; }
   .op-suggestions { grid-template-columns: 1fr; }
   .op-user-bubble { max-width: 88%; }
   .op-model-button { max-width: 160px; }
@@ -1696,7 +1689,6 @@ export const css = `
   .op-usage { display: none; }
   .op-messages { gap: 14px; }
   .op-empty h2 { font-size: 19px; }
-  .op-chatbar-sessions span { display: none; }
   .op-resume-foot span:last-child { display: none; }
   .op-skill-row { align-items: flex-start; }
   .op-skill-result-row code { display: none; }
