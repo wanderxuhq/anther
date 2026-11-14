@@ -9,11 +9,17 @@ import { registerAgentRoutes } from './routes/agent.ts';
 
 function stubAgent(initial: acp.McpServer[] = []): AcpAgent {
   let servers = initial;
+  let prompt: string | undefined;
   return {
     mcpServers: () => servers,
     setMcpServers: (next: acp.McpServer[]) => {
       servers = next;
       return servers;
+    },
+    systemPrompt: () => prompt,
+    setSystemPrompt: (text: string | undefined) => {
+      prompt = text;
+      return prompt;
     },
   } as unknown as AcpAgent;
 }
@@ -63,6 +69,30 @@ test('PUT /mcp rejects malformed configs with 400', async () => {
   );
   await assert.rejects(
     async () => { await put(request, { servers: 'nope' }, query); },
+    (error: unknown) => error instanceof HttpError && error.status === 400,
+  );
+});
+
+test('GET and PUT /system-prompt normalize and clear the prompt', async () => {
+  const router = new Router();
+  registerAgentRoutes(router, stubAgent());
+  const get = router.handler('GET', '/_/agent/api/system-prompt');
+  const put = router.handler('PUT', '/_/agent/api/system-prompt');
+  assert.ok(get);
+  assert.ok(put);
+  const request = {} as IncomingMessage;
+  const query = new URLSearchParams();
+
+  assert.deepEqual(await get(request, undefined, query), { data: null });
+  assert.deepEqual(await put(request, { text: '  Be concise.  ' }, query), { data: 'Be concise.' });
+  assert.deepEqual(await get(request, undefined, query), { data: 'Be concise.' });
+  assert.deepEqual(await put(request, { text: null }, query), { data: null });
+  await assert.rejects(
+    async () => { await put(request, { text: 42 }, query); },
+    (error: unknown) => error instanceof HttpError && error.status === 400,
+  );
+  await assert.rejects(
+    async () => { await put(request, { text: 'x'.repeat(16_001) }, query); },
     (error: unknown) => error instanceof HttpError && error.status === 400,
   );
 });

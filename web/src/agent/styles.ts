@@ -592,6 +592,26 @@ export const css = `
   font-size: 10px;
 }
 .op-mcp-foot-actions { display: flex; gap: 7px; }
+.op-prompt-panel {
+  width: min(680px, 100%);
+  max-height: min(84vh, 760px);
+}
+.op-prompt-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px 12px 12px;
+}
+.op-prompt-textarea {
+  min-height: 180px;
+  padding: 9px 10px;
+  resize: vertical;
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.op-prompt-count { align-self: flex-end; color: var(--op-muted); font-size: 10px; }
 .op-chatbar {
   flex: 0 0 auto;
   min-height: 40px;
@@ -1604,6 +1624,7 @@ export const css = `
   .op-resume-backdrop { padding: 16px 12px; }
   .op-resume-panel { max-height: calc(100dvh - 32px); }
   .op-skills-panel .op-resume-agent, .op-mcp-panel .op-resume-agent { display: none; }
+  .op-prompt-panel .op-resume-agent { display: none; }
   .op-mcp-form-row { flex-direction: column; }
   .op-mcp-transport { flex: 0 0 auto; }
   .op-source-row { flex-direction: column; align-items: stretch; }

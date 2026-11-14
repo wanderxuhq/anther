@@ -6,6 +6,7 @@ import type { Router } from '../http.ts';
 import type { AcpAgent, AgentEvent } from '../agent.ts';
 import { HttpError } from '../http-error.ts';
 import { normalizeMcpServers, wireMcpServers } from '../mcp.ts';
+import { normalizeSystemPrompt } from '../system-prompt.ts';
 
 function required(value: unknown, name: string): string {
   if (typeof value !== 'string' || value === '') throw new HttpError(400, `${name} is required`);
@@ -112,6 +113,16 @@ export function registerAgentRoutes(router: Router, agent: AcpAgent): void {
     const input = record(body);
     try {
       return { data: wireMcpServers(agent.setMcpServers(normalizeMcpServers(input.servers))) };
+    } catch (error) {
+      throw new HttpError(400, error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  router.get('/_/agent/api/system-prompt', () => ({ data: agent.systemPrompt() ?? null }));
+  router.put('/_/agent/api/system-prompt', async (_req, body) => {
+    const input = record(body);
+    try {
+      return { data: agent.setSystemPrompt(normalizeSystemPrompt(input.text)) ?? null };
     } catch (error) {
       throw new HttpError(400, error instanceof Error ? error.message : String(error));
     }

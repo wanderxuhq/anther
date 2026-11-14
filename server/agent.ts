@@ -11,6 +11,7 @@ import { formFromElicitation, formResponse, type AgentForm } from './agent-forms
 import { collectSessionPages } from './agent-session-list.ts';
 import { AgentFileSystem } from './agent-fs.ts';
 import { filterMcpServers, mcpServersEqual } from './mcp.ts';
+import { acpSystemPrompt } from './system-prompt.ts';
 import { AcpTerminalManager } from './agent-terminal.ts';
 import { FileStore } from './files.ts';
 
@@ -123,6 +124,7 @@ export class AgentRuntime {
   private bootstrapUsed = false;
   private readonly retiredBootstraps = new Set<string>();
   private readonly sessionMcp = new Map<string, acp.McpServer[]>();
+  private readonly sessionPrompt = new Map<string, acp.SystemPrompt | null>();
   private commands: acp.AvailableCommand[] = [];
   private readonly listeners = new Set<(event: AgentEvent) => void>();
   private readonly pending = new Map<string, PendingPermission>();
@@ -146,6 +148,7 @@ export class AgentRuntime {
     private readonly discovered: DiscoveredAgent,
     private readonly files: FileStore,
     private readonly mcpServers: () => acp.McpServer[] = () => [],
+    private readonly systemPrompt: () => string | undefined = () => undefined,
   ) {
     this.agentFiles = new AgentFileSystem(dir, files);
     this.acpTerminals = new AcpTerminalManager(dir, (event) => this.emit(event));
@@ -364,6 +367,13 @@ export class AgentRuntime {
     return filterMcpServers(this.mcpServers(), capabilities);
   }
 
+  private sessionSystemPrompt(): acp.SystemPrompt | undefined {
+    const capabilities = this.init?.agentCapabilities?.sessionCapabilities as
+      | acp.SessionCapabilities
+      | undefined;
+    return acpSystemPrompt(this.systemPrompt(), Boolean(capabilities?.systemPrompt));
+  }
+
   invalidateBootstrap(): void {
     if (this.bootstrapUsed) return;
     this.bootEpoch += 1;
@@ -401,6 +411,7 @@ export class AgentRuntime {
     this.titles.delete(sessionID);
     this.history.delete(sessionID);
     this.sessionMcp.delete(sessionID);
+    this.sessionPrompt.delete(sessionID);
     if (this.boot?.sessionId === sessionID) this.boot = undefined;
     if (this.disposed) return;
     this.retiredBootstraps.add(sessionID);
@@ -424,9 +435,11 @@ export class AgentRuntime {
   private async createBootstrap(): Promise<Bootstrap> {
     const ctx = await this.ensure();
     const mcpServers = this.sessionMcpServers();
+    const systemPrompt = this.sessionSystemPrompt();
     const result = await ctx.request(acp.methods.agent.session.new, {
       cwd: this.dir,
       mcpServers,
+      ...(systemPrompt ? { systemPrompt } : {}),
     });
     const configOptions = result.configOptions ?? [];
     const modes = modeStateFrom(result.modes, configOptions);
@@ -436,6 +449,7 @@ export class AgentRuntime {
       this.configs.set(result.sessionId, configOptions);
       this.history.set(result.sessionId, []);
       this.sessionMcp.set(result.sessionId, mcpServers);
+      this.sessionPrompt.set(result.sessionId, systemPrompt ?? null);
       if (modes) this.modeStates.set(result.sessionId, modes);
     }
     return { sessionId: result.sessionId, configOptions, modes: modes?.state };
@@ -568,15 +582,18 @@ export class AgentRuntime {
     }
     const ctx = await this.ensure();
     const mcpServers = this.sessionMcpServers();
+    const systemPrompt = this.sessionSystemPrompt();
     const result = await ctx.request(acp.methods.agent.session.new, {
       cwd: this.dir,
       mcpServers,
+      ...(systemPrompt ? { systemPrompt } : {}),
     });
     const configOptions = result.configOptions ?? [];
     const modes = modeStateFrom(result.modes, configOptions);
     this.configs.set(result.sessionId, configOptions);
     this.history.set(result.sessionId, []);
     this.sessionMcp.set(result.sessionId, mcpServers);
+    this.sessionPrompt.set(result.sessionId, systemPrompt ?? null);
     if (modes) this.modeStates.set(result.sessionId, modes);
     return {
       id: result.sessionId,
@@ -604,11 +621,16 @@ export class AgentRuntime {
     this.replays.set(id, replay);
     const mcpServers = this.sessionMcp.get(id) ?? this.sessionMcpServers();
     this.sessionMcp.set(id, mcpServers);
+    const systemPrompt = this.sessionPrompt.has(id)
+      ? this.sessionPrompt.get(id) ?? undefined
+      : this.sessionSystemPrompt();
+    this.sessionPrompt.set(id, systemPrompt ?? null);
     try {
       const result = await ctx.request(acp.methods.agent.session.load, {
         sessionId: id,
         cwd: this.dir,
         mcpServers,
+        ...(systemPrompt ? { systemPrompt } : {}),
       });
       if (result.configOptions) this.configs.set(id, result.configOptions);
       const modes = modeStateFrom(result.modes, result.configOptions ?? cachedConfigs);
@@ -750,6 +772,7 @@ export class AgentRuntime {
     this.titles.delete(sessionID);
     this.history.delete(sessionID);
     this.sessionMcp.delete(sessionID);
+    this.sessionPrompt.delete(sessionID);
     this.retiredBootstraps.delete(sessionID);
     if (this.boot?.sessionId === sessionID) {
       this.bootEpoch += 1;
@@ -762,7 +785,13 @@ export class AgentRuntime {
   async fork(sessionID: string): Promise<{ id: string; title: string; time: { created: number; updated: number }; configOptions: acp.SessionConfigOption[]; modes?: AgentModeState }> {
     const ctx = await this.ensure();
     const mcpServers = this.sessionMcpServers();
-    const result = await ctx.request('session/fork', { sessionId: sessionID, cwd: this.dir, mcpServers }) as {
+    const systemPrompt = this.sessionSystemPrompt();
+    const result = await ctx.request('session/fork', {
+      sessionId: sessionID,
+      cwd: this.dir,
+      mcpServers,
+      ...(systemPrompt ? { systemPrompt } : {}),
+    }) as {
       sessionId: string;
       configOptions?: acp.SessionConfigOption[];
       modes?: acp.SessionModeState | null;
@@ -771,6 +800,7 @@ export class AgentRuntime {
     const modes = modeStateFrom(result.modes, configOptions);
     this.configs.set(result.sessionId, configOptions);
     this.sessionMcp.set(result.sessionId, mcpServers);
+    this.sessionPrompt.set(result.sessionId, systemPrompt ?? null);
     if (modes) this.modeStates.set(result.sessionId, modes);
     return {
       id: result.sessionId,
@@ -930,6 +960,7 @@ export class AgentRuntime {
     this.bootstrapUsed = false;
     this.retiredBootstraps.clear();
     this.sessionMcp.clear();
+    this.sessionPrompt.clear();
     this.commands = [];
     this.configs.clear();
     this.modeStates.clear();
@@ -957,6 +988,7 @@ export class AgentRuntime {
 export class AcpAgent {
   private available?: DiscoveredAgent[];
   private mcp: acp.McpServer[] = [];
+  private promptText?: string;
   private selectedID?: string;
   private active?: AgentRuntime;
   private readonly runtimes = new Map<string, AgentRuntime>();
@@ -1015,11 +1047,28 @@ export class AcpAgent {
     return this.mcp;
   }
 
+  systemPrompt(): string | undefined {
+    return this.promptText;
+  }
+
+  setSystemPrompt(text: string | undefined): string | undefined {
+    if (this.promptText === text) return this.promptText;
+    this.promptText = text;
+    for (const runtime of this.runtimes.values()) runtime.invalidateBootstrap();
+    return this.promptText;
+  }
+
   private runtimeFor(discovered: DiscoveredAgent): AgentRuntime {
     const id = discovered.profile.id;
     let runtime = this.runtimes.get(id);
     if (!runtime) {
-      runtime = new AgentRuntime(this.dir, discovered, this.files, () => this.mcp);
+      runtime = new AgentRuntime(
+        this.dir,
+        discovered,
+        this.files,
+        () => this.mcp,
+        () => this.promptText,
+      );
       runtime.subscribe((event) => {
         if (this.active === runtime) this.emit(event);
       });

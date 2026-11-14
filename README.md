@@ -47,6 +47,7 @@ A mobile-first, browser-based web IDE. Run one stateless Node process in a proje
 - ACP client filesystem and terminal capabilities: agents can read/write workspace text files and run non-interactive commands, with live terminal output in tool cards. Agent authentication methods are surfaced in the panel.
 - Rich ACP content: images, audio, resource links, and embedded resources render in messages and tool cards. The composer can attach images, audio, and files, gated by the agent's prompt capabilities.
 - ACP notices and context compaction render as inline timeline rows; compaction summaries stream and update the same entry in place.
+- Per-workspace append system prompt for ACP sessions, sent only when the agent advertises `session/systemPrompt` support.
 - Per-workspace MCP servers for ACP sessions: add stdio/HTTP/SSE servers from the toolbar, filter unsupported transports by agent capability, and pass them to new and reopened sessions.
 
 **Workspaces and navigation**
@@ -149,6 +150,12 @@ were captured with; after a server restart, reopening a session uses the current
 list. MCP servers can run commands and receive credentials, and the list
 (including env values and headers) is stored in browser storage, so only add
 trusted servers.
+
+The Agent toolbar can also set a per-workspace system prompt. When the selected
+agent advertises support, anther appends the prompt to new sessions and to
+sessions loaded later in this run; sessions keep the prompt snapshot they were
+created or loaded with. The text is stored in browser storage and sent as ACP
+`systemPrompt` with `mode: "append"`.
 
 The composer exposes all non-model/non-mode session config options, including
 boolean switches; new-chat draft settings are applied to new sessions.

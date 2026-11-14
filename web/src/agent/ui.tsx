@@ -64,6 +64,7 @@ import {
   type PromptCapabilities,
 } from './attachment.ts';
 import { loadMcpServers, mcpStorageKey, parseKeyValueLines, parseLines, storeMcpServers } from './mcp.ts';
+import { MAX_SYSTEM_PROMPT, loadSystemPrompt, storeSystemPrompt, systemPromptStorageKey } from './system-prompt.ts';
 import {
   applyCompactionChunk,
   applyCompactionUpdate,
@@ -2346,6 +2347,76 @@ function SkillsPanel(props: {
   );
 }
 
+function SystemPromptPanel(props: {
+  text: string;
+  saving: boolean;
+  error: string | null;
+  onSave: (text: string | null) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = createSignal(props.text);
+  createEffect(on(() => props.text, (text) => setDraft(text), { defer: true }));
+
+  return (
+    <div class="op-resume-backdrop" onClick={props.onClose}>
+      <div
+        class="op-resume-panel op-prompt-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('agent.systemPrompt')}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div class="op-resume-title-row">
+          <div class="op-resume-heading">
+            <span class="op-resume-title">{t('agent.systemPrompt')}</span>
+            <span class="op-resume-agent">{t('agent.systemPromptScope')}</span>
+          </div>
+          <IconButton icon="x" title={t('agent.close')} onClick={props.onClose} />
+        </div>
+        <div class="op-prompt-body">
+          <div class="op-mcp-note">
+            <Icon name="info" size={14} />
+            <span>{t('agent.systemPromptHint')}</span>
+          </div>
+          <textarea
+            class="op-input op-prompt-textarea"
+            value={draft()}
+            maxLength={MAX_SYSTEM_PROMPT}
+            placeholder={t('agent.systemPromptPlaceholder')}
+            aria-label={t('agent.systemPrompt')}
+            onInput={(event) => setDraft(event.currentTarget.value)}
+          />
+          <span class="op-prompt-count">{draft().length} / {MAX_SYSTEM_PROMPT}</span>
+          <Show when={props.error}>
+            <div class="op-skills-error"><Icon name="alert" size={14} /><span>{props.error}</span></div>
+          </Show>
+        </div>
+        <div class="op-mcp-foot">
+          <button
+            type="button"
+            class="op-btn"
+            disabled={props.saving || !draft().trim()}
+            onClick={() => props.onSave(null)}
+          >
+            {t('agent.systemPromptClear')}
+          </button>
+          <div class="op-mcp-foot-actions">
+            <button type="button" class="op-btn" onClick={props.onClose}>{t('agent.cancel')}</button>
+            <button
+              type="button"
+              class="op-btn primary"
+              disabled={props.saving || !draft().trim()}
+              onClick={() => props.onSave(draft())}
+            >
+              <Show when={props.saving} fallback={t('agent.mcpSave')}><Spinner size={12} /></Show>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function McpPanel(props: {
   servers: McpServer[];
   saving: boolean;
@@ -2583,6 +2654,7 @@ function App(props: {
   storageKey: string;
   runtimeStorageKey: string;
   mcpStorageKey: string;
+  systemPromptStorageKey: string;
   theme: string;
   lang: string;
   path: string;
@@ -2632,6 +2704,12 @@ function App(props: {
   const [mcpLoading, setMcpLoading] = createSignal(false);
   const [mcpSaving, setMcpSaving] = createSignal(false);
   const [mcpError, setMcpError] = createSignal<string | null>(null);
+  const [promptOpen, setPromptOpen] = createSignal(false);
+  const [promptText, setPromptText] = createSignal('');
+  const [promptReady, setPromptReady] = createSignal(false);
+  const [promptLoading, setPromptLoading] = createSignal(false);
+  const [promptSaving, setPromptSaving] = createSignal(false);
+  const [promptError, setPromptError] = createSignal<string | null>(null);
   let events: EventSource | undefined;
   let disposed = false;
   const updatesBySession = new Map<string, any[]>();
@@ -2668,8 +2746,11 @@ function App(props: {
       }
     };
     const onStorage = (event: StorageEvent) => {
-      if (event.key !== props.mcpStorageKey) return;
-      setMcpServers(loadMcpServers(window.localStorage, props.mcpStorageKey));
+      if (event.key === props.mcpStorageKey) {
+        setMcpServers(loadMcpServers(window.localStorage, props.mcpStorageKey));
+      } else if (event.key === props.systemPromptStorageKey) {
+        setPromptText(loadSystemPrompt(window.localStorage, props.systemPromptStorageKey));
+      }
     };
     window.addEventListener('keydown', onKey);
     window.addEventListener('storage', onStorage);
@@ -2739,8 +2820,17 @@ function App(props: {
       disabled: switchingAgent() || !ready() || !mcpReady() || mcpLoading(),
       onClick: () => void openMcp(),
     }];
+    const caps = capabilities()?.sessionCapabilities as Record<string, unknown> | undefined;
+    if (caps?.systemPrompt) {
+      actions.push({
+        id: 'system-prompt',
+        title: t('agent.systemPrompt'),
+        icon: 'edit',
+        disabled: switchingAgent() || !ready() || !promptReady() || promptLoading(),
+        onClick: () => void openSystemPrompt(),
+      });
+    }
     if (session) {
-      const caps = capabilities()?.sessionCapabilities as Record<string, unknown> | undefined;
       if (caps?.fork) {
         actions.push({ id: 'fork', title: t('agent.forkChat'), icon: 'git-branch', disabled: currentBusy() || switchingAgent(), onClick: () => void forkSession(session.id) });
       }
@@ -2765,6 +2855,7 @@ function App(props: {
       setInitError(null);
       setCapabilities(null);
       setMcpReady(false);
+      setPromptReady(false);
       const discovery = await props.api.discovery().catch((): AgentDiscovery => ({ agents: [] }));
       if (disposed) return;
       const discovered = discovery.agents ?? [];
@@ -2811,6 +2902,33 @@ function App(props: {
       }
       if (disposed) return;
       setMcpReady(true);
+
+      const storedPrompt = loadSystemPrompt(window.localStorage, props.systemPromptStorageKey);
+      try {
+        const result = storedPrompt
+          ? await props.api.setSystemPrompt(storedPrompt)
+          : await props.api.systemPrompt();
+        if (disposed) return;
+        const text = result.data ?? '';
+        setPromptText(text);
+        if (text || storedPrompt) {
+          storeSystemPrompt(window.localStorage, props.systemPromptStorageKey, text);
+        }
+      } catch (error) {
+        if (disposed) return;
+        setPromptError(formatError(error));
+        try {
+          const result = await props.api.systemPrompt();
+          if (disposed) return;
+          const text = result.data ?? '';
+          setPromptText(text);
+          if (text) storeSystemPrompt(window.localStorage, props.systemPromptStorageKey, text);
+        } catch {
+          // The system prompt is optional; status below still loads the agent.
+        }
+      }
+      if (disposed) return;
+      setPromptReady(true);
 
       const status = await props.api.status();
       if (disposed) return;
@@ -2956,6 +3074,21 @@ function App(props: {
     }
   }
 
+  function applyDraftStatus(status: Status | null): void {
+    if (status?.ready) {
+      setDraftSessionID(status.bootstrapSessionID ?? null);
+      setDefaultModes(status.modes ?? null);
+      setDefaultConfigOptions(status.configOptions ?? []);
+      if (!currentID()) {
+        const nextModel = modelFromConfig(status.configOptions ?? [], models());
+        if (nextModel) setSelectedModel(nextModel);
+      }
+    } else {
+      // The old draft bootstrap was deleted; do not keep pointing at it.
+      setDraftSessionID(null);
+    }
+  }
+
   async function openMcp(): Promise<void> {
     if (mcpLoading() || mcpSaving()) return;
     setMcpLoading(true);
@@ -2984,24 +3117,53 @@ function App(props: {
       storeMcpServers(window.localStorage, props.mcpStorageKey, result.data ?? []);
       const status = await props.api.status().catch(() => null);
       if (disposed) return;
-      if (status?.ready) {
-        setDraftSessionID(status.bootstrapSessionID ?? null);
-        setDefaultModes(status.modes ?? null);
-        setDefaultConfigOptions(status.configOptions ?? []);
-        if (!currentID()) {
-          const nextModel = modelFromConfig(status.configOptions ?? [], models());
-          if (nextModel) setSelectedModel(nextModel);
-        }
-      } else {
-        // The old draft bootstrap was deleted; do not keep pointing at it.
-        setDraftSessionID(null);
-      }
+      applyDraftStatus(status);
       setMcpOpen(false);
       showToast(t('agent.mcpSaved'));
     } catch (error) {
       if (!disposed) setMcpError(formatError(error));
     } finally {
       if (!disposed) setMcpSaving(false);
+    }
+  }
+
+  async function openSystemPrompt(): Promise<void> {
+    if (promptLoading() || promptSaving()) return;
+    setPromptLoading(true);
+    setPromptError(null);
+    try {
+      const result = await props.api.systemPrompt();
+      if (disposed) return;
+      const text = result.data ?? '';
+      setPromptText(text);
+      storeSystemPrompt(window.localStorage, props.systemPromptStorageKey, text);
+    } catch (error) {
+      if (!disposed) setPromptError(formatError(error));
+    } finally {
+      if (!disposed) setPromptLoading(false);
+    }
+    if (!disposed) setPromptOpen(true);
+  }
+
+  async function saveSystemPrompt(text: string | null): Promise<void> {
+    if (promptSaving()) return;
+    setPromptSaving(true);
+    setPromptError(null);
+    try {
+      const result = await props.api.setSystemPrompt(text);
+      if (disposed) return;
+      const value = result.data ?? '';
+      setPromptText(value);
+      storeSystemPrompt(window.localStorage, props.systemPromptStorageKey, value);
+      const status = await props.api.status().catch(() => null);
+      if (disposed) return;
+      applyDraftStatus(status);
+      setPromptOpen(false);
+      showToast(t('agent.systemPromptSaved'));
+    } catch (error) {
+      if (!disposed) setPromptError(formatError(error));
+    } finally {
+      if (!disposed) setPromptSaving(false);
     }
   }
 
@@ -3776,6 +3938,15 @@ function App(props: {
           onClose={() => setMcpOpen(false)}
         />
       </Show>
+      <Show when={promptOpen()}>
+        <SystemPromptPanel
+          text={promptText()}
+          saving={promptSaving()}
+          error={promptError()}
+          onSave={(text) => void saveSystemPrompt(text)}
+          onClose={() => setPromptOpen(false)}
+        />
+      </Show>
       <Show when={resumeOpen()}>
         <ResumePicker
           agentName={agentName()}
@@ -3822,6 +3993,7 @@ export function mount(el: HTMLElement, props: FeatureUiProps): FeatureUiHandle {
   const storageKey = agentModelStorageKey(props.base);
   const runtimeStorageKey = agentRuntimeStorageKey(props.base);
   const mcpKey = mcpStorageKey(props.base);
+  const promptKey = systemPromptStorageKey(props.base);
 
   const dispose = render(() => (
     <App
@@ -3829,6 +4001,7 @@ export function mount(el: HTMLElement, props: FeatureUiProps): FeatureUiHandle {
       storageKey={storageKey}
       runtimeStorageKey={runtimeStorageKey}
       mcpStorageKey={mcpKey}
+      systemPromptStorageKey={promptKey}
       theme={theme()}
       lang={lang()}
       path={path()}

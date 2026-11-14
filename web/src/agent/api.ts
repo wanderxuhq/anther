@@ -298,6 +298,11 @@ export function createApi(base: string) {
       method: 'PUT',
       body: JSON.stringify({ servers }),
     }),
+    systemPrompt: () => request<{ data: string | null }>('/system-prompt'),
+    setSystemPrompt: (text: string | null) => request<{ data: string | null }>('/system-prompt', {
+      method: 'PUT',
+      body: JSON.stringify({ text }),
+    }),
     authenticate: (methodID: string) => post<Status>('/auth', { methodID }),
     logout: () => post<Status>('/logout'),
     models: () => request<ModelList>('/models'),
