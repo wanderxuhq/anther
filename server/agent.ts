@@ -282,7 +282,11 @@ export class AgentRuntime {
           clientCapabilities: {
             fs: { readTextFile: true, writeTextFile: true },
             terminal: true,
-            session: { configOptions: { boolean: {} } },
+            session: {
+              configOptions: { boolean: {} },
+              notices: {},
+              compaction: {},
+            },
             elicitation: { form: {} },
           },
           clientInfo: { name: 'anther', version: '1' },
@@ -848,15 +852,19 @@ export class AgentRuntime {
   }
 
   private onUpdate(params: acp.SessionNotification): void {
+    const update = params.update;
+    // Notices are live UI events; keep them out of the replayed history.
+    const liveOnly = update.sessionUpdate === 'notice';
     const replay = this.replays.get(params.sessionId);
-    if (replay) {
-      replay.push(params.update);
+    if (replay && !liveOnly) {
+      replay.push(update);
       return;
     }
-    const history = this.history.get(params.sessionId) ?? [];
-    history.push(params.update);
-    this.history.set(params.sessionId, history);
-    const update = params.update;
+    if (!liveOnly) {
+      const history = this.history.get(params.sessionId) ?? [];
+      history.push(update);
+      this.history.set(params.sessionId, history);
+    }
     if (update.sessionUpdate === 'available_commands_update') {
       this.commands = update.availableCommands;
       this.emit({ type: 'commands', commands: this.commands });

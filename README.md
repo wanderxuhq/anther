@@ -46,6 +46,7 @@ A mobile-first, browser-based web IDE. Run one stateless Node process in a proje
 - Built-in Skills installer (toolbar puzzle icon) backed by `vercel-labs/skills`: preview a GitHub/git/local source, pick skills and target ACP agents, then install or remove them. Telemetry is disabled.
 - ACP client filesystem and terminal capabilities: agents can read/write workspace text files and run non-interactive commands, with live terminal output in tool cards. Agent authentication methods are surfaced in the panel.
 - Rich ACP content: images, audio, resource links, and embedded resources render in messages and tool cards. The composer can attach images, audio, and files, gated by the agent's prompt capabilities.
+- ACP notices and context compaction render as inline timeline rows; compaction summaries stream and update the same entry in place.
 - Per-workspace MCP servers for ACP sessions: add stdio/HTTP/SSE servers from the toolbar, filter unsupported transports by agent capability, and pass them to new and reopened sessions.
 
 **Workspaces and navigation**
@@ -134,7 +135,10 @@ are restored without a separate request.
 
 ACP `plan` updates are rendered as a persistent checklist in the Agent timeline.
 Mode and configuration changes made by the agent are applied to the active
-session and to the session list immediately.
+session and to the session list immediately. ACP notices render as inline
+status rows, and context compaction updates keep a single timeline entry whose
+summary streams in place. Notices are live events and are not replayed when a
+session is reopened.
 
 The Agent toolbar exposes an MCP server manager. Add stdio, HTTP, or SSE servers
 with commands/URLs and environment variables or headers; the list is persisted

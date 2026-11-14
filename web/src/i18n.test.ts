@@ -59,6 +59,8 @@ test('t：Agent 面板静态文案在中英文都存在', () => {
   assert.equal(t('agent.richImage'), 'Attached image');
   assert.equal(t('agent.mcpServers'), 'MCP servers');
   assert.equal(t('agent.mcpSecurity').startsWith('MCP servers can run'), true);
+  assert.equal(t('agent.compaction.cancelled'), 'Compaction cancelled');
+  assert.equal(t('agent.compaction.failedGeneric'), 'Compaction failed');
   setLang('zh');
   assert.equal(t('agent.newChat'), '新会话');
   assert.equal(t('agent.empty.title'), '需要我做什么？');
@@ -75,4 +77,6 @@ test('t：Agent 面板静态文案在中英文都存在', () => {
   assert.equal(t('agent.richImage'), '附加图片');
   assert.equal(t('agent.mcpServers'), 'MCP 服务');
   assert.equal(t('agent.mcpSecurity').startsWith('MCP 服务可以'), true);
+  assert.equal(t('agent.compaction.cancelled'), '上下文压缩已取消');
+  assert.equal(t('agent.compaction.failedGeneric'), '上下文压缩失败');
 });

@@ -1,6 +1,6 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { AgentRuntime } from './agent.ts';
@@ -9,6 +9,7 @@ import { FileStore } from './files.ts';
 
 const fakeAgent = String.raw`
 const readline = require('node:readline');
+const fs = require('node:fs');
 const sessionId = 'sess_updates';
 const configOptions = [{
   id: 'mode',
@@ -44,6 +45,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   try { message = JSON.parse(line); } catch { return; }
   switch (message.method) {
     case 'initialize':
+      fs.writeFileSync('client-capabilities.json', JSON.stringify(message.params.clientCapabilities));
       respond(message.id, {
         protocolVersion: 1,
         agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} } },
@@ -60,6 +62,9 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     case 'session/prompt':
       update({ sessionUpdate: 'config_option_update', configOptions: updatedConfigOptions });
       update({ sessionUpdate: 'current_mode_update', currentModeId: 'plan' });
+      update({ sessionUpdate: 'notice', severity: 'warning', title: 'Heads up', description: 'Live notice' });
+      update({ sessionUpdate: 'compaction_update', compactionId: 'cmp_1', status: 'in_progress' });
+      update({ sessionUpdate: 'compaction_summary_chunk', compactionId: 'cmp_1', content: { type: 'text', text: 'Summary text' } });
       respond(message.id, { stopReason: 'end_turn' });
       break;
     case 'session/cancel':
@@ -122,4 +127,42 @@ test('caches mode and config updates from the agent', async () => {
   assert.equal(thought?.type, 'select');
   if (thought?.type === 'select') assert.equal(thought.currentValue, 'high');
   assert.equal(state.modes?.currentModeId, 'plan');
+});
+
+test('advertises notice/compaction capabilities and keeps notices out of history', async () => {
+  await runtime.status();
+  const client = JSON.parse(await readFile(path.join(root, 'client-capabilities.json'), 'utf8')) as {
+    session?: { notices?: unknown; compaction?: unknown };
+  };
+  assert.deepEqual(client.session?.notices, {});
+  assert.deepEqual(client.session?.compaction, {});
+
+  const session = await runtime.createSession();
+  const seen = new Set<string>();
+  const done = new Promise<void>((resolve) => {
+    const unsubscribe = runtime.subscribe((event) => {
+      if (event.type !== 'update' || event.sessionID !== session.id) return;
+      seen.add(event.update.sessionUpdate);
+      if (seen.has('notice') && seen.has('compaction_summary_chunk')) {
+        unsubscribe();
+        resolve();
+      }
+    });
+  });
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('timed out waiting for notice/compaction updates')), 5000);
+  });
+  try {
+    await runtime.prompt(session.id, [{ type: 'text', text: 'compact and notify' }]);
+    await Promise.race([done, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+
+  const state = await runtime.messages(session.id);
+  const kinds = state.updates.map((update) => update.sessionUpdate);
+  assert.ok(kinds.includes('compaction_update'));
+  assert.ok(kinds.includes('compaction_summary_chunk'));
+  assert.ok(!kinds.includes('notice'));
 });

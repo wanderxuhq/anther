@@ -807,7 +807,19 @@ export const css = `
 }
 .op-system.error { color: var(--op-error); background: color-mix(in srgb, var(--op-error) 8%, transparent); }
 .op-system.retry { color: #b45309; background: color-mix(in srgb, #f59e0b 10%, transparent); }
+.op-system.warning { color: #b45309; background: color-mix(in srgb, #f59e0b 10%, transparent); }
 .op-system.compaction { color: var(--op-accent); background: color-mix(in srgb, var(--op-accent) 8%, transparent); }
+.op-system.block {
+  align-self: stretch;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border-radius: var(--op-radius);
+  line-height: 1.5;
+}
+.op-system.block > svg { flex: 0 0 auto; margin-top: 1px; }
+.op-system-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.op-system-title { font-weight: 600; }
+.op-system-detail { color: var(--op-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .op-assistant { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .op-message-head {
   display: flex;

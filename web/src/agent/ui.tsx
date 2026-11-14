@@ -64,6 +64,12 @@ import {
   type PromptCapabilities,
 } from './attachment.ts';
 import { loadMcpServers, mcpStorageKey, parseKeyValueLines, parseLines, storeMcpServers } from './mcp.ts';
+import {
+  applyCompactionChunk,
+  applyCompactionUpdate,
+  noticeItem,
+  type StatusItem,
+} from './status.ts';
 import { configChoices, modeStateFromOptions, secondaryConfigOptions } from './config.ts';
 import { css } from './styles.ts';
 
@@ -142,7 +148,7 @@ type ChatItem =
   | { kind: 'user'; id: string; text: string; rich: RichContent[]; content: PromptContent[]; time: number }
   | AssistantItem
   | PlanItem
-  | { kind: 'system'; id: string; text: string; textKey?: string; textParams?: Record<string, string | number>; tone: 'info' | 'error' | 'retry' | 'compaction'; time: number };
+  | StatusItem;
 
 let localID = 0;
 const nextID = (prefix: string) => `${prefix}-${++localID}`;
@@ -311,6 +317,7 @@ function normalizeHistory(updates: any[]): ChatItem[] {
   let assistantID: string | null = null;
   let user: { kind: 'user'; id: string; text: string; rich: RichContent[]; content: PromptContent[]; time: number } | null = null;
   let userID: string | null = null;
+  let updateIndex = 0;
 
   const ensureAssistant = (id?: string): AssistantItem => {
     if (!assistant || (id && assistantID && id !== assistantID)) {
@@ -332,6 +339,7 @@ function normalizeHistory(updates: any[]): ChatItem[] {
 
   for (const update of updates) {
     if (!update || typeof update !== 'object') continue;
+    updateIndex += 1;
     switch (update.sessionUpdate) {
       case 'user_message_chunk': {
         const id = String(update.messageId ?? nextID('user'));
@@ -414,22 +422,17 @@ function normalizeHistory(updates: any[]): ChatItem[] {
         };
         break;
       }
+      case 'notice': {
+        const item = noticeItem(update, Date.now(), `notice-${updateIndex}`);
+        if (item) out.push(item);
+        break;
+      }
       case 'compaction_update': {
-        const tone = update.status === 'failed' ? 'error' : 'compaction';
-        const textKey = update.status === 'completed'
-          ? 'agent.compaction.completed'
-          : update.status === 'failed'
-            ? 'agent.compaction.failed'
-            : 'agent.compaction.running';
-        out.push({
-          kind: 'system',
-          id: String(update.compactionId ?? nextID('compaction')),
-          text: '',
-          textKey,
-          textParams: update.status === 'failed' ? { error: formatError(update.error) } : undefined,
-          tone,
-          time: Date.now(),
-        });
+        out.splice(0, out.length, ...applyCompactionUpdate(out, update, Date.now(), nextID('compaction')));
+        break;
+      }
+      case 'compaction_summary_chunk': {
+        out.splice(0, out.length, ...applyCompactionChunk(out, update, Date.now(), nextID('compaction')));
         break;
       }
       case 'plan': {
@@ -1526,11 +1529,32 @@ function MessageItem(props: {
     );
   }
   if (props.item.kind === 'system') {
-    const system = props.item;
+    const system = () => props.item as StatusItem;
+    const block = () => Boolean(system().detail || system().rich?.length);
+    const label = () => {
+      const item = system();
+      return item.textKey ? t(item.textKey, item.textParams) : item.text;
+    };
     return (
-      <div class={`op-system ${system.tone}`}>
-        <Icon name={system.tone === 'error' ? 'alert' : system.tone === 'compaction' ? 'refresh' : 'info'} size={13} />
-        <span>{system.textKey ? t(system.textKey, system.textParams) : system.text}</span>
+      <div class={`op-system ${system().tone}${block() ? ' block' : ''}`}>
+        <Icon
+          name={system().tone === 'error' || system().tone === 'warning'
+            ? 'alert'
+            : system().tone === 'compaction'
+              ? 'refresh'
+              : 'info'}
+          size={13}
+        />
+        <Show
+          when={block()}
+          fallback={<span>{label()}</span>}
+        >
+          <div class="op-system-body">
+            <span class="op-system-title">{label()}</span>
+            <Show when={system().detail}><span class="op-system-detail">{system().detail}</span></Show>
+            <Show when={system().rich?.length}><RichContentList items={system().rich!} /></Show>
+          </div>
+        </Show>
       </div>
     );
   }
