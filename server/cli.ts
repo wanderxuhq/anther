@@ -12,8 +12,9 @@ import { registerListenRoute } from './routes/listen.ts';
 import type { AppIdentity } from './app-info.ts';
 import type { AttachInfo, MountWire } from './mount-types.ts';
 import { isLoopbackHost, isValidHost, isWildcardHost } from './host.ts';
+import { FeatureRegistry } from './features.ts';
 
-export type CliArgs = { dir: string; port: number; host: string; attach: boolean; detach: boolean };
+export type CliArgs = { dir: string; port: number; host: string; attach: boolean; detach: boolean; features: string[] };
 
 /**
  * 静态目录解析：源码形态（server/cli.ts）→ <root>/web；编译产物（dist/server/cli.js）
@@ -30,6 +31,7 @@ export function parseArgs(argv: string[]): CliArgs {
   let host = '127.0.0.1';
   let attach = true;
   let detach = false;
+  const features = (process.env.ANTHER_FEATURES ?? '').split(',').map((item) => item.trim()).filter(Boolean);
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -49,12 +51,18 @@ export function parseArgs(argv: string[]): CliArgs {
     if (a === '--no-attach') { attach = false; continue; }
     if (a === '--attach') { attach = true; continue; }
     if (a === '--detach') { detach = true; continue; }
+    if (a === '--feature') {
+      const raw = argv[++i];
+      if (!raw) throw new Error('invalid --feature');
+      features.push(raw);
+      continue;
+    }
     if (a.startsWith('-')) throw new Error(`unknown option: ${a}`);
     positional.push(a);
   }
   if (positional.length > 1) throw new Error('too many arguments');
   if (positional.length === 1) dir = path.resolve(positional[0]);
-  return { dir, port, host, attach, detach };
+  return { dir, port, host, attach, detach, features };
 }
 
 /** 第一个 IPv4 局域网地址；取不到（无网络接口 / 沙箱受限）返回 null。供启动日志打印手机访问地址。 */
@@ -223,8 +231,15 @@ export async function main(argv: string[]): Promise<void> {
   }
 
   const http = new HttpServer({ staticDir: staticDirFor(import.meta.url) });
+  const features = new FeatureRegistry();
+  await features.load(http, args.features);
+  http.onClose(() => features.dispose());
   const attachState: AttachInfo = { available: args.attach };
-  const registry = new MountRegistry(http, () => attachState);
+  const registry = new MountRegistry(
+    http,
+    () => attachState,
+    (mount) => features.mount({ dir: mount.workspace, router: mount.router, base: mount.base }),
+  );
 
   const hostWorkspace = createWorkspace(dir);
   const hostRouter = new Router();

@@ -11,6 +11,7 @@ export function tabIcon(tab: TabItem): IconName {
   if (tab.kind === 'git-history') return 'git-history';
   if (tab.kind === 'git-branch') return 'git-branch';
   if (tab.kind === 'git-commit') return 'commit';
+  if (tab.kind === 'feature') return tab.icon as IconName;
   return 'diff'; // git-diff
 }
 
@@ -21,6 +22,7 @@ export function tabName(tab: TabItem): string {
   if (tab.kind === 'git-history') return t('git.history');
   if (tab.kind === 'git-branch') return t('git.branch');
   if (tab.kind === 'git-commit') return tab.commit;
+  if (tab.kind === 'feature') return tab.title;
   return t('view.git');
 }
 
@@ -30,5 +32,6 @@ export function tabTitle(tab: TabItem): string {
   if (tab.kind === 'git-history') return t('git.history');
   if (tab.kind === 'git-branch') return t('git.branch');
   if (tab.kind === 'git-commit') return tab.commit;
+  if (tab.kind === 'feature') return tab.title;
   return t('view.git');
 }

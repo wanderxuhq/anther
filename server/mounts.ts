@@ -51,6 +51,8 @@ export class MountRegistry {
   constructor(
     private readonly http: HttpServer,
     private readonly getAttach: () => AttachInfo,
+    /** 每个挂载创建后调用；可选功能包在这里挂载工作区路由。 */
+    private readonly onMount?: (mount: Mount) => void,
   ) {}
 
   providers(): IdentityProviders {
@@ -132,6 +134,11 @@ export class MountRegistry {
 
     const mount: Mount = { name, index, workspace, base, shorthand, legacyRoot, router, context };
     this.mounts.push(mount);
+    try {
+      this.onMount?.(mount);
+    } catch (e) {
+      console.warn('mount hook failed:', e);
+    }
     return mount;
   }
 

@@ -9,11 +9,14 @@ import { DEFAULT_STATE, DEFAULT_EXCLUDE, parseUrl, serializeUrl, type UrlState, 
 import { api, loadTabsSnapshot, saveTabsSnapshot, type TerminalInfo } from './api.ts';
 import { basePath } from './base.ts';
 import type { EditorHandle } from './editor/index.ts';
+import { featureRoutes, findFeaturePanel, loadFeatures } from './features.ts';
+import type { FeaturePanel, FeatureTabsState } from './feature-types.ts';
 import {
   addFileTab, removeTabById, fileTabPaths, currentFilePath, nextActiveTabId,
   terminalExists, addGitTab, addGitDiffTab, gitDiffTabId, GIT_TAB_ID, type TabItem,
   addGitHistoryTab, addGitBranchTab, addGitCommitTab, gitCommitTabId,
   GIT_HISTORY_TAB_ID, GIT_BRANCH_TAB_ID,
+  addFeatureTab, featureTabId, syncFeatureTabs,
 } from './tab-model.ts';
 import { databaseTabId, addDatabaseTab, type DatabaseTarget, type DatabaseTab } from './tab-model.ts';
 import { isDatabaseFile } from './database/source.ts';
@@ -25,6 +28,8 @@ export const [currentTabId, setCurrentTabId] = createSignal<string | null>(null)
 export const [roMode, setRoMode] = createSignal(true);
 export const [theme, setTheme] = createSignal<'auto' | 'light' | 'dark'>('auto');
 export const [fontScale, setFontScale] = createSignal(100);
+/** Last feature document tab per panel; used when reopening a feature from the drawer. */
+const lastFeatureTab = new Map<string, string>();
 export const [activePanel, setActivePanel] = createSignal<Panel>('files');
 export const [drawerOpen, setDrawerOpen] = createSignal(false);
 export const [searchQuery, setSearchQuery] = createSignal('');
@@ -100,7 +105,7 @@ export function pushState(mode: 'push' | 'replace' = 'push'): void {
   // Native hash navigation changes location before hashchange is delivered.
   // A queued scroll/selection notification must not replace that destination.
   if (mode === 'replace' && lastNavigationHref && window.location.href !== lastNavigationHref) {
-    restoreUrl(parseUrl(window.location.href, basePath()));
+    restoreUrl(parseUrl(window.location.href, basePath(), featureRoutes()));
     return;
   }
   const state: UrlState = {
@@ -125,6 +130,11 @@ export function pushState(mode: 'push' | 'replace' = 'push'): void {
   else if (tab?.kind === 'git-history') { state.view = 'history'; state.branch = historyBranch(); }
   else if (tab?.kind === 'git-branch') state.view = 'branches';
   else if (tab?.kind === 'git-commit') { state.view = 'commit'; state.commit = tab.commit; }
+  else if (tab?.kind === 'feature') {
+    state.view = 'feature';
+    state.feature = { featureID: tab.featureID, panelID: tab.panelID, route: tab.route, subpath: tab.path };
+    lastFeatureTab.set(tab.panelID, tab.id);
+  }
   else if (!tab) state.term = pendingTerminal();
   saveDatabaseTabs();
   const url = serializeUrl(state, basePath());
@@ -216,6 +226,15 @@ export function restoreUrl(state: UrlState, syncServer = true): void {
       setTabs((prev) => addGitCommitTab(prev, state.commit!)); setCurrentTabId(gitCommitTabId(state.commit));
     } else if (state.view === 'diff' && state.path) {
       setTabs((prev) => addGitDiffTab(prev, state.path!)); setCurrentTabId(gitDiffTabId(state.path));
+    } else if (state.view === 'feature' && state.feature) {
+      const panel = findFeaturePanel(state.feature.featureID, state.feature.panelID);
+      if (panel) {
+        const tabID = featureTabId(panel, state.feature!.subpath);
+        setTabs((prev) => addFeatureTab(prev, panel, state.feature!.subpath));
+        setCurrentTabId(tabID);
+        lastFeatureTab.set(panel.panelID, tabID);
+        setActivePanel('tabs');
+      }
     } else if (state.path) {
       setTabs((prev) => addFileTab(prev, state.path!)); setCurrentTabId(state.path);
       if (state.line) setPendingGoto({ path: state.path, line0: state.line.start - 1,
@@ -229,18 +248,42 @@ export function restoreUrl(state: UrlState, syncServer = true): void {
   }
 }
 
+function isPotentialFeaturePath(pathname: string): boolean {
+  const base = basePath();
+  let rest = pathname;
+  if (base && (rest === base || rest.startsWith(`${base}/`))) rest = rest.slice(base.length) || '/';
+  if (!rest.startsWith('/_/')) return false;
+  return !(rest === '/_/git' || rest.startsWith('/_/git/')
+    || rest.startsWith('/_/file/')
+    || rest.startsWith('/_/database/')
+    || rest === '/_/plugin' || rest.startsWith('/_/plugin/'));
+}
+
 /** 页面加载时调用一次：URL → 状态；拉文件标签 + 终端标签；恢复快照；启动心跳 */
 export async function startSync(): Promise<void> {
   if (started) return;
   started = true;
 
   restoreDatabaseTabs();
-  const s = parseUrl(window.location.href, basePath());
+  // Feature packages are optional and load in parallel. Only URLs that could be
+  // a feature route wait for the feature table; normal file/terminal/Git URLs
+  // restore immediately, preserving the existing startup ordering.
+  const featurePromise = loadFeatures();
+  if (isPotentialFeaturePath(window.location.pathname)) await featurePromise;
+  const s = parseUrl(window.location.href, basePath(), featureRoutes());
   restoreUrl(s, false);
+
+  // A popstate to /_/<feature> may arrive before the feature table resolves.
+  // Re-parse once it does; file/terminal URLs are untouched.
+  void featurePromise.then(() => {
+    if (!isPotentialFeaturePath(window.location.pathname)) return;
+    const next = parseUrl(window.location.href, basePath(), featureRoutes());
+    if (next.view === 'feature') restoreUrl(next);
+  });
 
   // 浏览器前进/后退：popstate → 重解析 URL → 覆盖状态（term 按当前终端标签校验存在性）
   const restoreLocation = () => {
-    if (window.location.href !== lastNavigationHref) restoreUrl(parseUrl(window.location.href, basePath()));
+    if (window.location.href !== lastNavigationHref) restoreUrl(parseUrl(window.location.href, basePath(), featureRoutes()));
   };
   window.addEventListener('popstate', restoreLocation);
   window.addEventListener('hashchange', restoreLocation);
@@ -273,7 +316,7 @@ export async function startSync(): Promise<void> {
 
   // 前台：term 指向的终端还在 → 设为前台；不存在（他人/失效/服务器重启）→ 静默降级（空态）
   // 列表加载期间也可能发生 popstate；只解析此刻的 URL，不重新激活启动时的旧目标。
-  const term = parseUrl(window.location.href, basePath()).term;
+  const term = parseUrl(window.location.href, basePath(), featureRoutes()).term;
   if (term && terminalExists(tabs(), term)) setCurrentTabId(term);
   setPendingTerminal(null);
   if (currentFile()) void registerFile(currentFile()!).catch(() => {});
@@ -405,6 +448,76 @@ export function openGit(): void {
   setTabs((prev) => addGitTab(prev));
   setCurrentTabId(GIT_TAB_ID);
   pushState();
+}
+
+/** 打开功能面板；不带子路径时优先回到该面板最近打开的 tab。 */
+export function openFeature(panel: FeaturePanel, path = ''): void {
+  // Feature documents live in anther's Tabs sidebar.
+  setActivePanel('tabs');
+  if (!path) {
+    const remembered = lastFeatureTab.get(panel.panelID);
+    const existing = tabs().find((tab) =>
+      tab.kind === 'feature' && tab.panelID === panel.panelID && tab.id === remembered)
+      ?? tabs().find((tab) => tab.kind === 'feature' && tab.panelID === panel.panelID);
+    if (existing) {
+      setCurrentTabId(existing.id);
+      pushState();
+      return;
+    }
+  }
+  setTabs((prev) => addFeatureTab(prev, panel, path));
+  setCurrentTabId(featureTabId(panel, path));
+  pushState();
+}
+
+/** Open an exact feature subpath, bypassing the remembered last tab. */
+export function openFeatureAt(panel: FeaturePanel, path: string, title = panel.title): void {
+  setActivePanel('tabs');
+  setTabs((prev) => addFeatureTab(prev, { ...panel, title }, path));
+  setCurrentTabId(featureTabId(panel, path));
+  pushState();
+}
+
+/** Close one feature subpath; only move the active tab when it was closed. */
+export function closeFeatureAt(panel: FeaturePanel, path: string): void {
+  const id = featureTabId(panel, path);
+  const wasActive = currentTabId() === id;
+  setTabs((prev) => removeTabById(prev, id));
+  if (wasActive) setCurrentTabId(nextActiveTabId(tabs(), id));
+  pushState();
+}
+
+/** Update the title/icon of an existing feature tab without activating it. */
+export function updateFeatureTab(
+  panel: FeaturePanel,
+  path: string,
+  patch: { title?: string; icon?: string },
+): void {
+  const id = featureTabId(panel, path);
+  setTabs((prev) => {
+    const index = prev.findIndex((tab) => tab.kind === 'feature' && tab.id === id);
+    if (index < 0) return prev;
+    const tab = prev[index];
+    if (!tab || tab.kind !== 'feature') return prev;
+    const title = patch.title ?? tab.title;
+    const icon = patch.icon ?? tab.icon;
+    if (title === tab.title && icon === tab.icon) return prev;
+    const next = [...prev];
+    next[index] = { ...tab, title, icon };
+    return next;
+  });
+}
+
+/** 功能包声明自己的文档 tab（例如 OpenCode 会话）；只在面板仍处于前台时切 tab。 */
+export function applyFeatureTabs(panel: FeaturePanel, state: FeatureTabsState): void {
+  const current = tabs().find((tab) => tab.id === currentTabId());
+  const panelActive = current?.kind === 'feature' && current.panelID === panel.panelID;
+  const result = syncFeatureTabs(tabs(), panel, state.tabs, state.activeKey);
+  setTabs(result.tabs);
+  if (panelActive && result.activeId && result.activeId !== currentTabId()) {
+    setCurrentTabId(result.activeId);
+    pushState('replace');
+  }
 }
 
 /** 打开/复用某文件的 git-diff 标签，同文件点第二次复用。 */

@@ -316,3 +316,40 @@ test('无关、非法和越界的预览参数不进入 URL', () => {
   assert.deepEqual(parseUrl('http://host/a.mp3#rate:2;time:NaN').reader, { kind: 'media', time: 0, rate: 2 });
   assert.equal(parseUrl('http://host/_/database/a.db?object=t&mode=structure&filter=x&value=y#offset:100;row:5').database?.offset, undefined);
 });
+
+const TEST_FEATURE = { featureID: 'fixture', panelID: 'fixture', route: '/_/fixture' };
+
+test('feature panel route and subpath round-trip', () => {
+  const root = parseUrl('http://host/_/fixture', '', [TEST_FEATURE]);
+  assert.equal(root.view, 'feature');
+  assert.deepEqual(root.feature, { ...TEST_FEATURE, subpath: '' });
+  assert.equal(root.path, null);
+  assert.equal(serializeUrl(root), '/_/fixture');
+
+  const deep = parseUrl('http://host/_/fixture/session/abc-123', '', [TEST_FEATURE]);
+  assert.equal(deep.view, 'feature');
+  assert.deepEqual(deep.feature, { ...TEST_FEATURE, subpath: '/session/abc-123' });
+  assert.equal(serializeUrl(deep), '/_/fixture/session/abc-123');
+  assert.deepEqual(parseUrl('http://host' + serializeUrl(deep), '', [TEST_FEATURE]), deep);
+
+  // 功能未加载时，同样的 URL 仍是普通文件路径，不会被误判成 feature。
+  const absent = parseUrl('http://host/_/fixture');
+  assert.equal(absent.view, 'file');
+  assert.equal(absent.path, '_/fixture');
+});
+
+test('feature reserved namespace and invalid subpaths stay safe', () => {
+  const details = parseUrl('http://host/_/plugin/fixture', '', [TEST_FEATURE]);
+  assert.notEqual(details.view, 'feature');
+  assert.equal(details.path, '_/plugin/fixture');
+
+  const invalid = parseUrl('http://host/_/fixture//secret', '', [TEST_FEATURE]);
+  assert.deepEqual(invalid.feature, { ...TEST_FEATURE, subpath: '' });
+});
+
+test('terminal and other views do not leak feature subpaths', () => {
+  const state = parseUrl('http://host/_/fixture/session/abc?term=t_test', '', [TEST_FEATURE]);
+  assert.equal(state.view, 'file');
+  assert.equal(state.feature, null);
+  assert.equal(serializeUrl(state), '/?term=t_test');
+});

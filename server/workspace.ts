@@ -6,6 +6,8 @@ import { TabStore } from './tab-store.ts';
 import { TerminalManager } from './terminal.ts';
 import { Git } from './git.ts';
 import { LspManager } from './lsp-manager.ts';
+import { AcpAgent } from './agent.ts';
+import { SkillManager } from './skills.ts';
 import type { Router } from './http.ts';
 import type { IdentityProviders } from './mount-types.ts';
 import { registerFsRoutes } from './routes/fs.ts';
@@ -15,6 +17,8 @@ import { registerGitRoutes } from './routes/git.ts';
 import { registerSystemRoutes } from './routes/system.ts';
 import { registerIdentifyRoutes } from './routes/identify.ts';
 import { registerLspRoutes } from './routes/lsp.ts';
+import { registerAgentRoutes } from './routes/agent.ts';
+import { registerSkillRoutes } from './routes/skills.ts';
 
 export type Workspace = {
   dir: string;
@@ -23,16 +27,21 @@ export type Workspace = {
   terminals: TerminalManager;
   git: Git;
   lsp: LspManager;
+  acp: AcpAgent;
+  skills: SkillManager;
 };
 
 export function createWorkspace(dir: string): Workspace {
+  const files = new FileStore(dir);
   return {
     dir,
-    files: new FileStore(dir),
+    files,
     tabs: new TabStore(),
     terminals: new TerminalManager(dir),
     git: new Git(dir),
     lsp: new LspManager({ workspaceRoot: dir }),
+    acp: new AcpAgent(dir, files),
+    skills: new SkillManager(dir),
   };
 }
 
@@ -49,7 +58,11 @@ export function registerWorkspaceRoutes(
   registerSystemRoutes(router, workspace.dir);
   registerIdentifyRoutes(router, workspace.dir, providers);
   registerLspRoutes(router, workspace.lsp);
+  registerAgentRoutes(router, workspace.acp);
+  registerSkillRoutes(router, workspace.skills);
 
   router.onClose(() => workspace.terminals.closeAll());
   router.onClose(() => workspace.lsp.dispose());
+  router.onClose(() => workspace.acp.close());
+  router.onClose(() => workspace.skills.close());
 }

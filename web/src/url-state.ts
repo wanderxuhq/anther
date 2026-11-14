@@ -2,7 +2,8 @@ import { parseFragment, serializeFragment } from './url-fragment.ts';
 import type { DatabaseTarget } from './tab-model.ts';
 import { parseReadingLocation, writeReadingLocation, type ReadingLocation } from './readers/location.ts';
 import { parseTablePosition, writeTablePosition, finiteNumber } from './preview-state.ts';
-export type MainView = 'file' | 'git' | 'diff' | 'history' | 'branches' | 'commit' | 'database';
+import type { FeatureRoute } from './feature-types.ts';
+export type MainView = 'file' | 'git' | 'diff' | 'history' | 'branches' | 'commit' | 'database' | 'feature';
 export type Panel = 'files' | 'tabs' | 'search';
 /** URL 使用从 1 开始的行号，end 包含在选区内。 */
 export type LineRange = { start: number; end: number };
@@ -27,6 +28,8 @@ export type UrlState = {
   caseSensitive: boolean;
   exclude: string;
   lang: 'en' | 'zh' | null;
+  /** Matched feature panel route and its subpath; null when not on a feature route. */
+  feature: { featureID: string; panelID: string; route: string; subpath: string } | null;
 };
 
 export const DEFAULT_STATE: UrlState = {
@@ -34,6 +37,7 @@ export const DEFAULT_STATE: UrlState = {
   database: null, path: null, term: null, ro: true, theme: 'auto', fs: 100,
   view: 'file', line: null, entry: null, inside: [], branch: null, commit: null,
   panel: 'files', query: '', caseSensitive: false, exclude: DEFAULT_EXCLUDE, lang: null,
+  feature: null,
 };
 
 const TERM_RE = /^t_[\w-]+$/;
@@ -66,8 +70,41 @@ function parseLine(value: string | null): LineRange | null {
     ? { start, end } : null;
 }
 
+/** Feature 子路径只允许普通站内段落；非法值回退到面板根，避免把 URL 当文件路径。 */
+function parseFeaturePath(rest: string): string {
+  if (rest === '' || rest === '/') return '';
+  if (!rest.startsWith('/')) return '';
+  if (/[\u0000-\u001f\u007f]/.test(rest)) return '';
+  const segments = rest.slice(1).split('/');
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) return '';
+  return rest;
+}
+
+function encodeFeaturePath(path: string): string {
+  if (!path) return '';
+  const segments = path.slice(1).split('/');
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) return '';
+  return '/' + segments.map((segment) => encodeURIComponent(segment)).join('/');
+}
+
+function matchFeatureRoute(
+  path: string | null,
+  routes: readonly FeatureRoute[],
+): { featureID: string; panelID: string; route: string; subpath: string } | null {
+  if (!path) return null;
+  // Longest route first, so a future /_/git/status cannot shadow /_/git.
+  for (const route of [...routes].sort((a, b) => b.route.length - a.route.length)) {
+    const target = route.route.replace(/^\//, '');
+    if (path === target) return { ...route, subpath: '' };
+    if (path.startsWith(`${target}/`)) {
+      return { ...route, subpath: parseFeaturePath(path.slice(target.length)) };
+    }
+  }
+  return null;
+}
+
 /** 统一解析所有地址栏状态；非法参数回退，互斥资源只保留有效目标。 */
-export function parseUrl(href: string, base = ''): UrlState {
+export function parseUrl(href: string, base = '', featureRoutes: readonly FeatureRoute[] = []): UrlState {
   const url = new URL(href);
   const q = url.searchParams;
   const position = parseFragment(url.hash);
@@ -115,6 +152,13 @@ export function parseUrl(href: string, base = ''): UrlState {
       s.view = 'commit';
       commit = route.slice('commit/'.length);
     }
+  } else {
+    const feature = matchFeatureRoute(s.path, featureRoutes);
+    if (feature) {
+      s.path = null;
+      s.view = 'feature';
+      s.feature = feature;
+    }
   }
   if (s.view === 'commit') {
     if (commit && COMMIT_RE.test(commit)) s.commit = commit;
@@ -125,7 +169,8 @@ export function parseUrl(href: string, base = ''): UrlState {
     s.view = 'file';
     s.path = null;
     s.commit = null;
-  } else if (s.view !== 'file' && s.view !== 'diff' && s.view !== 'database') {
+    s.feature = null;
+  } else if (s.view !== 'file' && s.view !== 'diff' && s.view !== 'database' && s.view !== 'feature') {
     s.path = null;
   }
   if (s.view !== 'database' || !s.path) { s.database = null; if (s.view === 'database') s.view = 'file'; }
@@ -156,6 +201,7 @@ export function parseUrl(href: string, base = ''): UrlState {
     s.caseSensitive = q.get('case') === '1';
     s.exclude = q.get('exclude') ?? DEFAULT_EXCLUDE;
   }
+  if (s.view !== 'feature') s.feature = null;
   return s;
 }
 
@@ -211,6 +257,8 @@ export function serializeUrl(state: UrlState, base = ''): string {
     pathname = `/${reserved ? FILE_ROUTE : ''}${encodePath(path)}`;
   } else if (view === 'database' && path) {
     pathname = `/${DATABASE_ROUTE}${encodePath(path)}`;
+  } else if (view === 'feature' && state.feature) {
+    pathname = `${state.feature.route}${encodeFeaturePath(state.feature.subpath)}`;
   } else if (view !== 'file') {
     pathname = `/${GIT_ROUTE}`;
     if (view === 'history' || view === 'branches') pathname += `/${view}`;

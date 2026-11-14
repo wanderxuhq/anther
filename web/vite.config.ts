@@ -26,6 +26,9 @@ export default defineConfig({
     // ws: true 让 Vite 把 WebSocket upgrade（终端、LSP）转发到后端。
     proxy: {
       '/api': { target: 'http://127.0.0.1:3000', ws: true },
+      // 可选功能面板的运行时 bundle / API 在 /_/<panel>/ui.js 与 /_/<panel>/api/*；
+      // 开发时转发给后端，面板页面本身仍由 Vite 提供（保留 HMR）。
+      '^/_/[^/]+/(?:ui\\.js|api(?:/|$))': { target: 'http://127.0.0.1:3000', ws: true },
     },
   },
   build: {

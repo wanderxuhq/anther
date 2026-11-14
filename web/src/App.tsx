@@ -2,7 +2,7 @@ import { fileMutationLocked, pathWithin, setBeforeFileMutation } from './file-op
 import { fileTargetKey, fileTargetLabel } from './file-target.ts';
 import { documentPreviewUrl } from './readers/document-file.ts';
 import { cancelReaderNavigation, registerReaderNavigation } from './readers/navigation.ts';
-import { createSignal, createMemo, createEffect, For, Show, on, onCleanup } from 'solid-js';
+import { createSignal, createMemo, createEffect, For, Index, Show, on, onCleanup } from 'solid-js';
 import { views } from './views/registry.tsx';
 import { TerminalView } from './views/terminal.tsx';
 import { GitView } from './views/git.tsx';
@@ -10,11 +10,16 @@ import { GitDiffView } from './views/git-diff.tsx';
 import { HistoryView } from './views/history.tsx';
 import { BranchView } from './views/branch.tsx';
 import { CommitView } from './views/commit.tsx';
+import { FeatureView } from './views/feature.tsx';
+import { featurePanels } from './features.ts';
+import type { FeatureTab } from './tab-model.ts';
+import type { FeaturePanel, FeatureToolbarAction } from './feature-types.ts';
 import { api } from './api.ts';
 import {
   activeTab, currentTabId, setCurrentTabId, openTerminal, closeAnyTab,
   readingLocationFor, readerRestoreRequest, updateReadingLocation,
   openGit, openDatabaseTab, closeTab,
+  openFeature, openFeatureAt, closeFeatureAt, updateFeatureTab, applyFeatureTabs,
   archiveChain, archiveEntry, openArchiveEntry, activeArchiveRoot,
   currentFile, roMode, setRoMode, pushState, fontScale,
   pendingGoto, setPendingGoto, docLoadedPath, setDocLoadedPath,
@@ -22,6 +27,7 @@ import {
   activePanel, selectPanel, drawerOpen, setDrawerOpen, updateFilePosition,
   openGitHistory, openGitBranch, createBranch, currentBranch, setCurrentBranch, gitRefreshTick, setGitRefreshTick,
   theme, setTheme, applyTheme,
+  tabs,
 } from './stores.ts';
 import { createEditor, type EditorHandle } from './editor/index.ts';
 import { describeLanguage, loadLanguage } from './editor/language.ts';
@@ -29,7 +35,7 @@ import { t } from './i18n.ts';
 import { setTerminalKeyBarOpen, setTerminalRenderMode, terminalKeyBarOpen, terminalRenderMode } from './terminal/settings.ts';
 import { isMarkdownFile, parseMarkdownDocument } from './markdown.ts';
 import { MarkdownPreview } from './components/markdown-preview.tsx';
-import { Icon } from './components/icons.tsx';
+import { Icon, type IconName } from './components/icons.tsx';
 import { preparingDownload, startDownload, setBeforeDownload } from './download.ts';
 import { isImageFile, isBinaryImage } from './image.ts';
 import { LocatedImagePreview as ImagePreview, LocatedTablePreview as TablePreview } from './components/located-preview.tsx';
@@ -119,6 +125,50 @@ export function App() {
   const activeDatabase = createMemo(() => { const tab = activeTab(); return tab?.kind === 'database' ? tab : null; });
   const [databaseController, setDatabaseController] = createSignal<DatabaseController | null>(null);
   const activeKind = () => activeTab()?.kind ?? null;
+  const featureTabs = createMemo(() => tabs().filter((tab): tab is FeatureTab => tab.kind === 'feature'));
+  // One mounted feature UI per panel, even when the panel owns several tabs.
+  // Keep the panel objects stable so switching session tabs only updates `path`
+  // instead of remounting the feature bundle.
+  const openFeaturePanels = createMemo(() => {
+    const seen = new Set<string>();
+    const list: FeaturePanel[] = [];
+    for (const tab of featureTabs()) {
+      const key = `${tab.featureID}:${tab.panelID}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const panel = featurePanels().find((item) => item.featureID === tab.featureID && item.panelID === tab.panelID);
+      if (panel) list.push(panel);
+    }
+    return list;
+  });
+  const featureActive = (panel: FeaturePanel): boolean => {
+    const tab = activeTab();
+    return tab?.kind === 'feature' && tab.featureID === panel.featureID && tab.panelID === panel.panelID;
+  };
+  const featurePath = (panel: FeaturePanel): string => {
+    const tab = activeTab();
+    if (tab?.kind === 'feature' && tab.featureID === panel.featureID && tab.panelID === panel.panelID) return tab.path;
+    return featureTabs().find((item) => item.featureID === panel.featureID && item.panelID === panel.panelID)?.path ?? '';
+  };
+  const [featureActions, setFeatureActions] = createSignal<Record<string, FeatureToolbarAction[]>>({});
+  const featurePanelKey = (panel: FeaturePanel) => `${panel.featureID}:${panel.panelID}`;
+  const activeFeatureActions = createMemo(() => {
+    const tab = activeTab();
+    if (tab?.kind !== 'feature') return [];
+    return featureActions()[`${tab.featureID}:${tab.panelID}`] ?? [];
+  });
+  function handleFeatureToolbar(panel: FeaturePanel, actions: FeatureToolbarAction[]): void {
+    setFeatureActions((prev) => {
+      const key = featurePanelKey(panel);
+      if (actions.length === 0) {
+        if (!(key in prev)) return prev;
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      }
+      return { ...prev, [key]: actions };
+    });
+  }
   // git-diff 前台时其 diff 文件路径（TS 收窄：单次读 activeTab() 再分支）
   const activeGitDiffPath = (): string | null => {
     const tab = activeTab();
@@ -143,6 +193,7 @@ export function App() {
     if (tab.kind === 'database') return `${fileTargetLabel(tab)}${tab.object ? ` › ${tab.object.name} · ${t(`database.${tab.mode}`)}` : ''}`;
     if (tab.kind === 'terminal') return tab.name;
     if (tab.kind === 'git') return t('view.git');
+    if (tab.kind === 'feature') return tab.title;
     if (tab.kind === 'git-diff') return tab.path;
     if (browsingArchive()) return <>
       <button class="toolbar-path-link" onClick={() => void openArchiveEntry(currentFile()!, null)}>{currentFile()}</button>
@@ -625,6 +676,20 @@ export function App() {
             </button>
           </Show>
         </Show>
+        <For each={activeFeatureActions()}>
+          {(action) => (
+            <button
+              class={`icon-btn ${action.danger ? 'danger' : ''}`}
+              type="button"
+              disabled={action.disabled}
+              onClick={() => action.onClick()}
+              title={action.title}
+              aria-label={action.title}
+            >
+              <Icon name={action.icon as IconName} />
+            </button>
+          )}
+        </For>
         <button
           class="icon-btn theme-toggle"
           onClick={handleToggleTheme}
@@ -720,6 +785,21 @@ export function App() {
         <Show when={activeCommitHash()}>
           <CommitView commit={activeCommitHash()!} />
         </Show>
+        <For each={openFeaturePanels()}>
+          {(panel) => (
+            <div class="feature-layer" style={featureActive(panel) ? undefined : 'display:none'}>
+              <FeatureView
+                panel={panel}
+                path={featurePath(panel)}
+                onTabs={(state) => applyFeatureTabs(panel, state)}
+                onToolbar={(actions) => handleFeatureToolbar(panel, actions)}
+                onOpenPath={(path, patch) => openFeatureAt(panel, path, patch?.title)}
+                onClosePath={(path) => closeFeatureAt(panel, path)}
+                onUpdateTab={(path, patch) => updateFeatureTab(panel, path, patch)}
+              />
+            </div>
+          )}
+        </For>
       </main>
 
       {/* 工具栏 ➕ 新建分支 dialog（Enter 提交 + 点遮罩关闭） */}
@@ -773,6 +853,18 @@ export function App() {
             <button class="view-tab" onClick={() => void openGit()} title={t('view.git')} aria-label={t('view.git')}>
               <Icon name="git-branch" />
             </button>
+            <For each={featurePanels()}>
+              {(panel) => (
+                <button
+                  class="view-tab"
+                  onClick={() => { openFeature(panel); setDrawerOpen(false); }}
+                  title={panel.title}
+                  aria-label={panel.title}
+                >
+                  <Icon name={panel.icon as IconName} />
+                </button>
+              )}
+            </For>
             <div class="drawer-view-footer">
               <button
                 class="view-tab"

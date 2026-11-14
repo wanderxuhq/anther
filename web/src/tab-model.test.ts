@@ -5,6 +5,7 @@ import {
   addFileTab, removeTabById, fileTabPaths, currentFilePath, nextActiveTabId, terminalExists,
   GIT_TAB_ID, gitDiffTabId, addGitTab, addGitDiffTab,
   GIT_HISTORY_TAB_ID, GIT_BRANCH_TAB_ID, gitCommitTabId, addGitHistoryTab, addGitBranchTab, addGitCommitTab,
+  addFeatureTab, syncFeatureTabs,
 } from './tab-model.ts';
 import type { TabItem } from './tab-model.ts';
 
@@ -85,4 +86,40 @@ test('Git 与同名文件可同时打开，关闭 Git 不移除文件', () => {
   for (const path of paths) assert.equal(currentFilePath(tabs, path), path);
   for (const tab of tabs.filter((t) => t.kind !== 'file')) tabs = removeTabById(tabs, tab.id);
   assert.deepEqual(fileTabPaths(tabs), paths);
+});
+
+const featurePanel = {
+  featureID: 'opencode',
+  panelID: 'opencode',
+  route: '/_/opencode',
+  title: 'OpenCode',
+  icon: 'sparkles',
+  ui: '/_/opencode/ui.js',
+};
+
+test('addFeatureTab：同一面板可开多个子路径，路由根仍复用', () => {
+  const a = addFeatureTab([fileA], featurePanel, '/ses_a');
+  const b = addFeatureTab(a, featurePanel, '/ses_b');
+  assert.deepEqual(b.map((tab) => tab.id), ['a.ts', '/_/opencode/ses_a', '/_/opencode/ses_b']);
+  assert.deepEqual(addFeatureTab(b, featurePanel, '/ses_a'), b);
+  assert.deepEqual(addFeatureTab(b, featurePanel), addFeatureTab(b, featurePanel, ''));
+});
+
+test('syncFeatureTabs：更新标题、移除过期 tab、保留其他 tab 顺序', () => {
+  const base = [fileA, ...addFeatureTab([], featurePanel, '/old'), term1];
+  const result = syncFeatureTabs(base, featurePanel, [
+    { key: 'new', title: 'New chat', path: '/new', icon: 'sparkles' },
+    { key: 'kept', title: 'Renamed', path: '/kept', icon: 'sparkles' },
+  ], 'kept');
+  assert.deepEqual(result.tabs.map((tab) => tab.id), ['a.ts', '/_/opencode/new', '/_/opencode/kept', 't_1']);
+  assert.equal(result.activeId, '/_/opencode/kept');
+  assert.equal((result.tabs[2] as any).title, 'Renamed');
+});
+
+test('syncFeatureTabs：清空时保留面板根 tab，方便回到空态', () => {
+  const result = syncFeatureTabs([fileA], featurePanel, [
+    { key: '', title: 'OpenCode', path: '', icon: 'sparkles' },
+  ], '');
+  assert.deepEqual(result.tabs.map((tab) => tab.id), ['a.ts', '/_/opencode']);
+  assert.equal(result.activeId, '/_/opencode');
 });
