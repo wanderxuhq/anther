@@ -324,7 +324,7 @@ export class AgentRuntime {
         defaultModel: this.defaultModel(),
         modes: this.boot?.modes,
         configOptions: this.boot?.configOptions ?? [],
-        bootstrapSessionID: this.boot?.sessionId,
+        bootstrapSessionID: this.bootstrapUsed ? undefined : this.boot?.sessionId,
         authMethods: this.init?.authMethods ?? [],
         authenticated: this.authenticated,
         authRequired: this.authRequired,

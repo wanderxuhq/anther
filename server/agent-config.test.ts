@@ -108,4 +108,8 @@ test('returns draft config options and updates boolean/select values', async () 
   const after = await runtime.status();
   const braveAfter = after.configOptions?.find((option) => option.id === 'brave_mode');
   assert.equal(braveAfter?.type === 'boolean' ? braveAfter.currentValue : undefined, true);
+
+  await runtime.createSession();
+  const consumed = await runtime.status();
+  assert.equal(consumed.bootstrapSessionID, undefined);
 });

@@ -135,7 +135,7 @@ Mode and configuration changes made by the agent are applied to the active
 session and to the session list immediately.
 
 The composer exposes all non-model/non-mode session config options, including
-boolean switches; new-chat draft settings are applied to the first session.
+boolean switches; new-chat draft settings are applied to new sessions.
 Permission cards render the options supplied by the agent instead of a fixed
 allow-once/always/deny set.
 

@@ -2577,6 +2577,7 @@ function App(props: {
       if (disposed) return null;
       setSessions((prev) => [session, ...prev.filter((item) => item.id !== session.id)]);
       setCurrentID(session.id);
+      setDraftSessionID(null);
       updatesBySession.set(session.id, []);
       setItems([]);
       setPermissions([]);

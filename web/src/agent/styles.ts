@@ -1100,7 +1100,7 @@ export const css = `
 
 .op-config-picker { position: relative; min-width: 0; }
 .op-config-button { max-width: 150px; }
-.op-config-popover { left: 0; bottom: calc(100% + 8px); width: min(360px, calc(100vw - 32px)); }
+.op-popover.op-config-popover { left: 0; bottom: calc(100% + 8px); width: min(360px, calc(100vw - 32px)); }
 .op-config-head {
   display: flex;
   align-items: center;
@@ -1397,7 +1397,19 @@ export const css = `
   .op-agent { max-width: 120px; }
   .op-agent select { max-width: 82px; }
 }
+@media (max-width: 680px) {
+  .op-popover.op-config-popover {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: 110px;
+    width: auto;
+    max-height: min(60vh, 420px);
+    overflow-y: auto;
+  }
+}
 @media (max-width: 560px) {
+  .op-config-button .op-ellipsis { display: none; }
   .op-composer-hint { display: none; }
   .op-usage { display: none; }
   .op-messages { gap: 14px; }
