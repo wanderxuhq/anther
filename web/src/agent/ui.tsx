@@ -637,7 +637,6 @@ function ModelPicker(props: {
         }}
         title={t('agent.selectModel')}
       >
-        <Icon name="sparkles" size={14} />
         <span class="op-ellipsis">{modelLabel(props.value)}</span>
       </button>
       <Show when={open()}>
@@ -695,7 +694,6 @@ function ModeSelect(props: {
     <Show when={props.modes && props.modes.availableModes.length > 1 ? props.modes : null}>
       {(modes) => (
         <label class="op-agent" title={t('agent.mode')}>
-          <Icon name="shield" size={14} />
           <select
             value={modes().currentModeId}
             disabled={props.disabled}
