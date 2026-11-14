@@ -165,9 +165,15 @@ function modelKey(model: Model): string {
   return `${model.providerID}/${model.id}`;
 }
 
-function modelLabel(model: Model | null | undefined): string {
+function modelFullLabel(model: Model | null | undefined): string {
   if (!model) return t('agent.noModel');
-  return model.name || model.id;
+  return model.providerID && model.id ? `${model.providerID}/${model.id}` : (model.name || model.id);
+}
+
+function modelLabel(model: Model | null | undefined): string {
+  const label = modelFullLabel(model);
+  const slash = label.lastIndexOf('/');
+  return slash >= 0 ? label.slice(slash + 1) : label;
 }
 
 function providerLabel(providers: Provider[], id: string): string {
@@ -580,11 +586,12 @@ function ModelPicker(props: {
   const [open, setOpen] = createSignal(false);
   const [query, setQuery] = createSignal('');
   let root!: HTMLDivElement;
+  let listEl!: HTMLDivElement;
   const filtered = createMemo(() => {
     const q = query().trim().toLowerCase();
     const list = props.models.filter((model) =>
       !q
-      || modelLabel(model).toLowerCase().includes(q)
+      || modelFullLabel(model).toLowerCase().includes(q)
       || model.id.toLowerCase().includes(q)
       || model.providerID.toLowerCase().includes(q)
       || providerLabel(props.providers, model.providerID).toLowerCase().includes(q));
@@ -599,7 +606,7 @@ function ModelPicker(props: {
       .map(([providerID, items]) => ({
         providerID,
         label: providerLabel(props.providers, providerID),
-        items: items.sort((a, b) => modelLabel(a).localeCompare(modelLabel(b))),
+        items: items.sort((a, b) => modelFullLabel(a).localeCompare(modelFullLabel(b))),
       }));
   });
 
@@ -611,12 +618,27 @@ function ModelPicker(props: {
     onCleanup(() => document.removeEventListener('mousedown', onDown));
   });
 
+  createEffect(() => {
+    if (!open()) return;
+    queueMicrotask(() => {
+      const active = listEl?.querySelector<HTMLElement>('.op-model-option.active');
+      active?.scrollIntoView({ block: 'nearest' });
+    });
+  });
+
   return (
     <div class={`op-model-picker ${props.buttonClass ?? ''}`} ref={root}>
-      <button type="button" class="op-model-button" onClick={() => setOpen((value) => !value)} title={t('agent.selectModel')}>
+      <button
+        type="button"
+        class="op-model-button"
+        onClick={() => {
+          if (!open()) setQuery('');
+          setOpen((value) => !value);
+        }}
+        title={t('agent.selectModel')}
+      >
         <Icon name="sparkles" size={14} />
         <span class="op-ellipsis">{modelLabel(props.value)}</span>
-        <Icon name="chevron-down" size={14} />
       </button>
       <Show when={open()}>
         <div class="op-popover op-model-popover">
@@ -630,7 +652,7 @@ function ModelPicker(props: {
               onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false); }}
             />
           </div>
-          <div class="op-popover-list">
+          <div class="op-popover-list" ref={listEl}>
             <Show when={filtered().length > 0} fallback={<div class="op-popover-empty">{t('agent.noModels')}</div>}>
               <For each={filtered()}>
                 {(group) => (
@@ -645,8 +667,7 @@ function ModelPicker(props: {
                           title={`${model.providerID}/${model.id}`}
                         >
                           <span class="op-model-option-main">
-                            <span>{modelLabel(model)}</span>
-                            <span class="op-model-option-id">{model.id}</span>
+                            <span>{modelFullLabel(model)}</span>
                           </span>
                           <Show when={props.value && modelKey(model) === modelKey(props.value)}>
                             <Icon name="check" size={15} />
@@ -685,7 +706,6 @@ function ModeSelect(props: {
               {(mode) => <option value={mode.id} title={mode.description}>{modeLabel(mode)}</option>}
             </For>
           </select>
-          <Icon name="chevron-down" size={13} />
         </label>
       )}
     </Show>
@@ -730,7 +750,6 @@ function ConfigMenu(props: {
           <Icon name="sliders" size={14} />
           <span class="op-ellipsis">{t('agent.sessionSettings')}</span>
           <Show when={props.busy}><Spinner size={11} /></Show>
-          <Icon name="chevron-down" size={14} />
         </button>
       </Show>
       <Show when={open() && visible().length > 0}>
@@ -928,6 +947,18 @@ function Composer(props: {
   let textarea!: HTMLTextAreaElement;
   let fileInput!: HTMLInputElement;
   const [commandOpen, setCommandOpen] = createSignal(false);
+  const [coarsePointer, setCoarsePointer] = createSignal(
+    typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia('(pointer: coarse)').matches,
+  );
+  onMount(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const media = window.matchMedia('(pointer: coarse)');
+    const update = () => setCoarsePointer(media.matches);
+    media.addEventListener('change', update);
+    onCleanup(() => media.removeEventListener('change', update));
+  });
   const local = createMemo(() => props.localCommands);
   const skillList = createMemo<SkillCommand[]>(() => skillCommands(props.skills, t('agent.useSkill')));
   const isLocal = (name: string): boolean => name === 'resume'
@@ -1068,7 +1099,7 @@ function Composer(props: {
           class="op-textarea"
           value={props.draft}
           rows={1}
-          placeholder={t('agent.composer.placeholder', { agent: props.agentName })}
+          placeholder={t(coarsePointer() ? 'agent.composer.placeholderMobile' : 'agent.composer.placeholder', { agent: props.agentName })}
           disabled={props.disabled}
           onInput={(event) => {
             props.onDraft(event.currentTarget.value);
@@ -1083,8 +1114,10 @@ function Composer(props: {
           }}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-              event.preventDefault();
-              submit();
+              if (!coarsePointer()) {
+                event.preventDefault();
+                submit();
+              }
             }
             if (event.key === 'Escape') setCommandOpen(false);
           }}
@@ -1110,13 +1143,13 @@ function Composer(props: {
               onSelect={props.onModel}
               buttonClass="op-composer-model"
             />
-            <ModeSelect modes={props.modes} onChange={props.onMode} disabled={props.busy || props.disabled} />
             <ConfigMenu
               options={props.configOptions}
               disabled={props.disabled}
               busy={props.configBusy}
               onSelect={props.onConfig}
             />
+            <ModeSelect modes={props.modes} onChange={props.onMode} disabled={props.busy || props.disabled} />
             <IconButton
               icon="list"
               title={t('agent.commands')}
@@ -1150,7 +1183,7 @@ function Composer(props: {
         </div>
       </div>
       <div class="op-composer-hint">
-        <span>{t('agent.composer.sendHint')}</span>
+        <span>{coarsePointer() ? t('agent.composer.sendHintMobile') : t('agent.composer.sendHint')}</span>
         <span>{t('agent.composer.commandHint')}</span>
       </div>
     </div>
@@ -1768,7 +1801,6 @@ function MessageList(props: {
   busy: boolean;
   agentName: string;
   terminalOutputs?: Record<string, TerminalOutput>;
-  onSuggestion: (text: string) => void;
   onCopy: (text: string) => void;
   onRetry: () => void;
   onPermission: (request: PermissionRequest, optionID: string) => void;
@@ -1801,48 +1833,22 @@ function MessageList(props: {
   return (
     <div class="op-message-wrap">
       <div class="op-messages" ref={scroller} onScroll={onScroll}>
-        <Show
-          when={props.items.length > 0}
-          fallback={
-            <div class="op-empty">
-              <div class="op-empty-mark"><Icon name="sparkles" size={30} /></div>
-              <h2>{t('agent.empty.title')}</h2>
-              <p>{t('agent.empty.description', { agent: props.agentName })}</p>
-              <div class="op-suggestions">
-                <For each={[
-                  t('agent.empty.explain'),
-                  t('agent.empty.fixBug'),
-                  t('agent.empty.tests'),
-                  t('agent.empty.review'),
-                ]}>
-                  {(text) => (
-                    <button type="button" class="op-suggestion" onClick={() => props.onSuggestion(text)}>
-                      <Icon name="message" size={14} />
-                      <span>{text}</span>
-                    </button>
-                  )}
-                </For>
-              </div>
-            </div>
-          }
-        >
-          <Index each={props.items}>
-            {(item) => (
-              <MessageItem
-                item={item()}
-                agentName={props.agentName}
-                terminalOutputs={props.terminalOutputs}
-                onCopy={props.onCopy}
-                onRetry={props.onRetry}
-                onPermission={props.onPermission}
-                onForm={props.onForm}
-                onCancelForm={props.onCancelForm}
-              />
-            )}
-          </Index>
-          <Show when={props.busy}>
-            <div class="op-typing"><Spinner size={13} /><span>{t('agent.working')}</span></div>
-          </Show>
+        <Index each={props.items}>
+          {(item) => (
+            <MessageItem
+              item={item()}
+              agentName={props.agentName}
+              terminalOutputs={props.terminalOutputs}
+              onCopy={props.onCopy}
+              onRetry={props.onRetry}
+              onPermission={props.onPermission}
+              onForm={props.onForm}
+              onCancelForm={props.onCancelForm}
+            />
+          )}
+        </Index>
+        <Show when={props.busy}>
+          <div class="op-typing"><Spinner size={13} /><span>{t('agent.working')}</span></div>
         </Show>
       </div>
       <Show when={showJump()}>
@@ -3948,10 +3954,6 @@ function App(props: {
     void copyText(value).then((ok) => showToast(ok ? t('agent.copied') : t('agent.copyFailed'), !ok));
   }
 
-  function suggestion(text: string): void {
-    setDraft(text);
-  }
-
   return (
     <div class="op-app" data-theme={props.theme}>
       <div class="op-main">
@@ -4036,7 +4038,6 @@ function App(props: {
                 busy={currentBusy()}
                 agentName={agentName()}
                 terminalOutputs={terminalOutputs()}
-                onSuggestion={suggestion}
                 onCopy={copy}
                 onRetry={retry}
                 onPermission={(request, optionID) => void replyPermission(request, optionID)}

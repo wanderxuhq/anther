@@ -1460,7 +1460,6 @@ export const css = `
 .op-model-option:hover { background: var(--op-menu-hover); }
 .op-model-option.active { background: var(--op-hover); color: var(--op-accent); }
 .op-model-option-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.op-model-option-id { color: var(--op-muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .op-command-menu { left: 24px; bottom: calc(100% + 6px); }
 .op-command-head {
   display: flex;
@@ -1488,48 +1487,6 @@ export const css = `
 .op-command-name { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: var(--op-accent); }
 .op-command-desc { color: var(--op-muted); font-size: 11px; }
 
-.op-empty {
-  margin: auto;
-  padding: 32px 16px;
-  max-width: 580px;
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 9px;
-}
-.op-empty-mark {
-  width: 32px;
-  height: 32px;
-  display: grid;
-  place-items: center;
-  color: var(--op-muted);
-  margin-bottom: 3px;
-}
-.op-empty h2 { margin: 0; font-size: 18px; letter-spacing: -.01em; }
-.op-empty p { margin: 0; max-width: 430px; color: var(--op-muted); font-size: 13px; }
-.op-suggestions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 7px;
-  width: 100%;
-  margin-top: 12px;
-}
-.op-suggestion {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--op-border);
-  border-radius: var(--op-radius);
-  background: var(--op-bg);
-  text-align: left;
-  color: var(--op-muted);
-  font-size: 12px;
-}
-.op-suggestion:hover { border-color: var(--op-border); color: var(--op-fg); background: var(--op-hover); }
-.op-suggestion span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .op-jump {
   position: absolute;
   right: 20px;
@@ -1666,7 +1623,6 @@ export const css = `
   .op-skill-preview-foot { flex-direction: column; align-items: stretch; }
   .op-skill-preview-foot .op-btn { width: 100%; }
   .op-auth { margin: 8px 12px 0; }
-  .op-suggestions { grid-template-columns: 1fr; }
   .op-user-bubble { max-width: 88%; }
   .op-model-button { max-width: 160px; }
   .op-agent { max-width: 120px; }
@@ -1688,7 +1644,6 @@ export const css = `
   .op-composer-hint { display: none; }
   .op-usage { display: none; }
   .op-messages { gap: 14px; }
-  .op-empty h2 { font-size: 19px; }
   .op-resume-foot span:last-child { display: none; }
   .op-skill-row { align-items: flex-start; }
   .op-skill-result-row code { display: none; }

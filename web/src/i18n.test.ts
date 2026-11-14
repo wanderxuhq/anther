@@ -45,7 +45,6 @@ test('t：未知 key 回退 key 本身（永不空白）', () => {
 test('t：Agent 面板静态文案在中英文都存在', () => {
   setLang('en');
   assert.equal(t('agent.newChat'), 'New chat');
-  assert.equal(t('agent.empty.title'), 'How can I help?');
   assert.equal(t('agent.mode'), 'Mode');
   assert.equal(t('agent.skills'), 'Skills');
   assert.equal(t('agent.installSelected'), 'Install selected');
@@ -67,7 +66,6 @@ test('t：Agent 面板静态文案在中英文都存在', () => {
   assert.equal(t('agent.decline'), 'Decline');
   setLang('zh');
   assert.equal(t('agent.newChat'), '新会话');
-  assert.equal(t('agent.empty.title'), '需要我做什么？');
   assert.equal(t('agent.mode'), '模式');
   assert.equal(t('agent.skills'), '技能');
   assert.equal(t('agent.installSelected'), '安装所选');
