@@ -143,10 +143,11 @@ anther 会广告 ACP 的 `fs` 和 `terminal` 客户端能力。agent 可以读�
 解析并校验在工作区内，但命令本身没有沙箱隔离。
 
 ACP 富内容块会显示在用户消息、agent 消息和工具卡片中，包括图片、音频、
-resource link 以及嵌入的文本/二进制资源。输入框可以附加图片、音频和文件。
-只有在 agent 声明对应 prompt capability 时才会提供图片/音频附件；文本文件在支持
-`embeddedContext` 时以嵌入资源发送，否则发送 resource link。附件大小受 JSON
-请求体上限约束。`@file` 工作区提及暂未实现。
+resource link 以及嵌入的文本/二进制资源。输入框最多可以附加 6 个图片、音频或文件。
+只有在 agent 声明对应 prompt capability 时才会接受图片/音频附件；文本文件在支持
+`embeddedContext` 时以嵌入资源发送，否则发送 resource link。不支持或过大的文本
+文件会回退为 resource link。发送前会按 UTF-8 检查最终 prompt JSON 是否超过请求体
+上限。`@file` 工作区提及暂未实现。
 
 `initialize.authMethods` 返回的认证方式会显示在面板中。agent 类型的认证可以直接
 在面板里完成；如果 agent 支持 logout，工具栏会显示退出登录。terminal 类型的认证

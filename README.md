@@ -157,11 +157,12 @@ the workspace, but the commands themselves are not sandboxed.
 
 Rich ACP content blocks are rendered in user messages, agent messages, and tool
 cards: images, audio, resource links, and embedded text/blob resources. The
-composer can attach images, audio, and files. Image/audio attachments are only
-offered when the agent advertises the matching prompt capability; text files are
-embedded when `embeddedContext` is supported and otherwise sent as resource
-links. Attachments are kept under the JSON body limit. `@file` workspace
-mentions are not implemented yet.
+composer can attach up to six images, audio files, or files. Image/audio
+attachments are accepted only when the agent advertises the matching prompt
+capability; text files are embedded when `embeddedContext` is supported and
+otherwise sent as resource links. Unsupported or oversized text files fall back
+to resource links. The final prompt JSON is checked against the request body
+limit before sending. `@file` workspace mentions are not implemented yet.
 
 Agent authentication methods from `initialize.authMethods` are surfaced in the
 panel. Agent-type methods can be completed in place, and logout is available

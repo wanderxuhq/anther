@@ -36,6 +36,7 @@ import {
   type TerminalOutput,
   type AuthMethod,
   type ConfigOption,
+  type PromptContent,
 } from './api.ts';
 import { Icon, type IconName } from './icons.tsx';
 import { copyText, enhanceMarkdown, renderMarkdown } from './markdown.ts';
@@ -136,7 +137,7 @@ type AssistantItem = {
   streaming: boolean;
 };
 type ChatItem =
-  | { kind: 'user'; id: string; text: string; rich: RichContent[]; time: number }
+  | { kind: 'user'; id: string; text: string; rich: RichContent[]; content: PromptContent[]; time: number }
   | AssistantItem
   | PlanItem
   | { kind: 'system'; id: string; text: string; textKey?: string; textParams?: Record<string, string | number>; tone: 'info' | 'error' | 'retry' | 'compaction'; time: number };
@@ -306,7 +307,7 @@ function normalizeHistory(updates: any[]): ChatItem[] {
   const toolOwners = new Map<string, ToolItem>();
   let assistant: AssistantItem | null = null;
   let assistantID: string | null = null;
-  let user: { kind: 'user'; id: string; text: string; rich: RichContent[]; time: number } | null = null;
+  let user: { kind: 'user'; id: string; text: string; rich: RichContent[]; content: PromptContent[]; time: number } | null = null;
   let userID: string | null = null;
 
   const ensureAssistant = (id?: string): AssistantItem => {
@@ -334,7 +335,7 @@ function normalizeHistory(updates: any[]): ChatItem[] {
         const id = String(update.messageId ?? nextID('user'));
         const text = acpContentText(update.content);
         if (!user || (userID && id !== userID)) {
-          user = { kind: 'user', id, text: '', rich: [], time: Date.now() };
+          user = { kind: 'user', id, text: '', rich: [], content: [], time: Date.now() };
           userID = id;
           out.push(user);
           assistant = null;
@@ -343,6 +344,9 @@ function normalizeHistory(updates: any[]): ChatItem[] {
         user.text += text;
         const rich = richContent(update.content);
         if (rich) user.rich.push(rich);
+        if (update.content && typeof update.content === 'object') {
+          user.content.push(update.content as PromptContent);
+        }
         break;
       }
       case 'agent_message_chunk': {
@@ -894,7 +898,7 @@ function Composer(props: {
   });
 
   function submit() {
-    if (props.busy || props.disabled) return;
+    if (props.busy || props.disabled || props.attachmentBusy) return;
     if (props.draft.trim() === '/resume') {
       props.onDraft('');
       props.onResume();
@@ -1036,7 +1040,7 @@ function Composer(props: {
               <button
                 type="button"
                 class="op-send"
-                disabled={props.disabled || (!props.draft.trim() && props.attachments.length === 0)}
+                disabled={props.disabled || props.attachmentBusy || (!props.draft.trim() && props.attachments.length === 0)}
                 onClick={submit}
                 title={t('agent.send')}
               >
@@ -2842,23 +2846,14 @@ function App(props: {
     }
   }
 
-  async function send(): Promise<void> {
-    const text = draft().trim();
-    const attached = attachments();
-    if ((!text && attached.length === 0) || currentBusy() || switchingAgent()) return;
+  async function sendContent(content: PromptContent[], clearComposer = false): Promise<void> {
+    if (content.length === 0 || currentBusy() || switchingAgent()) return;
     let id = currentID();
     if (!id) {
       const session = await createSession();
       id = session?.id ?? null;
     }
     if (!id) return;
-    const content = [
-      ...(text ? [{ type: 'text' as const, text }] : []),
-      ...attached.map((attachment) =>
-        promptContentForAttachment(attachment, promptCapabilities().embeddedContext === true)),
-    ];
-    setDraft('');
-    setAttachments([]);
     setError(null);
     setBusy(true);
     const localID = nextID('user');
@@ -2870,6 +2865,10 @@ function App(props: {
     setItems(normalizeHistory(updates));
     try {
       await props.api.prompt(id, content);
+      if (clearComposer) {
+        setDraft('');
+        setAttachments([]);
+      }
     } catch (error) {
       setBusy(false);
       setError(formatError(error));
@@ -2877,11 +2876,31 @@ function App(props: {
     }
   }
 
+  async function send(): Promise<void> {
+    if (attachmentBusy()) return;
+    const text = draft().trim();
+    const attached = attachments();
+    if ((!text && attached.length === 0) || currentBusy() || switchingAgent()) return;
+    const content: PromptContent[] = [
+      ...(text ? [{ type: 'text' as const, text }] : []),
+      ...attached.map((attachment) =>
+        promptContentForAttachment(attachment, promptCapabilities().embeddedContext === true)),
+    ];
+    const bytes = new TextEncoder().encode(JSON.stringify({ sessionID: 'pending', content })).byteLength;
+    if (bytes > 950_000) {
+      showToast(t('agent.attachmentTooLarge'), true);
+      return;
+    }
+    await sendContent(content, true);
+  }
+
   function retry(): void {
     const lastUser = [...items()].reverse().find((item) => item.kind === 'user');
     if (!lastUser || lastUser.kind !== 'user') return;
-    setDraft(lastUser.text);
-    void send();
+    const content = lastUser.content.length > 0
+      ? lastUser.content
+      : [{ type: 'text' as const, text: lastUser.text }];
+    void sendContent(content);
   }
 
   async function deleteSession(id: string): Promise<void> {
