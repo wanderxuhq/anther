@@ -194,6 +194,7 @@ test('uses the current prompt for unattached loads and captures new/fork request
   const second = await runtime.createSession();
   const forked = await runtime.fork(second.id);
   prompt = 'Third rule.';
+  await runtime.messages(forked.id);
   await runtime.messages('sess_existing');
   await runtime.messages(boot.id);
 
@@ -203,6 +204,8 @@ test('uses the current prompt for unattached loads and captures new/fork request
   assert.deepEqual(existingLoad?.systemPrompt, expectedPrompt('Third rule.'));
   const forkCall = state.calls.find((call) => call.method === 'fork' && call.sessionId === forked.id);
   assert.deepEqual(forkCall?.systemPrompt, expectedPrompt('Second rule.'));
+  const forkLoad = state.calls.find((call) => call.method === 'load' && call.sessionId === forked.id);
+  assert.deepEqual(forkLoad?.systemPrompt, expectedPrompt('Second rule.'));
 });
 
 test('does not attach or send a prompt for sessions created without one', async () => {

@@ -127,6 +127,9 @@ export class AgentRuntime {
   private readonly sessionPrompt = new Map<string, acp.SystemPrompt | null>();
   private readonly attached = new Set<string>();
   private readonly historyKnown = new Set<string>();
+  private readonly attaching = new Map<string, Promise<void>>();
+  private readonly sessionEpoch = new Map<string, number>();
+  private generation = 0;
   private commands: acp.AvailableCommand[] = [];
   private readonly listeners = new Set<(event: AgentEvent) => void>();
   private readonly pending = new Map<string, PendingPermission>();
@@ -220,6 +223,9 @@ export class AgentRuntime {
           this.bootstrapUsed = false;
           this.attached.clear();
           this.historyKnown.clear();
+          this.attaching.clear();
+          this.sessionEpoch.clear();
+          this.generation += 1;
           if (!this.disposed) {
             this.emit({ type: 'state', status: 'closed', message });
             if (this.error === undefined) this.error = message;
@@ -422,10 +428,16 @@ export class AgentRuntime {
     this.sessionPrompt.delete(sessionID);
     this.attached.delete(sessionID);
     this.historyKnown.delete(sessionID);
+    this.attaching.delete(sessionID);
+    this.bumpSession(sessionID);
     if (this.boot?.sessionId === sessionID) this.boot = undefined;
     if (this.disposed) return;
     this.retiredBootstraps.add(sessionID);
     void this.deleteSession(sessionID);
+  }
+
+  private bumpSession(sessionID: string): void {
+    this.sessionEpoch.set(sessionID, (this.sessionEpoch.get(sessionID) ?? 0) + 1);
   }
 
   private async deleteSession(sessionID: string): Promise<void> {
@@ -618,35 +630,57 @@ export class AgentRuntime {
     };
   }
 
+  private sessionView(id: string): {
+    updates: acp.SessionUpdate[];
+    configOptions: acp.SessionConfigOption[];
+    modes?: AgentModeState;
+  } {
+    return {
+      updates: this.history.get(id) ?? [],
+      configOptions: this.configs.get(id) ?? [],
+      modes: this.modeStates.get(id)?.state,
+    };
+  }
+
   async messages(id: string): Promise<{
     updates: acp.SessionUpdate[];
     configOptions: acp.SessionConfigOption[];
     modes?: AgentModeState;
   }> {
     await this.start();
-    const cachedConfigs = this.configs.get(id) ?? [];
-    const cachedModes = this.modeStates.get(id)?.state;
     const capabilities = this.init?.agentCapabilities as acp.AgentCapabilities & { loadSession?: boolean };
     const sessionCaps = this.init?.agentCapabilities?.sessionCapabilities as acp.SessionCapabilities | undefined;
     const canLoad = capabilities?.loadSession === true;
     const canResume = Boolean(sessionCaps?.resume);
-    if (this.historyKnown.has(id)) {
-      return { updates: this.history.get(id) ?? [], configOptions: cachedConfigs, modes: cachedModes };
+    if (this.historyKnown.has(id) || (!canLoad && !canResume)) return this.sessionView(id);
+    const pending = this.attaching.get(id);
+    if (pending) {
+      await pending;
+      return this.sessionView(id);
     }
-    if (!canLoad && !canResume) {
-      return { updates: this.history.get(id) ?? [], configOptions: cachedConfigs, modes: cachedModes };
-    }
+    const task = this.attachSession(id, canLoad).finally(() => {
+      if (this.attaching.get(id) === task) this.attaching.delete(id);
+    });
+    this.attaching.set(id, task);
+    await task;
+    return this.sessionView(id);
+  }
+
+  private async attachSession(id: string, canLoad: boolean): Promise<void> {
+    const generation = this.generation;
+    const epoch = this.sessionEpoch.get(id) ?? 0;
     const ctx = await this.ensure();
+    if (generation !== this.generation || epoch !== (this.sessionEpoch.get(id) ?? 0) || this.historyKnown.has(id)) return;
     if (this.attached.has(id) && !canLoad) {
       // Sessions created or forked here are already attached; ACP resume is
       // for reattaching, and this agent cannot replay history.
       this.historyKnown.add(id);
-      const updates = this.history.get(id) ?? [];
-      this.history.set(id, updates);
-      return { updates, configOptions: cachedConfigs, modes: cachedModes };
+      if (!this.history.has(id)) this.history.set(id, []);
+      return;
     }
-    const mcpServers = this.sessionMcp.get(id) ?? this.sessionMcpServers();
+    const sessionCaps = this.init?.agentCapabilities?.sessionCapabilities as acp.SessionCapabilities | undefined;
     const promptSupported = Boolean(sessionCaps?.systemPrompt);
+    const mcpServers = this.sessionMcp.get(id) ?? this.sessionMcpServers();
     const systemPrompt = promptSupported
       ? this.sessionPrompt.has(id)
         ? this.sessionPrompt.get(id) ?? undefined
@@ -662,20 +696,16 @@ export class AgentRuntime {
         mcpServers,
         ...(systemPrompt ? { systemPrompt } : {}),
       });
+      if (generation !== this.generation || epoch !== (this.sessionEpoch.get(id) ?? 0)) return;
       this.attached.add(id);
       this.historyKnown.add(id);
-      const updates = this.history.get(id) ?? [];
-      this.history.set(id, updates);
+      if (!this.history.has(id)) this.history.set(id, []);
       this.sessionMcp.set(id, mcpServers);
       if (promptSupported) this.sessionPrompt.set(id, systemPrompt ?? null);
       if (result.configOptions) this.configs.set(id, result.configOptions);
-      const modes = modeStateFrom(result.modes, result.configOptions ?? cachedConfigs);
+      const modes = modeStateFrom(result.modes, result.configOptions ?? this.configs.get(id) ?? []);
       if (modes) this.modeStates.set(id, modes);
-      return {
-        updates,
-        configOptions: this.configs.get(id) ?? [],
-        modes: modes?.state ?? cachedModes,
-      };
+      return;
     }
     const replay: acp.SessionUpdate[] = [];
     this.replays.set(id, replay);
@@ -686,19 +716,15 @@ export class AgentRuntime {
         mcpServers,
         ...(systemPrompt ? { systemPrompt } : {}),
       });
+      if (generation !== this.generation || epoch !== (this.sessionEpoch.get(id) ?? 0)) return;
       this.attached.add(id);
       this.historyKnown.add(id);
       this.history.set(id, replay);
       this.sessionMcp.set(id, mcpServers);
       if (promptSupported) this.sessionPrompt.set(id, systemPrompt ?? null);
       if (result.configOptions) this.configs.set(id, result.configOptions);
-      const modes = modeStateFrom(result.modes, result.configOptions ?? cachedConfigs);
+      const modes = modeStateFrom(result.modes, result.configOptions ?? this.configs.get(id) ?? []);
       if (modes) this.modeStates.set(id, modes);
-      return {
-        updates: replay,
-        configOptions: this.configs.get(id) ?? [],
-        modes: modes?.state ?? cachedModes,
-      };
     } finally {
       this.replays.delete(id);
     }
@@ -824,7 +850,13 @@ export class AgentRuntime {
   async remove(sessionID: string): Promise<void> {
     const ctx = await this.ensure();
     this.cancelForms(sessionID);
-    await ctx.request(acp.methods.agent.session.delete, { sessionId: sessionID });
+    this.cancelPermissions(sessionID);
+    try {
+      await ctx.request(acp.methods.agent.session.delete, { sessionId: sessionID });
+    } catch (error) {
+      // ACP treats deleting an already-missing session as success.
+      if (!(error instanceof RequestError && error.code === -32002)) throw error;
+    }
     await this.acpTerminals.closeSession(sessionID);
     this.forgetSession(sessionID);
     this.emit({ type: 'sessions_changed' });
@@ -859,6 +891,8 @@ export class AgentRuntime {
     this.sessionPrompt.delete(sessionID);
     this.attached.delete(sessionID);
     this.historyKnown.delete(sessionID);
+    this.attaching.delete(sessionID);
+    this.bumpSession(sessionID);
     this.busy.delete(sessionID);
     this.retiredBootstraps.delete(sessionID);
     if (this.boot?.sessionId === sessionID) {
@@ -888,7 +922,6 @@ export class AgentRuntime {
     this.sessionMcp.set(result.sessionId, mcpServers);
     this.sessionPrompt.set(result.sessionId, systemPrompt ?? null);
     this.attached.add(result.sessionId);
-    this.historyKnown.add(result.sessionId);
     if (modes) this.modeStates.set(result.sessionId, modes);
     return {
       id: result.sessionId,
@@ -1051,6 +1084,9 @@ export class AgentRuntime {
     this.sessionPrompt.clear();
     this.attached.clear();
     this.historyKnown.clear();
+    this.attaching.clear();
+    this.sessionEpoch.clear();
+    this.generation += 1;
     this.commands = [];
     this.configs.clear();
     this.modeStates.clear();

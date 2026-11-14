@@ -322,11 +322,12 @@ test('uses the current MCP set for unattached loads and captures new/fork reques
   const state = await readState();
   const loads = state.calls.filter((call) => call.method === 'load');
   assert.equal(loads.some((call) => call.sessionId === boot.id), false);
-  assert.equal(loads.some((call) => call.sessionId === forked.id), false);
   const existingLoad = loads.find((call) => call.sessionId === 'sess_existing');
   assert.deepEqual(existingLoad?.mcpServers?.map((server) => server.name), ['c']);
   const forkCall = state.calls.find((call) => call.method === 'fork');
   assert.deepEqual(forkCall?.mcpServers?.map((server) => server.name), ['c']);
+  const forkLoad = loads.find((call) => call.sessionId === forked.id);
+  assert.deepEqual(forkLoad?.mcpServers?.map((server) => server.name), ['c']);
 });
 
 test('keeps retired bootstraps hidden when the agent cannot delete them', async () => {

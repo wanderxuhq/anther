@@ -105,12 +105,17 @@ async function start(): Promise<AgentRuntime> {
 test('resumes a session when the agent does not support load', async () => {
   await start();
   await runtime.status();
-  const state = await runtime.messages('sess_old');
-  assert.deepEqual(state.updates, []);
-  assert.equal(state.configOptions.find((option) => option.id === 'model')?.currentValue, 'fake/a');
-  assert.equal(state.modes?.currentModeId, 'build');
+  const [first, second] = await Promise.all([
+    runtime.messages('sess_old'),
+    runtime.messages('sess_old'),
+  ]);
+  assert.deepEqual(first.updates, []);
+  assert.deepEqual(second.updates, []);
+  assert.equal(first.configOptions.find((option) => option.id === 'model')?.currentValue, 'fake/a');
+  assert.equal(first.modes?.currentModeId, 'build');
 
   const calls = JSON.parse(await readFile(statePath, 'utf8')) as Array<Record<string, unknown>>;
+  assert.equal(calls.filter((call) => call.method === 'resume').length, 1);
   const resumed = calls.find((call) => call.method === 'resume');
   assert.equal(resumed?.sessionId, 'sess_old');
   assert.equal(resumed?.cwd, root);

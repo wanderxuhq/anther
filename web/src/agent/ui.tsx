@@ -1265,12 +1265,17 @@ function FormCard(props: {
     const open = () => {
       const url = target();
       if (!url) return;
-      const opened = window.open(url.toString(), '_blank');
-      if (!opened) {
-        setError(t('agent.popupBlocked'));
-        return;
-      }
-      try { opened.opener = null; } catch { /* already cross-origin */ }
+      // Use a real anchor so the browser applies noopener/noreferrer from the
+      // click itself; window.open cannot reliably report blocked popups while
+      // also severing the opener before navigation.
+      const anchor = document.createElement('a');
+      anchor.href = url.toString();
+      anchor.target = '_blank';
+      anchor.rel = 'noopener noreferrer';
+      anchor.style.display = 'none';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
       props.onReply({});
     };
     return (
@@ -2401,6 +2406,7 @@ function SkillsPanel(props: {
 
 function SystemPromptPanel(props: {
   text: string;
+  supported: boolean;
   saving: boolean;
   error: string | null;
   onSave: (text: string | null) => void;
@@ -2448,6 +2454,9 @@ function SystemPromptPanel(props: {
             }}
           />
           <span class="op-prompt-count">{draft().length} / {MAX_SYSTEM_PROMPT}</span>
+          <Show when={!props.supported}>
+            <div class="op-mcp-hint">{t('agent.systemPromptUnsupported')}</div>
+          </Show>
           <Show when={props.error}>
             <div class="op-skills-error"><Icon name="alert" size={14} /><span>{props.error}</span></div>
           </Show>
@@ -3200,7 +3209,10 @@ function App(props: {
       if (disposed) return;
       const text = result.data ?? '';
       setPromptText(text);
-      storeSystemPrompt(window.localStorage, props.systemPromptStorageKey, text);
+      const local = loadSystemPrompt(window.localStorage, props.systemPromptStorageKey);
+      if (text || !local) {
+        storeSystemPrompt(window.localStorage, props.systemPromptStorageKey, text);
+      }
     } catch (error) {
       if (!disposed) setPromptError(formatError(error));
     } finally {
@@ -3234,6 +3246,8 @@ function App(props: {
         await initialize();
       } else {
         applyDraftStatus(status);
+        const id = currentID();
+        if (id) await loadHistory(id);
       }
     } catch (error) {
       if (!disposed) setPromptError(formatError(error));
@@ -4047,6 +4061,7 @@ function App(props: {
       <Show when={promptOpen()}>
         <SystemPromptPanel
           text={promptText()}
+          supported={capabilities() ? Boolean((capabilities()?.sessionCapabilities as Record<string, unknown> | undefined)?.systemPrompt) : true}
           saving={promptSaving()}
           error={promptError()}
           onSave={(text) => void saveSystemPrompt(text)}

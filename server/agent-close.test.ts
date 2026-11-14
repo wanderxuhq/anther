@@ -12,6 +12,7 @@ const readline = require('node:readline');
 const fs = require('node:fs');
 const statePath = process.argv[2];
 const closeMissing = process.argv[3] === 'notfound';
+const deleteMissing = process.argv[4] === 'deletemissing';
 let counter = 0;
 let sessions = [];
 let calls = [];
@@ -56,15 +57,20 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
         sessionId: message.params.sessionId,
         update: { sessionUpdate: 'agent_message_chunk', messageId: 'msg', content: { type: 'text', text: 'replayed' } },
       });
-      setTimeout(() => respond(message.id, { configOptions: [] }), 25);
+      setTimeout(() => respond(message.id, { configOptions: [] }), 100);
       break;
     case 'session/list':
       respond(message.id, { sessions });
       break;
     case 'session/delete':
-      sessions = sessions.filter((session) => session.sessionId !== message.params.sessionId);
+      calls.push({ method: 'delete', sessionId: message.params.sessionId });
       save();
-      respond(message.id, {});
+      if (deleteMissing) fail(message.id, -32002, 'session not found');
+      else {
+        sessions = sessions.filter((session) => session.sessionId !== message.params.sessionId);
+        save();
+        respond(message.id, {});
+      }
       break;
     case 'session/prompt':
       respond(message.id, { stopReason: 'end_turn' });
@@ -94,11 +100,11 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-async function start(options: { notFound?: boolean } = {}): Promise<AgentRuntime> {
+async function start(options: { notFound?: boolean; notFoundDelete?: boolean } = {}): Promise<AgentRuntime> {
   const script = path.join(root, 'fake-agent.cjs');
   await writeFile(script, fakeAgent);
-  const args = [script, statePath];
-  if (options.notFound) args.push('notfound');
+  const args = [script, statePath, options.notFound ? 'notfound' : 'ok'];
+  if (options.notFoundDelete) args.push('deletemissing');
   const discovered: DiscoveredAgent = {
     profile: { id: 'fake-close', name: 'Fake Close', command: process.execPath, args },
     executable: process.execPath,
@@ -113,6 +119,20 @@ async function readState(): Promise<FakeState> {
   } catch {
     return { sessions: [], calls: [] };
   }
+}
+
+async function waitFor<T>(
+  read: () => Promise<T | undefined>,
+  label: string,
+  timeout = 4000,
+): Promise<T> {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const value = await read();
+    if (value !== undefined) return value;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`timed out waiting for ${label}`);
 }
 
 test('closes a session, keeps it listed, and reloads it on reopen', async () => {
@@ -149,4 +169,31 @@ test('treats closing a missing session as success', async () => {
   await runtime.closeSession(session.id);
   const state = await readState();
   assert.ok(state.calls.some((call) => call.method === 'close' && call.sessionId === session.id));
+});
+
+test('discards an in-flight load when the session is closed', async () => {
+  await start();
+  await runtime.status();
+  const loading = runtime.messages('sess_existing');
+  await waitFor(async () => {
+    const value = await readState();
+    return value.calls.some((call) => call.method === 'load' && call.sessionId === 'sess_existing') ? true : undefined;
+  }, 'load request');
+  await runtime.closeSession('sess_existing');
+  await loading;
+  await runtime.messages('sess_existing');
+  const final = await readState();
+  assert.equal(
+    final.calls.filter((call) => call.method === 'load' && call.sessionId === 'sess_existing').length,
+    2,
+  );
+});
+
+test('treats deleting a missing session as success', async () => {
+  await start({ notFoundDelete: true });
+  await runtime.status();
+  const session = await runtime.createSession();
+  await runtime.remove(session.id);
+  const state = await readState();
+  assert.ok(state.calls.some((call) => call.method === 'delete' && call.sessionId === session.id));
 });
