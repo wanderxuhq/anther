@@ -1054,7 +1054,13 @@ function Composer(props: {
                 <Icon name="send" size={17} />
               </button>
             }>
-              <button type="button" class="op-send op-send-stop" onClick={props.onStop} title={t('agent.stop')}>
+              <button
+                type="button"
+                class="op-send op-send-stop"
+                onClick={props.onStop}
+                title={t('agent.stop')}
+                aria-label={t('agent.stop')}
+              >
                 <span class="op-stop-square" />
               </button>
             </Show>

@@ -1347,10 +1347,25 @@ export const css = `
   background: var(--op-accent);
   color: #fff;
 }
+.op-app .op-send { color: #fff; }
 .op-send:hover:not(:disabled) { filter: brightness(1.08); }
 .op-send:disabled { background: color-mix(in srgb, var(--op-fg) 12%, transparent); color: var(--op-muted); opacity: 1; }
-.op-send-stop { background: color-mix(in srgb, var(--op-danger) 14%, transparent); color: var(--op-danger); }
-.op-send-stop .op-stop-square { width: 10px; height: 10px; }
+.op-app .op-send-stop {
+  width: 32px;
+  min-width: 0;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: var(--op-radius);
+  background: var(--op-danger);
+  color: #fff;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--op-danger) 16%, transparent);
+}
+.op-app .op-send-stop:hover { filter: brightness(1.08); }
+.op-app .op-send-stop:focus-visible { background: var(--op-danger); color: #fff; filter: brightness(1.08); }
+.op-app .op-send-stop .op-stop-square { width: 10px; height: 10px; border-radius: 2px; background: currentColor; }
 .op-composer-hint {
   max-width: 920px;
   margin: 5px auto 0;
