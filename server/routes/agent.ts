@@ -148,6 +148,11 @@ export function registerAgentRoutes(router: Router, agent: AcpAgent): void {
     await agent.remove(required(input.sessionID, 'sessionID'));
     return {};
   });
+  router.post('/_/agent/api/sessions/close', async (_req, body) => {
+    const input = record(body);
+    await agent.closeSession(required(input.sessionID, 'sessionID'));
+    return {};
+  });
   router.post('/_/agent/api/sessions/fork', async (_req, body) => {
     const input = record(body);
     return agent.fork(required(input.sessionID, 'sessionID'));

@@ -2831,6 +2831,9 @@ function App(props: {
       });
     }
     if (session) {
+      if (caps?.close && (capabilities()?.loadSession || caps?.resume)) {
+        actions.push({ id: 'close-session', title: t('agent.closeSession'), icon: 'close', disabled: currentBusy() || switchingAgent(), onClick: () => void closeSession(session.id) });
+      }
       if (caps?.fork) {
         actions.push({ id: 'fork', title: t('agent.forkChat'), icon: 'git-branch', disabled: currentBusy() || switchingAgent(), onClick: () => void forkSession(session.id) });
       }
@@ -3442,6 +3445,27 @@ function App(props: {
         props.onClosePath?.(`/${encodeURIComponent(id)}`);
       }
       showToast(t('agent.deleted'));
+    } catch (error) {
+      showToast(formatError(error), true);
+    }
+  }
+
+  async function closeSession(id: string): Promise<void> {
+    try {
+      await props.api.closeSession(id);
+      updatesBySession.delete(id);
+      if (currentID() === id) {
+        setCurrentID(null);
+        setItems([]);
+        setPermissions([]);
+        setForms([]);
+        setBusy(false);
+        setModes(defaultModes());
+        props.onOpenPath?.('');
+        props.onClosePath?.(`/${encodeURIComponent(id)}`);
+      }
+      await refreshSessions();
+      showToast(t('agent.sessionClosed'));
     } catch (error) {
       showToast(formatError(error), true);
     }

@@ -132,7 +132,11 @@ that session immediately.
 The `/resume` command opens a searchable, date-grouped session picker backed by
 ACP `session/list`, including every `nextCursor` page. Opening a session adds a
 tab and loads its history and config options together, so its model and mode
-are restored without a separate request.
+are restored without a separate request. When the agent supports
+`session/resume` but not `session/load`, anther resumes the session without
+history replay so it can still be prompted. A session can also be closed from
+the toolbar to release agent resources without deleting it; it stays in
+`/resume` and is reloaded when reopened.
 
 ACP `plan` updates are rendered as a persistent checklist in the Agent timeline.
 Mode and configuration changes made by the agent are applied to the active

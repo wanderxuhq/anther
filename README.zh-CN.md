@@ -125,7 +125,10 @@ Mode 选择器使用 ACP `session/set_mode` 或 agent 的 `mode` 配置项；可
 
 `/resume` 命令会打开一个可搜索、按日期分组的会话选择器，数据来自 ACP
 `session/list`，anther 会跟随 `nextCursor` 取完所有分页。点开会话时才加入标签，并
-同时加载历史和配置，因此模型和模式会自动恢复，不需要额外请求。
+同时加载历史和配置，因此模型和模式会自动恢复，不需要额外请求。如果 agent 支持
+`session/resume` 但不支持 `session/load`，anther 会在不回放历史的情况下恢复会话，
+仍然可以继续发送消息。也可以从工具栏关闭会话以释放 agent 资源而不删除它；会话会
+保留在 `/resume` 中，重新打开时再加载。
 
 ACP 的 `plan` 更新会以持续更新的清单形式显示在 Agent 时间线中。agent 自己切换
 mode 或配置项时，当前会话和会话列表会立即同步。ACP 的 notice 会以行内状态提示

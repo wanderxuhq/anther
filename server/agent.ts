@@ -613,18 +613,39 @@ export class AgentRuntime {
     const cachedConfigs = this.configs.get(id) ?? [];
     const cachedModes = this.modeStates.get(id)?.state;
     const capabilities = this.init?.agentCapabilities as acp.AgentCapabilities & { loadSession?: boolean };
-    if (!capabilities?.loadSession) return { updates: [], configOptions: cachedConfigs, modes: cachedModes };
+    const sessionCaps = this.init?.agentCapabilities?.sessionCapabilities as acp.SessionCapabilities | undefined;
+    const canLoad = capabilities?.loadSession === true;
+    const canResume = Boolean(sessionCaps?.resume);
+    if (!canLoad && !canResume) return { updates: [], configOptions: cachedConfigs, modes: cachedModes };
     const ctx = await this.ensure();
     const cached = this.history.get(id);
     if (cached && cached.length > 0) return { updates: cached, configOptions: cachedConfigs, modes: cachedModes };
-    const replay: acp.SessionUpdate[] = [];
-    this.replays.set(id, replay);
     const mcpServers = this.sessionMcp.get(id) ?? this.sessionMcpServers();
     this.sessionMcp.set(id, mcpServers);
     const systemPrompt = this.sessionPrompt.has(id)
       ? this.sessionPrompt.get(id) ?? undefined
       : this.sessionSystemPrompt();
     this.sessionPrompt.set(id, systemPrompt ?? null);
+    if (!canLoad) {
+      // Agents that support resume but not load can still be attached and
+      // prompted; ACP does not replay history in this case.
+      const result = await ctx.request(acp.methods.agent.session.resume, {
+        sessionId: id,
+        cwd: this.dir,
+        mcpServers,
+        ...(systemPrompt ? { systemPrompt } : {}),
+      });
+      if (result.configOptions) this.configs.set(id, result.configOptions);
+      const modes = modeStateFrom(result.modes, result.configOptions ?? cachedConfigs);
+      if (modes) this.modeStates.set(id, modes);
+      return {
+        updates: [],
+        configOptions: this.configs.get(id) ?? [],
+        modes: modes?.state ?? cachedModes,
+      };
+    }
+    const replay: acp.SessionUpdate[] = [];
+    this.replays.set(id, replay);
     try {
       const result = await ctx.request(acp.methods.agent.session.load, {
         sessionId: id,
@@ -767,19 +788,38 @@ export class AgentRuntime {
     const ctx = await this.ensure();
     this.cancelForms(sessionID);
     await ctx.request(acp.methods.agent.session.delete, { sessionId: sessionID });
+    this.forgetSession(sessionID);
+    this.emit({ type: 'sessions_changed' });
+  }
+
+  async closeSession(sessionID: string): Promise<void> {
+    const capabilities = this.init?.agentCapabilities?.sessionCapabilities as
+      | acp.SessionCapabilities
+      | undefined;
+    if (!capabilities?.close) throw new Error('Agent does not support session/close');
+    const ctx = await this.ensure();
+    this.cancelForms(sessionID);
+    this.cancelPermissions(sessionID);
+    await ctx.request(acp.methods.agent.session.close, { sessionId: sessionID });
+    this.forgetSession(sessionID, true);
+    this.emit({ type: 'sessions_changed' });
+  }
+
+  private forgetSession(sessionID: string, keepTitle = false): void {
     this.configs.delete(sessionID);
     this.modeStates.delete(sessionID);
-    this.titles.delete(sessionID);
+    if (!keepTitle) this.titles.delete(sessionID);
     this.history.delete(sessionID);
+    this.replays.delete(sessionID);
     this.sessionMcp.delete(sessionID);
     this.sessionPrompt.delete(sessionID);
+    this.busy.delete(sessionID);
     this.retiredBootstraps.delete(sessionID);
     if (this.boot?.sessionId === sessionID) {
       this.bootEpoch += 1;
       this.boot = undefined;
       this.bootstrapUsed = false;
     }
-    this.emit({ type: 'sessions_changed' });
   }
 
   async fork(sessionID: string): Promise<{ id: string; title: string; time: { created: number; updated: number }; configOptions: acp.SessionConfigOption[]; modes?: AgentModeState }> {
@@ -1135,6 +1175,7 @@ export class AcpAgent {
   modes(sessionID: string) { return this.active?.modes(sessionID); }
   async setMode(sessionID: string, modeID: string) { return (await this.ensureActive()).setMode(sessionID, modeID); }
   async remove(sessionID: string) { return (await this.ensureActive()).remove(sessionID); }
+  async closeSession(sessionID: string) { return (await this.ensureActive()).closeSession(sessionID); }
   async fork(sessionID: string) { return (await this.ensureActive()).fork(sessionID); }
   permissions(sessionID: string) { return this.active?.permissions(sessionID) ?? []; }
   async replyPermission(requestID: string, optionID: string) { return (await this.ensureActive()).replyPermission(requestID, optionID); }

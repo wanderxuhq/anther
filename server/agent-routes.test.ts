@@ -7,10 +7,11 @@ import { HttpError } from './http-error.ts';
 import { Router } from './http.ts';
 import { registerAgentRoutes } from './routes/agent.ts';
 
-function stubAgent(initial: acp.McpServer[] = []): AcpAgent {
+function stubAgent(initial: acp.McpServer[] = []): AcpAgent & { closed: string[] } {
   let servers = initial;
   let prompt: string | undefined;
-  return {
+  const closed: string[] = [];
+  const agent = {
     mcpServers: () => servers,
     setMcpServers: (next: acp.McpServer[]) => {
       servers = next;
@@ -21,7 +22,12 @@ function stubAgent(initial: acp.McpServer[] = []): AcpAgent {
       prompt = text;
       return prompt;
     },
-  } as unknown as AcpAgent;
+    closeSession: async (sessionID: string) => {
+      closed.push(sessionID);
+    },
+    closed,
+  };
+  return agent as unknown as AcpAgent & { closed: string[] };
 }
 
 test('GET and PUT /mcp expose the browser wire shape', async () => {
@@ -69,6 +75,23 @@ test('PUT /mcp rejects malformed configs with 400', async () => {
   );
   await assert.rejects(
     async () => { await put(request, { servers: 'nope' }, query); },
+    (error: unknown) => error instanceof HttpError && error.status === 400,
+  );
+});
+
+test('POST /sessions/close closes the requested session', async () => {
+  const router = new Router();
+  const agent = stubAgent();
+  registerAgentRoutes(router, agent);
+  const close = router.handler('POST', '/_/agent/api/sessions/close');
+  assert.ok(close);
+  const request = {} as IncomingMessage;
+  const query = new URLSearchParams();
+
+  assert.deepEqual(await close(request, { sessionID: 'sess_1' }, query), {});
+  assert.deepEqual(agent.closed, ['sess_1']);
+  await assert.rejects(
+    async () => { await close(request, {}, query); },
     (error: unknown) => error instanceof HttpError && error.status === 400,
   );
 });
