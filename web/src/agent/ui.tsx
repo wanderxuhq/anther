@@ -1265,7 +1265,12 @@ function FormCard(props: {
     const open = () => {
       const url = target();
       if (!url) return;
-      window.open(url.toString(), '_blank', 'noopener,noreferrer');
+      const opened = window.open(url.toString(), '_blank');
+      if (!opened) {
+        setError(t('agent.popupBlocked'));
+        return;
+      }
+      try { opened.opener = null; } catch { /* already cross-origin */ }
       props.onReply({});
     };
     return (
@@ -1275,7 +1280,9 @@ function FormCard(props: {
           <div>
             <div class="op-form-title">{props.form.title || t('agent.urlElicitation')}</div>
             <div class="op-form-subtitle">
-              {props.form.message || t('agent.urlElicitationHint')}
+              {props.form.message && props.form.message !== props.form.title
+                ? props.form.message
+                : t('agent.urlElicitationHint')}
             </div>
           </div>
         </div>
@@ -1289,6 +1296,9 @@ function FormCard(props: {
         </div>
         <Show when={!target()}>
           <div class="op-form-error">{t('agent.invalidUrl')}</div>
+        </Show>
+        <Show when={error()}>
+          <div class="op-form-error">{error()}</div>
         </Show>
         <div class="op-form-actions">
           <button type="button" class="op-btn primary" disabled={!target()} onClick={open}>
@@ -2397,10 +2407,16 @@ function SystemPromptPanel(props: {
   onClose: () => void;
 }) {
   const [draft, setDraft] = createSignal(props.text);
-  createEffect(on(() => props.text, (text) => setDraft(text), { defer: true }));
+  const [dirty, setDirty] = createSignal(false);
+  createEffect(on(() => props.text, (text) => {
+    if (!dirty()) setDraft(text);
+  }, { defer: true }));
+  const close = () => {
+    if (!props.saving) props.onClose();
+  };
 
   return (
-    <div class="op-resume-backdrop" onClick={props.onClose}>
+    <div class="op-resume-backdrop" onClick={close}>
       <div
         class="op-resume-panel op-prompt-panel"
         role="dialog"
@@ -2413,7 +2429,7 @@ function SystemPromptPanel(props: {
             <span class="op-resume-title">{t('agent.systemPrompt')}</span>
             <span class="op-resume-agent">{t('agent.systemPromptScope')}</span>
           </div>
-          <IconButton icon="x" title={t('agent.close')} onClick={props.onClose} />
+          <IconButton icon="x" title={t('agent.close')} onClick={close} />
         </div>
         <div class="op-prompt-body">
           <div class="op-mcp-note">
@@ -2426,7 +2442,10 @@ function SystemPromptPanel(props: {
             maxLength={MAX_SYSTEM_PROMPT}
             placeholder={t('agent.systemPromptPlaceholder')}
             aria-label={t('agent.systemPrompt')}
-            onInput={(event) => setDraft(event.currentTarget.value)}
+            onInput={(event) => {
+              setDraft(event.currentTarget.value);
+              setDirty(true);
+            }}
           />
           <span class="op-prompt-count">{draft().length} / {MAX_SYSTEM_PROMPT}</span>
           <Show when={props.error}>
@@ -2437,13 +2456,13 @@ function SystemPromptPanel(props: {
           <button
             type="button"
             class="op-btn"
-            disabled={props.saving || !draft().trim()}
+            disabled={props.saving}
             onClick={() => props.onSave(null)}
           >
             {t('agent.systemPromptClear')}
           </button>
           <div class="op-mcp-foot-actions">
-            <button type="button" class="op-btn" onClick={props.onClose}>{t('agent.cancel')}</button>
+            <button type="button" class="op-btn" disabled={props.saving} onClick={close}>{t('agent.cancel')}</button>
             <button
               type="button"
               class="op-btn primary"
@@ -2863,17 +2882,17 @@ function App(props: {
       onClick: () => void openMcp(),
     }];
     const caps = capabilities()?.sessionCapabilities as Record<string, unknown> | undefined;
-    if (caps?.systemPrompt) {
+    if (promptReady() && (caps?.systemPrompt || promptText().trim())) {
       actions.push({
         id: 'system-prompt',
         title: t('agent.systemPrompt'),
         icon: 'edit',
-        disabled: switchingAgent() || !ready() || !promptReady() || promptLoading(),
+        disabled: switchingAgent() || !promptReady() || promptLoading() || promptSaving(),
         onClick: () => void openSystemPrompt(),
       });
     }
     if (session) {
-      if (caps?.close && (capabilities()?.loadSession || caps?.resume)) {
+      if (caps?.close && caps?.list && (capabilities()?.loadSession || caps?.resume)) {
         actions.push({ id: 'close-session', title: t('agent.closeSession'), icon: 'close', disabled: currentBusy() || switchingAgent(), onClick: () => void closeSession(session.id) });
       }
       if (caps?.fork) {
@@ -3173,7 +3192,7 @@ function App(props: {
   }
 
   async function openSystemPrompt(): Promise<void> {
-    if (promptLoading() || promptSaving()) return;
+    if (promptOpen() || promptLoading() || promptSaving()) return;
     setPromptLoading(true);
     setPromptError(null);
     try {
@@ -3195,6 +3214,7 @@ function App(props: {
     setPromptSaving(true);
     setPromptError(null);
     try {
+      const wasFatal = Boolean(initError());
       const result = await props.api.setSystemPrompt(text);
       if (disposed) return;
       const value = result.data ?? '';
@@ -3202,9 +3222,19 @@ function App(props: {
       storeSystemPrompt(window.localStorage, props.systemPromptStorageKey, value);
       const status = await props.api.status().catch(() => null);
       if (disposed) return;
-      applyDraftStatus(status);
+      if (!status?.ready) {
+        setPromptError(status?.error || t('agent.agentError'));
+        return;
+      }
+      setInitError(null);
+      setCapabilities(status.capabilities ?? null);
       setPromptOpen(false);
       showToast(t('agent.systemPromptSaved'));
+      if (wasFatal) {
+        await initialize();
+      } else {
+        applyDraftStatus(status);
+      }
     } catch (error) {
       if (!disposed) setPromptError(formatError(error));
     } finally {

@@ -306,30 +306,27 @@ test('serializes concurrent bootstrap creation and discards a stale result', asy
   assert.deepEqual(surviving?.mcpServers?.map((server) => server.name), ['b']);
 });
 
-test('keeps the MCP snapshot for sessions loaded later', async () => {
+test('uses the current MCP set for unattached loads and captures new/fork requests', async () => {
   await start();
   mcp = normalizeMcpServers([{ name: 'a', command: 'a' }]);
   const boot = await runtime.createSession();
   mcp = normalizeMcpServers([{ name: 'b', command: 'b' }]);
   const second = await runtime.createSession();
 
-  await runtime.messages(boot.id);
-  await runtime.messages(second.id);
   mcp = normalizeMcpServers([{ name: 'c', command: 'c' }]);
+  await runtime.messages('sess_existing');
   await runtime.messages(boot.id);
-
   const forked = await runtime.fork(second.id);
   await runtime.messages(forked.id);
 
   const state = await readState();
   const loads = state.calls.filter((call) => call.method === 'load');
-  assert.deepEqual(loads.filter((call) => call.sessionId === boot.id).at(-1)?.mcpServers?.map((server) => server.name), ['a']);
-  const secondLoad = loads.find((call) => call.sessionId === second.id);
-  assert.deepEqual(secondLoad?.mcpServers?.map((server) => server.name), ['b']);
+  assert.equal(loads.some((call) => call.sessionId === boot.id), false);
+  assert.equal(loads.some((call) => call.sessionId === forked.id), false);
+  const existingLoad = loads.find((call) => call.sessionId === 'sess_existing');
+  assert.deepEqual(existingLoad?.mcpServers?.map((server) => server.name), ['c']);
   const forkCall = state.calls.find((call) => call.method === 'fork');
   assert.deepEqual(forkCall?.mcpServers?.map((server) => server.name), ['c']);
-  const forkLoad = loads.find((call) => call.sessionId === forked.id);
-  assert.deepEqual(forkLoad?.mcpServers?.map((server) => server.name), ['c']);
 });
 
 test('keeps retired bootstraps hidden when the agent cannot delete them', async () => {

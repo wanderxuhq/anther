@@ -47,7 +47,7 @@ A mobile-first, browser-based web IDE. Run one stateless Node process in a proje
 - ACP client filesystem and terminal capabilities: agents can read/write workspace text files and run non-interactive commands, with live terminal output in tool cards. Agent authentication methods are surfaced in the panel.
 - Rich ACP content: images, audio, resource links, and embedded resources render in messages and tool cards. The composer can attach images, audio, and files, gated by the agent's prompt capabilities.
 - ACP notices and context compaction render as inline timeline rows; compaction summaries stream and update the same entry in place.
-- Per-workspace append system prompt for ACP sessions, sent only when the agent advertises `session/systemPrompt` support.
+- Per-workspace append system prompt for ACP sessions, sent only when the agent advertises `sessionCapabilities.systemPrompt` support.
 - Per-workspace MCP servers for ACP sessions: add stdio/HTTP/SSE servers from the toolbar, filter unsupported transports by agent capability, and pass them to new and reopened sessions.
 
 **Workspaces and navigation**
@@ -118,8 +118,9 @@ database. Configure OpenCode as you normally would (for example
 anther advertises ACP `elicitation.form` and `elicitation.url` support and
 renders session-scoped form requests as pending cards. This includes OpenCode's
 `question` tool: pick an option or type a custom answer, and the agent continues
-the same turn. URL requests show the full address and require explicit consent
-before opening the link in a new tab; invalid or non-HTTP(S) URLs are rejected.
+the same turn. Session-scoped URL requests show the full address and require
+explicit consent before opening the link in a new tab; request-scoped
+elicitations are declined, and invalid or non-HTTP(S) URLs are rejected.
 
 The model picker remembers your last explicit choice per workspace and applies
 it to new chats with ACP `session/set_config_option`. ACP itself defines the
@@ -136,9 +137,10 @@ ACP `session/list`, including every `nextCursor` page. Opening a session adds a
 tab and loads its history and config options together, so its model and mode
 are restored without a separate request. When the agent supports
 `session/resume` but not `session/load`, anther resumes the session without
-history replay so it can still be prompted. A session can also be closed from
-the toolbar to release agent resources without deleting it; it stays in
-`/resume` and is reloaded when reopened.
+history replay so it can still be prompted. When the agent also supports
+`session/list`, a session can be closed from the toolbar to release agent
+resources without deleting it; it stays in `/resume` and is reloaded when
+reopened.
 
 ACP `plan` updates are rendered as a persistent checklist in the Agent timeline.
 Mode and configuration changes made by the agent are applied to the active
@@ -158,7 +160,8 @@ list. MCP servers can run commands and receive credentials, and the list
 trusted servers.
 
 The Agent toolbar can also set a per-workspace system prompt. When the selected
-agent advertises support, anther appends the prompt to new sessions and to
+agent advertises `sessionCapabilities.systemPrompt`, anther appends the prompt
+to new sessions and to
 sessions loaded later in this run; sessions keep the prompt snapshot they were
 created or loaded with. The text is stored in browser storage and sent as ACP
 `systemPrompt` with `mode: "append"`.

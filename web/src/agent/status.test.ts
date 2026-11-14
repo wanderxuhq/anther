@@ -61,6 +61,14 @@ test('compaction updates upsert in place and preserve the summary', () => {
 
   const cancelled = applyCompactionUpdate(completed, { compactionId: 'c1', status: 'cancelled' }, 60, 'x');
   assert.equal((cancelled[0] as StatusItem).textKey, 'agent.compaction.cancelled');
+
+  const clearedError = applyCompactionUpdate(failed, { compactionId: 'c1', status: 'failed', error: null }, 70, 'x');
+  assert.equal((clearedError[0] as StatusItem).textKey, 'agent.compaction.failedGeneric');
+  assert.equal((clearedError[0] as StatusItem).textParams, undefined);
+
+  const unknown = applyCompactionUpdate(completed, { compactionId: 'c1', status: 'paused' }, 80, 'x');
+  assert.equal((unknown[0] as StatusItem).textKey, 'agent.compaction.unknown');
+  assert.deepEqual((unknown[0] as StatusItem).textParams, { status: 'paused' });
 });
 
 test('compaction summary chunks create and append to an item', () => {

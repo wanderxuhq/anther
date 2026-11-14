@@ -49,6 +49,23 @@ test('creates a command, captures output and reports exit', async () => {
   await manager.release('sess_1', terminalId);
 });
 
+test('releases terminals for one session without touching another', async () => {
+  const a = await manager.create({
+    sessionId: 'sess_a',
+    command: process.execPath,
+    args: ['-e', 'setTimeout(() => {}, 10000)'],
+  });
+  const b = await manager.create({
+    sessionId: 'sess_b',
+    command: process.execPath,
+    args: ['-e', 'setTimeout(() => {}, 10000)'],
+  });
+  await manager.closeSession('sess_a');
+  assert.throws(() => manager.output('sess_a', a.terminalId), isNotFound);
+  assert.equal(manager.output('sess_b', b.terminalId).output, '');
+  await manager.release('sess_b', b.terminalId);
+});
+
 test('uses the workspace as the default cwd and rejects an outside cwd', async () => {
   const { terminalId } = await manager.create({
     sessionId: 'sess_1',

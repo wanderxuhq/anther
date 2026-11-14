@@ -13,6 +13,9 @@ const readline = require('node:readline');
 const fs = require('node:fs');
 const statePath = process.argv[2];
 const supported = process.argv[3] !== 'nosupport';
+const failFirstLoad = process.argv[4] === 'failfirst';
+const rejectPrompt = process.argv[5] === 'rejectprompt';
+let loadFailures = 0;
 let counter = 0;
 let sessions = [];
 let calls = [];
@@ -41,6 +44,10 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       });
       break;
     case 'session/new': {
+      if (rejectPrompt && message.params.systemPrompt) {
+        fail(message.id, -32602, 'prompt rejected');
+        break;
+      }
       const sessionId = nextId();
       sessions.push({ sessionId, title: 'New chat', updatedAt: new Date().toISOString() });
       record('new', sessionId, message.params);
@@ -49,6 +56,11 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       break;
     }
     case 'session/load':
+      if (failFirstLoad && message.params.systemPrompt && loadFailures === 0) {
+        loadFailures += 1;
+        fail(message.id, -32602, 'bad prompt');
+        break;
+      }
       record('load', message.params.sessionId, message.params);
       save();
       respond(message.id, { configOptions: [] });
@@ -107,11 +119,16 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-async function start(options: { supported?: boolean } = {}): Promise<AgentRuntime> {
+async function start(options: { supported?: boolean; failFirstLoad?: boolean; rejectPrompt?: boolean } = {}): Promise<AgentRuntime> {
   const script = path.join(root, 'fake-agent.cjs');
   await writeFile(script, fakeAgent);
-  const args = [script, statePath];
-  if (options.supported === false) args.push('nosupport');
+  const args = [
+    script,
+    statePath,
+    options.supported === false ? 'nosupport' : 'support',
+    options.failFirstLoad ? 'failfirst' : 'ok',
+  ];
+  if (options.rejectPrompt) args.push('rejectprompt');
   const discovered: DiscoveredAgent = {
     profile: { id: 'fake-prompt', name: 'Fake Prompt', command: process.execPath, args },
     executable: process.execPath,
@@ -169,33 +186,32 @@ test('uses the new prompt after bootstrap invalidation', async () => {
   assert.deepEqual(created?.systemPrompt, expectedPrompt('Second rule.'));
 });
 
-test('keeps each session prompt snapshot for load and fork', async () => {
+test('uses the current prompt for unattached loads and captures new/fork requests', async () => {
   prompt = 'First rule.';
   await start();
   const boot = await runtime.createSession();
   prompt = 'Second rule.';
   const second = await runtime.createSession();
   const forked = await runtime.fork(second.id);
+  prompt = 'Third rule.';
+  await runtime.messages('sess_existing');
   await runtime.messages(boot.id);
-  await runtime.messages(second.id);
 
   const state = await readState();
-  const firstLoad = state.calls.find((call) => call.method === 'load' && call.sessionId === boot.id);
-  assert.deepEqual(firstLoad?.systemPrompt, expectedPrompt('First rule.'));
-  const secondLoad = state.calls.find((call) => call.method === 'load' && call.sessionId === second.id);
-  assert.deepEqual(secondLoad?.systemPrompt, expectedPrompt('Second rule.'));
+  assert.equal(state.calls.some((call) => call.method === 'load' && call.sessionId === boot.id), false);
+  const existingLoad = state.calls.find((call) => call.method === 'load' && call.sessionId === 'sess_existing');
+  assert.deepEqual(existingLoad?.systemPrompt, expectedPrompt('Third rule.'));
   const forkCall = state.calls.find((call) => call.method === 'fork' && call.sessionId === forked.id);
   assert.deepEqual(forkCall?.systemPrompt, expectedPrompt('Second rule.'));
 });
 
-test('does not retroactively apply a prompt to sessions created without one', async () => {
+test('does not attach or send a prompt for sessions created without one', async () => {
   await start();
   const boot = await runtime.createSession();
   prompt = 'Later rule.';
   await runtime.messages(boot.id);
   const state = await readState();
-  const load = state.calls.find((call) => call.method === 'load' && call.sessionId === boot.id);
-  assert.equal(load?.systemPrompt, null);
+  assert.equal(state.calls.some((call) => call.method === 'load' && call.sessionId === boot.id), false);
 });
 
 test('does not send a system prompt when the agent does not advertise it', async () => {
@@ -205,5 +221,30 @@ test('does not send a system prompt when the agent does not advertise it', async
   await runtime.createSession();
   const state = await readState();
   assert.ok(state.calls.length > 0);
+  assert.ok(state.calls.every((call) => call.systemPrompt === null));
+});
+
+test('retries with the current prompt after a rejected load', async () => {
+  prompt = 'First rule.';
+  await start({ failFirstLoad: true });
+  await assert.rejects(runtime.messages('sess_existing'), /bad prompt/);
+  prompt = 'Second rule.';
+  await runtime.messages('sess_existing');
+  const state = await readState();
+  const load = state.calls.find((call) => call.method === 'load' && call.sessionId === 'sess_existing');
+  assert.deepEqual(load?.systemPrompt, expectedPrompt('Second rule.'));
+});
+
+test('recovers when the agent rejects the stored prompt', async () => {
+  prompt = 'Bad rule.';
+  await start({ rejectPrompt: true });
+  const failed = await runtime.status();
+  assert.equal(failed.ready, false);
+
+  prompt = undefined;
+  const recovered = await runtime.status();
+  assert.equal(recovered.ready, true);
+  assert.ok(recovered.bootstrapSessionID);
+  const state = await readState();
   assert.ok(state.calls.every((call) => call.systemPrompt === null));
 });

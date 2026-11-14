@@ -215,6 +215,13 @@ export class AcpTerminalManager {
     await terminal.release();
   }
 
+  async closeSession(sessionID: string): Promise<void> {
+    const entries = [...this.terminals.entries()]
+      .filter(([, terminal]) => terminal.sessionID === sessionID);
+    for (const [key] of entries) this.terminals.delete(key);
+    await Promise.all(entries.map(([, terminal]) => terminal.release()));
+  }
+
   async close(): Promise<void> {
     this.closing = true;
     const terminals = [...this.terminals.values()];

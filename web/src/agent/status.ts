@@ -71,10 +71,10 @@ export function applyCompactionUpdate<T extends TimelineEntry>(
   }
 
   const status = typeof value.status === 'string' ? value.status : 'in_progress';
-  const error = errorText(value.error)
-    || (typeof existing?.textParams?.error === 'string' || typeof existing?.textParams?.error === 'number'
-      ? String(existing.textParams.error)
-      : '');
+  const previousError = typeof existing?.textParams?.error === 'string' || typeof existing?.textParams?.error === 'number'
+    ? String(existing.textParams.error)
+    : '';
+  const error = Object.hasOwn(value, 'error') ? errorText(value.error) : previousError;
   let textKey = 'agent.compaction.running';
   let tone: StatusTone = 'compaction';
   let textParams: Record<string, string | number> | undefined;
@@ -91,6 +91,9 @@ export function applyCompactionUpdate<T extends TimelineEntry>(
   } else if (status === 'cancelled') {
     textKey = 'agent.compaction.cancelled';
     tone = 'info';
+  } else if (status !== 'in_progress') {
+    textKey = 'agent.compaction.unknown';
+    textParams = { status };
   }
 
   const next: StatusItem = {

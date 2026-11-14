@@ -123,4 +123,10 @@ test('resumes a session when the agent does not support load', async () => {
   await runtime.prompt('sess_old', [{ type: 'text', text: 'continue' }]);
   const after = JSON.parse(await readFile(statePath, 'utf8')) as Array<Record<string, unknown>>;
   assert.ok(after.some((call) => call.method === 'prompt' && call.sessionId === 'sess_old'));
+
+  await runtime.messages('sess_old');
+  const session = await runtime.createSession();
+  await runtime.messages(session.id);
+  const final = JSON.parse(await readFile(statePath, 'utf8')) as Array<Record<string, unknown>>;
+  assert.equal(final.filter((call) => call.method === 'resume').length, 1);
 });

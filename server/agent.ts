@@ -125,6 +125,8 @@ export class AgentRuntime {
   private readonly retiredBootstraps = new Set<string>();
   private readonly sessionMcp = new Map<string, acp.McpServer[]>();
   private readonly sessionPrompt = new Map<string, acp.SystemPrompt | null>();
+  private readonly attached = new Set<string>();
+  private readonly historyKnown = new Set<string>();
   private commands: acp.AvailableCommand[] = [];
   private readonly listeners = new Set<(event: AgentEvent) => void>();
   private readonly pending = new Map<string, PendingPermission>();
@@ -216,6 +218,8 @@ export class AgentRuntime {
           this.authenticated = false;
           this.boot = undefined;
           this.bootstrapUsed = false;
+          this.attached.clear();
+          this.historyKnown.clear();
           if (!this.disposed) {
             this.emit({ type: 'state', status: 'closed', message });
             if (this.error === undefined) this.error = message;
@@ -416,6 +420,8 @@ export class AgentRuntime {
     this.history.delete(sessionID);
     this.sessionMcp.delete(sessionID);
     this.sessionPrompt.delete(sessionID);
+    this.attached.delete(sessionID);
+    this.historyKnown.delete(sessionID);
     if (this.boot?.sessionId === sessionID) this.boot = undefined;
     if (this.disposed) return;
     this.retiredBootstraps.add(sessionID);
@@ -452,6 +458,8 @@ export class AgentRuntime {
     if (result.sessionId) {
       this.configs.set(result.sessionId, configOptions);
       this.history.set(result.sessionId, []);
+      this.attached.add(result.sessionId);
+      this.historyKnown.add(result.sessionId);
       this.sessionMcp.set(result.sessionId, mcpServers);
       this.sessionPrompt.set(result.sessionId, systemPrompt ?? null);
       if (modes) this.modeStates.set(result.sessionId, modes);
@@ -596,6 +604,8 @@ export class AgentRuntime {
     const modes = modeStateFrom(result.modes, configOptions);
     this.configs.set(result.sessionId, configOptions);
     this.history.set(result.sessionId, []);
+    this.attached.add(result.sessionId);
+    this.historyKnown.add(result.sessionId);
     this.sessionMcp.set(result.sessionId, mcpServers);
     this.sessionPrompt.set(result.sessionId, systemPrompt ?? null);
     if (modes) this.modeStates.set(result.sessionId, modes);
@@ -620,30 +630,49 @@ export class AgentRuntime {
     const sessionCaps = this.init?.agentCapabilities?.sessionCapabilities as acp.SessionCapabilities | undefined;
     const canLoad = capabilities?.loadSession === true;
     const canResume = Boolean(sessionCaps?.resume);
-    if (!canLoad && !canResume) return { updates: [], configOptions: cachedConfigs, modes: cachedModes };
+    if (this.historyKnown.has(id)) {
+      return { updates: this.history.get(id) ?? [], configOptions: cachedConfigs, modes: cachedModes };
+    }
+    if (!canLoad && !canResume) {
+      return { updates: this.history.get(id) ?? [], configOptions: cachedConfigs, modes: cachedModes };
+    }
     const ctx = await this.ensure();
-    const cached = this.history.get(id);
-    if (cached && cached.length > 0) return { updates: cached, configOptions: cachedConfigs, modes: cachedModes };
+    if (this.attached.has(id) && !canLoad) {
+      // Sessions created or forked here are already attached; ACP resume is
+      // for reattaching, and this agent cannot replay history.
+      this.historyKnown.add(id);
+      const updates = this.history.get(id) ?? [];
+      this.history.set(id, updates);
+      return { updates, configOptions: cachedConfigs, modes: cachedModes };
+    }
     const mcpServers = this.sessionMcp.get(id) ?? this.sessionMcpServers();
-    this.sessionMcp.set(id, mcpServers);
-    const systemPrompt = this.sessionPrompt.has(id)
-      ? this.sessionPrompt.get(id) ?? undefined
-      : this.sessionSystemPrompt();
-    this.sessionPrompt.set(id, systemPrompt ?? null);
+    const promptSupported = Boolean(sessionCaps?.systemPrompt);
+    const systemPrompt = promptSupported
+      ? this.sessionPrompt.has(id)
+        ? this.sessionPrompt.get(id) ?? undefined
+        : this.sessionSystemPrompt()
+      : undefined;
     if (!canLoad) {
       // Agents that support resume but not load can still be attached and
-      // prompted; ACP does not replay history in this case.
+      // prompted; ACP does not replay history in this case. Record snapshots
+      // only after the request succeeds so a rejected prompt can be retried.
       const result = await ctx.request(acp.methods.agent.session.resume, {
         sessionId: id,
         cwd: this.dir,
         mcpServers,
         ...(systemPrompt ? { systemPrompt } : {}),
       });
+      this.attached.add(id);
+      this.historyKnown.add(id);
+      const updates = this.history.get(id) ?? [];
+      this.history.set(id, updates);
+      this.sessionMcp.set(id, mcpServers);
+      if (promptSupported) this.sessionPrompt.set(id, systemPrompt ?? null);
       if (result.configOptions) this.configs.set(id, result.configOptions);
       const modes = modeStateFrom(result.modes, result.configOptions ?? cachedConfigs);
       if (modes) this.modeStates.set(id, modes);
       return {
-        updates: [],
+        updates,
         configOptions: this.configs.get(id) ?? [],
         modes: modes?.state ?? cachedModes,
       };
@@ -657,10 +686,14 @@ export class AgentRuntime {
         mcpServers,
         ...(systemPrompt ? { systemPrompt } : {}),
       });
+      this.attached.add(id);
+      this.historyKnown.add(id);
+      this.history.set(id, replay);
+      this.sessionMcp.set(id, mcpServers);
+      if (promptSupported) this.sessionPrompt.set(id, systemPrompt ?? null);
       if (result.configOptions) this.configs.set(id, result.configOptions);
       const modes = modeStateFrom(result.modes, result.configOptions ?? cachedConfigs);
       if (modes) this.modeStates.set(id, modes);
-      if (replay.length > 0) this.history.set(id, replay);
       return {
         updates: replay,
         configOptions: this.configs.get(id) ?? [],
@@ -792,6 +825,7 @@ export class AgentRuntime {
     const ctx = await this.ensure();
     this.cancelForms(sessionID);
     await ctx.request(acp.methods.agent.session.delete, { sessionId: sessionID });
+    await this.acpTerminals.closeSession(sessionID);
     this.forgetSession(sessionID);
     this.emit({ type: 'sessions_changed' });
   }
@@ -804,7 +838,13 @@ export class AgentRuntime {
     const ctx = await this.ensure();
     this.cancelForms(sessionID);
     this.cancelPermissions(sessionID);
-    await ctx.request(acp.methods.agent.session.close, { sessionId: sessionID });
+    try {
+      await ctx.request(acp.methods.agent.session.close, { sessionId: sessionID });
+    } catch (error) {
+      // ACP treats closing an already-missing session as success.
+      if (!(error instanceof RequestError && error.code === -32002)) throw error;
+    }
+    await this.acpTerminals.closeSession(sessionID);
     this.forgetSession(sessionID, true);
     this.emit({ type: 'sessions_changed' });
   }
@@ -817,6 +857,8 @@ export class AgentRuntime {
     this.replays.delete(sessionID);
     this.sessionMcp.delete(sessionID);
     this.sessionPrompt.delete(sessionID);
+    this.attached.delete(sessionID);
+    this.historyKnown.delete(sessionID);
     this.busy.delete(sessionID);
     this.retiredBootstraps.delete(sessionID);
     if (this.boot?.sessionId === sessionID) {
@@ -845,6 +887,8 @@ export class AgentRuntime {
     this.configs.set(result.sessionId, configOptions);
     this.sessionMcp.set(result.sessionId, mcpServers);
     this.sessionPrompt.set(result.sessionId, systemPrompt ?? null);
+    this.attached.add(result.sessionId);
+    this.historyKnown.add(result.sessionId);
     if (modes) this.modeStates.set(result.sessionId, modes);
     return {
       id: result.sessionId,
@@ -1005,6 +1049,8 @@ export class AgentRuntime {
     this.retiredBootstraps.clear();
     this.sessionMcp.clear();
     this.sessionPrompt.clear();
+    this.attached.clear();
+    this.historyKnown.clear();
     this.commands = [];
     this.configs.clear();
     this.modeStates.clear();

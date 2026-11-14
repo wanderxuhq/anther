@@ -47,7 +47,7 @@
 - 支持 ACP 客户端文件系统和终端能力：agent 可以读写工作区文本文件、运行非交互命令，终端输出会实时显示在工具卡片里。Agent 的认证方式也会显示在面板中。
 - 支持 ACP 富内容：图片、音频、resource link 和嵌入资源会显示在消息和工具卡片中。输入框可以附加图片、音频和文件，并根据 agent 的 prompt capability 自动限制。
 - ACP 的 notice 和上下文压缩会以行内状态显示在时间线中；压缩摘要会流式追加，并更新同一个条目。
-- 按工作区设置 ACP 会话的追加系统提示词，仅在 agent 声明支持 `session/systemPrompt` 时发送。
+- 按工作区设置 ACP 会话的追加系统提示词，仅在 agent 声明支持 `sessionCapabilities.systemPrompt` 时发送。
 - 按工作区配置 ACP 会话的 MCP 服务：在工具栏添加 stdio/HTTP/SSE 服务，按 agent capability 过滤不支持的传输方式，并注入到新建和重新打开的会话。
 
 **多工作区与导航**
@@ -113,8 +113,9 @@ anther 使用 agent 自己的配置、登录、工具和会话存储，不再嵌
 
 anther 会声明 ACP `elicitation.form` 和 `elicitation.url` 能力，并把会话级表单请求
 显示为待处理卡片。OpenCode 的 `question` 工具也走这条链路：选择选项或填写自定义
-答案后，agent 会在同一轮对话中继续。URL 请求会显示完整地址，只有用户明确确认后
-才会在新标签页打开；非法或非 HTTP(S) 的 URL 会被拒绝。
+答案后，agent 会在同一轮对话中继续。会话级 URL 请求会显示完整地址，只有用户明确
+确认后才会在新标签页打开；请求级 elicitation 会被拒绝，非法或非 HTTP(S) 的 URL
+也会被拒绝。
 
 模型选择器会按工作区记住你最后一次明确选择的模型，并在新会话创建后通过 ACP
 `session/set_config_option` 应用。ACP 本身只定义会话级模型，所以 agent 自己的配置
@@ -128,8 +129,8 @@ Mode 选择器使用 ACP `session/set_mode` 或 agent 的 `mode` 配置项；可
 `session/list`，anther 会跟随 `nextCursor` 取完所有分页。点开会话时才加入标签，并
 同时加载历史和配置，因此模型和模式会自动恢复，不需要额外请求。如果 agent 支持
 `session/resume` 但不支持 `session/load`，anther 会在不回放历史的情况下恢复会话，
-仍然可以继续发送消息。也可以从工具栏关闭会话以释放 agent 资源而不删除它；会话会
-保留在 `/resume` 中，重新打开时再加载。
+仍然可以继续发送消息。当 agent 同时支持 `session/list` 时，也可以从工具栏关闭会话
+以释放 agent 资源而不删除它；会话会保留在 `/resume` 中，重新打开时再加载。
 
 ACP 的 `plan` 更新会以持续更新的清单形式显示在 Agent 时间线中。agent 自己切换
 mode 或配置项时，当前会话和会话列表会立即同步。ACP 的 notice 会以行内状态提示
@@ -143,8 +144,8 @@ Agent 工具栏提供 MCP 服务管理器。可以添加 stdio、HTTP 或 SSE �
 服务可以执行命令并接收凭据，配置（包括环境变量和请求头）会保存在浏览器存储中，
 请只添加可信服务。
 
-Agent 工具栏还可以设置按工作区生效的系统提示词。当选中的 agent 声明支持时，anther
-会把提示词追加到新建会话以及本次运行中之后加载的会话；会话会保留创建或加载时的
+Agent 工具栏还可以设置按工作区生效的系统提示词。当选中的 agent 声明支持
+`sessionCapabilities.systemPrompt` 时，anther 会把提示词追加到新建会话以及本次运行中之后加载的会话；会话会保留创建或加载时的
 提示词快照。文本保存在浏览器存储中，并通过 ACP `systemPrompt`（`mode: "append"`）
 发送。
 

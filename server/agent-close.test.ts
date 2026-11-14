@@ -11,6 +11,7 @@ const fakeAgent = String.raw`
 const readline = require('node:readline');
 const fs = require('node:fs');
 const statePath = process.argv[2];
+const closeMissing = process.argv[3] === 'notfound';
 let counter = 0;
 let sessions = [];
 let calls = [];
@@ -45,7 +46,8 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     case 'session/close':
       calls.push({ method: 'close', sessionId: message.params.sessionId });
       save();
-      respond(message.id, {});
+      if (closeMissing) fail(message.id, -32002, 'session not found');
+      else respond(message.id, {});
       break;
     case 'session/load':
       calls.push({ method: 'load', sessionId: message.params.sessionId });
@@ -92,11 +94,13 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-async function start(): Promise<AgentRuntime> {
+async function start(options: { notFound?: boolean } = {}): Promise<AgentRuntime> {
   const script = path.join(root, 'fake-agent.cjs');
   await writeFile(script, fakeAgent);
+  const args = [script, statePath];
+  if (options.notFound) args.push('notfound');
   const discovered: DiscoveredAgent = {
-    profile: { id: 'fake-close', name: 'Fake Close', command: process.execPath, args: [script, statePath] },
+    profile: { id: 'fake-close', name: 'Fake Close', command: process.execPath, args },
     executable: process.execPath,
   };
   runtime = new AgentRuntime(root, discovered, new FileStore(root));
@@ -116,10 +120,12 @@ test('closes a session, keeps it listed, and reloads it on reopen', async () => 
   await runtime.status();
   const session = await runtime.createSession();
   const first = await runtime.messages(session.id);
-  assert.equal(first.updates.length, 1);
-  await runtime.messages(session.id);
+  assert.deepEqual(first.updates, []);
   let state = await readState();
-  assert.equal(state.calls.filter((call) => call.method === 'load').length, 1);
+  assert.equal(state.calls.filter((call) => call.method === 'load').length, 0);
+  await runtime.messages(session.id);
+  state = await readState();
+  assert.equal(state.calls.filter((call) => call.method === 'load').length, 0);
 
   await runtime.closeSession(session.id);
   state = await readState();
@@ -129,8 +135,18 @@ test('closes a session, keeps it listed, and reloads it on reopen', async () => 
   const reopened = await runtime.messages(session.id);
   assert.equal(reopened.updates.length, 1);
   state = await readState();
-  assert.equal(state.calls.filter((call) => call.method === 'load' && call.sessionId === session.id).length, 2);
+  assert.equal(state.calls.filter((call) => call.method === 'load' && call.sessionId === session.id).length, 1);
 
   const listed = await runtime.listSessions();
   assert.ok(listed.some((item) => item.id === session.id));
+});
+
+test('treats closing a missing session as success', async () => {
+  await start({ notFound: true });
+  await runtime.status();
+  const session = await runtime.createSession();
+  await runtime.messages(session.id);
+  await runtime.closeSession(session.id);
+  const state = await readState();
+  assert.ok(state.calls.some((call) => call.method === 'close' && call.sessionId === session.id));
 });
