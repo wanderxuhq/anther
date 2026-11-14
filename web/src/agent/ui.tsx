@@ -73,7 +73,7 @@ import {
   noticeItem,
   type StatusItem,
 } from './status.ts';
-import { configChoices, modeStateFromOptions, secondaryConfigOptions } from './config.ts';
+import { configChoices, effortConfigOption, modeStateFromOptions, otherConfigOptions, secondaryConfigOptions } from './config.ts';
 import { css } from './styles.ts';
 
 export type FeatureTabSpec = {
@@ -685,27 +685,113 @@ function ModelPicker(props: {
   );
 }
 
+function SelectMenu(props: {
+  label: string;
+  title: string;
+  value: string;
+  choices: Array<{ value: string; label: string; description?: string | null }>;
+  disabled?: boolean;
+  wide?: boolean;
+  onSelect: (value: string) => void;
+}) {
+  const [open, setOpen] = createSignal(false);
+  let root!: HTMLDivElement;
+  let listEl!: HTMLDivElement;
+
+  onMount(() => {
+    const onDown = (event: MouseEvent) => {
+      if (open() && root && !event.composedPath().includes(root)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    onCleanup(() => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    });
+  });
+
+  createEffect(() => {
+    if (!open()) return;
+    queueMicrotask(() => {
+      const active = listEl?.querySelector<HTMLElement>('.op-popover-option.active');
+      active?.scrollIntoView({ block: 'nearest' });
+    });
+  });
+
+  return (
+    <div class="op-select-picker" ref={root}>
+      <button
+        type="button"
+        class={`op-model-button op-select-button ${props.wide ? 'wide' : ''}`}
+        disabled={props.disabled}
+        title={props.title}
+        aria-label={props.title}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span class="op-ellipsis">{props.label}</span>
+      </button>
+      <Show when={open()}>
+        <div class="op-popover op-config-popover">
+          <div class="op-config-head">
+            <Icon name="sliders" size={15} />
+            <span>{props.title}</span>
+          </div>
+          <div class="op-config-list" ref={listEl}>
+            <For each={props.choices}>
+              {(choice) => (
+                <button
+                  type="button"
+                  class={`op-config-row selectable ${choice.value === props.value ? 'active' : ''}`}
+                  onClick={() => {
+                    props.onSelect(choice.value);
+                    setOpen(false);
+                  }}
+                >
+                  <span class="op-config-copy">
+                    <span class="op-config-name">{choice.label}</span>
+                    <Show when={choice.description}>
+                      <span class="op-config-desc">{choice.description}</span>
+                    </Show>
+                  </span>
+                  <Show when={choice.value === props.value}><Icon name="check" size={15} /></Show>
+                </button>
+              )}
+            </For>
+          </div>
+        </div>
+      </Show>
+    </div>
+  );
+}
+
 function ModeSelect(props: {
   modes: AgentModeState | null;
   disabled?: boolean;
   onChange: (modeID: string) => void;
 }) {
+  const state = () => props.modes && props.modes.availableModes.length > 1 ? props.modes : null;
   return (
-    <Show when={props.modes && props.modes.availableModes.length > 1 ? props.modes : null}>
-      {(modes) => (
-        <label class="op-agent" title={t('agent.mode')}>
-          <select
+    <Show when={state()}>
+      {(modes) => {
+        const current = () => modes().availableModes.find((mode) => mode.id === modes().currentModeId);
+        return (
+          <SelectMenu
+            label={current() ? modeLabel(current()!) : modes().currentModeId}
+            title={t('agent.mode')}
             value={modes().currentModeId}
+            choices={modes().availableModes.map((mode) => ({
+              value: mode.id,
+              label: modeLabel(mode),
+              description: mode.description,
+            }))}
             disabled={props.disabled}
-            aria-label={t('agent.mode')}
-            onChange={(event) => props.onChange(event.currentTarget.value)}
-          >
-            <For each={modes().availableModes}>
-              {(mode) => <option value={mode.id} title={mode.description}>{modeLabel(mode)}</option>}
-            </For>
-          </select>
-        </label>
-      )}
+            onSelect={props.onChange}
+          />
+        );
+      }}
     </Show>
   );
 }
@@ -883,28 +969,45 @@ function CommandMenu(props: {
   onPick: (command: ComposerCommand) => void;
   onClose: () => void;
 }) {
+  let root!: HTMLDivElement;
   const filtered = createMemo(() => {
     const q = props.query.trim().toLowerCase();
     return props.commands.filter((command) =>
       !q || command.name.toLowerCase().includes(q) || (command.description ?? '').toLowerCase().includes(q));
   });
+  onMount(() => {
+    const onDown = (event: MouseEvent) => {
+      if (!root || event.composedPath().includes(root)) return;
+      const target = event.target as Element | null;
+      if (target?.closest?.('.op-command-trigger')) return;
+      props.onClose();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') props.onClose();
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    onCleanup(() => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    });
+  });
   return (
-    <div class="op-command-menu">
-      <div class="op-command-head">
-        <span>{t('agent.commands')}</span>
-        <button type="button" class="op-icon-btn" onClick={props.onClose} title={t('agent.close')}>
-          <Icon name="x" size={14} />
-        </button>
+    <div class="op-popover op-config-popover op-command-menu" ref={root}>
+      <div class="op-config-head op-command-head">
+        <span class="op-command-title"><span class="op-command-slash">/</span><span>{t('agent.commands')}</span></span>
       </div>
-      <div class="op-command-list">
+      <div class="op-config-list">
         <Show when={filtered().length > 0} fallback={<div class="op-popover-empty">{t('agent.noCommands')}</div>}>
           <For each={filtered()}>
             {(command) => (
-              <button type="button" class="op-command-option" onClick={() => props.onPick(command)}>
-                <span class="op-command-name">/{command.name}</span>
-                <Show when={command.description}>
-                  <span class="op-command-desc">{command.description}</span>
-                </Show>
+              <button type="button" class="op-config-row selectable" onClick={() => props.onPick(command)}>
+                <span class="op-config-copy">
+                  <span class="op-command-name">/{command.name}</span>
+                  <Show when={command.description}>
+                    <span class="op-command-desc">{command.description}</span>
+                  </Show>
+                </span>
               </button>
             )}
           </For>
@@ -970,10 +1073,24 @@ function Composer(props: {
     return [
       { name: 'resume', description: t('agent.resumeCommand') },
       ...local(),
-      ...skillList(),
       ...props.commands.filter((command) => !names.has(command.name)),
+      ...skillList(),
     ];
   });
+  const effort = createMemo(() => effortConfigOption(props.configOptions));
+  const effortChoices = createMemo(() => {
+    const option = effort();
+    return option ? configChoices(option) : [];
+  });
+  const effortValue = createMemo(() => {
+    const option = effort();
+    return option && typeof option.currentValue === 'string' ? option.currentValue : '';
+  });
+  const effortLabel = createMemo(() => {
+    const choice = effortChoices().find((choice) => choice.value === effortValue());
+    return choice?.name ?? effortValue();
+  });
+  const otherOptions = createMemo(() => otherConfigOptions(props.configOptions));
   const slashQuery = createMemo(() => {
     const value = props.draft;
     if (!value.startsWith('/') || value.includes(' ')) return null;
@@ -1141,19 +1258,39 @@ function Composer(props: {
               onSelect={props.onModel}
               buttonClass="op-composer-model"
             />
+            <Show when={effort()}>
+              {(option) => (
+                <SelectMenu
+                  label={effortLabel()}
+                  title={option().name}
+                  value={effortValue()}
+                  choices={effortChoices().map((choice) => ({
+                    value: choice.value,
+                    label: choice.name,
+                    description: choice.description,
+                  }))}
+                  disabled={props.disabled || props.busy}
+                  wide
+                  onSelect={(value) => props.onConfig(option().id, value)}
+                />
+              )}
+            </Show>
             <ConfigMenu
-              options={props.configOptions}
+              options={otherOptions()}
               disabled={props.disabled}
               busy={props.configBusy}
               onSelect={props.onConfig}
             />
             <ModeSelect modes={props.modes} onChange={props.onMode} disabled={props.busy || props.disabled} />
-            <IconButton
-              icon="list"
+            <button
+              type="button"
+              class={`op-icon-btn op-command-trigger ${showCommands() ? 'active' : ''}`}
               title={t('agent.commands')}
-              class={showCommands() ? 'active' : ''}
+              aria-label={t('agent.commands')}
               onClick={() => setCommandOpen((value) => !value)}
-            />
+            >
+              <span class="op-command-slash">/</span>
+            </button>
           </div>
           <div class="op-composer-actions">
             <Show when={props.busy} fallback={

@@ -1277,20 +1277,13 @@ export const css = `
   color: var(--op-muted);
   font-size: 12px;
 }
-.op-model-button:hover { background: var(--op-hover); color: var(--op-fg); }
+.op-model-button:hover { background: transparent; color: var(--op-fg); }
+.op-app .op-model-button:focus-visible { background: transparent; color: var(--op-fg); outline: none; }
+.op-model-button:active { background: transparent; }
 .op-ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.op-agent {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 30px;
-  padding: 0 6px;
-  border-radius: var(--op-radius);
-  color: var(--op-muted);
-  font-size: 12px;
-  max-width: 160px;
-}
-.op-agent:hover { background: var(--op-hover); }
+.op-select-picker { position: relative; min-width: 0; }
+.op-select-button { max-width: 170px; }
+.op-select-button.wide { max-width: 240px; }
 .op-runtime-agent {
   display: inline-flex;
   align-items: center;
@@ -1319,17 +1312,6 @@ export const css = `
   color: var(--op-fg);
   border-color: var(--op-border);
   background: var(--op-bg);
-}
-.op-agent select {
-  appearance: none;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: inherit;
-  max-width: 112px;
-  padding: 0;
-  font-size: 12px;
-  cursor: pointer;
 }
 .op-send {
   width: 32px;
@@ -1394,6 +1376,16 @@ export const css = `
   border-radius: var(--op-radius);
 }
 .op-config-row:hover { background: var(--op-menu-hover); }
+.op-config-row.selectable {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.op-config-row.selectable.active { background: var(--op-hover); color: var(--op-accent); }
 .op-config-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .op-config-name { font-size: 12px; font-weight: 550; }
 .op-config-desc { color: var(--op-muted); font-size: 10.5px; line-height: 1.35; }
@@ -1461,29 +1453,17 @@ export const css = `
 .op-model-option.active { background: var(--op-hover); color: var(--op-accent); }
 .op-model-option-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .op-command-menu { left: 24px; bottom: calc(100% + 6px); }
-.op-command-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 7px 9px;
-  border-bottom: 1px solid var(--op-menu-border);
+.op-command-head { justify-content: space-between; }
+.op-command-title { display: flex; align-items: center; gap: 6px; }
+.op-command-slash {
+  color: var(--op-accent);
+  font: 600 14px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.op-command-trigger {
   color: var(--op-muted);
-  font-size: 11px;
-  font-weight: 500;
+  font: 600 16px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
-.op-command-list { max-height: 260px; overflow-y: auto; padding: 4px; }
-.op-command-option {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  text-align: left;
-}
-.op-command-option:hover { background: var(--op-menu-hover); }
+.op-command-trigger:hover { background: transparent; color: var(--op-fg); }
 .op-command-name { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: var(--op-accent); }
 .op-command-desc { color: var(--op-muted); font-size: 11px; }
 
@@ -1625,8 +1605,6 @@ export const css = `
   .op-auth { margin: 8px 12px 0; }
   .op-user-bubble { max-width: 88%; }
   .op-model-button { max-width: 160px; }
-  .op-agent { max-width: 120px; }
-  .op-agent select { max-width: 82px; }
 }
 @media (max-width: 680px) {
   .op-popover.op-config-popover {

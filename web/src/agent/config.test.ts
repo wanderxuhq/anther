@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { configChoices, modeStateFromOptions, secondaryConfigOptions } from './config.ts';
+import { configChoices, effortConfigOption, modeStateFromOptions, otherConfigOptions, secondaryConfigOptions } from './config.ts';
 import type { ConfigOption } from './api.ts';
 
 function modeOption(overrides: Partial<ConfigOption> = {}): ConfigOption {
@@ -105,4 +105,16 @@ test('flattens grouped config choices', () => {
     ],
   });
   assert.deepEqual(choices.map((choice) => choice.value), ['medium', 'high']);
+});
+
+test('picks the effort option out of the generic settings', () => {
+  const options: ConfigOption[] = [
+    {
+      id: 'thought_level', name: 'Thought level', category: 'thought_level', type: 'select', currentValue: 'medium',
+      options: [{ value: 'low', name: 'Low' }, { value: 'medium', name: 'Medium' }, { value: 'high', name: 'High' }],
+    },
+    { id: 'brave_mode', name: 'Brave mode', type: 'boolean', currentValue: false },
+  ];
+  assert.equal(effortConfigOption(options)?.id, 'thought_level');
+  assert.deepEqual(otherConfigOptions(options).map((option) => option.id), ['brave_mode']);
 });

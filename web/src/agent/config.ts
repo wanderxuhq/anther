@@ -12,6 +12,24 @@ export function secondaryConfigOptions(options: readonly ConfigOption[] | null |
   });
 }
 
+/** The reasoning-effort style option that gets its own composer button. */
+export function effortConfigOption(options: readonly ConfigOption[] | null | undefined): ConfigOption | undefined {
+  return secondaryConfigOptions(options).find((option) => option.type === 'select' && (
+    option.id === 'thought_level'
+    || option.category === 'thought_level'
+    || /effort/i.test(option.id)
+    || /effort/i.test(option.name)
+    || /thought/i.test(option.id)
+    || /thought/i.test(option.name)
+  ));
+}
+
+/** Session settings that stay in the generic settings popover. */
+export function otherConfigOptions(options: readonly ConfigOption[] | null | undefined): ConfigOption[] {
+  const effort = effortConfigOption(options);
+  return secondaryConfigOptions(options).filter((option) => option.id !== effort?.id);
+}
+
 /** Flatten flat or grouped select choices. */
 export function configChoices(option: ConfigOption): ConfigOptionChoice[] {
   return flattenChoices(option.options);
