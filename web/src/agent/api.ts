@@ -182,6 +182,24 @@ export type TerminalOutput = {
   exitStatus?: TerminalExit;
 };
 
+export type PromptContent =
+  | { type: 'text'; text: string }
+  | { type: 'image'; mimeType: string; data: string; uri?: string }
+  | { type: 'audio'; mimeType: string; data: string }
+  | {
+      type: 'resource_link';
+      uri: string;
+      name: string;
+      mimeType?: string;
+      title?: string;
+      description?: string;
+      size?: number;
+    }
+  | {
+      type: 'resource';
+      resource: { uri: string; mimeType?: string; text?: string; blob?: string };
+    };
+
 export type PermissionRequest = {
   id: string;
   sessionID: string;
@@ -284,8 +302,8 @@ export function createApi(base: string) {
       post<{ data: ConfigOption[] }>('/sessions/config', { sessionID, configID, value }),
     setMode: (sessionID: string, modeID: string) =>
       post<{ modes: AgentModeState }>('/sessions/mode', { sessionID, modeID }),
-    prompt: (sessionID: string, text: string) =>
-      post<{ accepted: boolean }>('/prompt', { sessionID, text }),
+    prompt: (sessionID: string, content: PromptContent[]) =>
+      post<{ accepted: boolean }>('/prompt', { sessionID, content }),
     interrupt: (sessionID: string) => post<unknown>('/interrupt', { sessionID }),
     permissions: (sessionID: string) =>
       request<{ data: PermissionRequest[] }>(`/permissions?sessionID=${encodeURIComponent(sessionID)}`),

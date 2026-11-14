@@ -1,6 +1,7 @@
 // server/routes/agent.ts
 // HTTP/SSE bridge for the built-in ACP agent.
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type * as acp from '@agentclientprotocol/sdk';
 import type { Router } from '../http.ts';
 import type { AcpAgent, AgentEvent } from '../agent.ts';
 import { HttpError } from '../http-error.ts';
@@ -12,6 +13,69 @@ function required(value: unknown, name: string): string {
 
 function record(body: unknown): Record<string, unknown> {
   return body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
+}
+
+function contentBlocks(value: unknown): acp.ContentBlock[] {
+  if (!Array.isArray(value) || value.length === 0) throw new HttpError(400, 'content is required');
+  if (value.length > 20) throw new HttpError(400, 'too many content blocks');
+  return value.map((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new HttpError(400, 'invalid content block');
+    }
+    const block = entry as Record<string, unknown>;
+    if (block.type === 'text') {
+      if (typeof block.text !== 'string' || block.text.trim() === '') {
+        throw new HttpError(400, 'text content is required');
+      }
+      return { type: 'text', text: block.text };
+    }
+    if (block.type === 'image' || block.type === 'audio') {
+      if (typeof block.mimeType !== 'string' || typeof block.data !== 'string' || block.data === '') {
+        throw new HttpError(400, `${block.type} content requires mimeType and data`);
+      }
+      return {
+        type: block.type,
+        mimeType: block.mimeType,
+        data: block.data,
+        ...(block.type === 'image' && typeof block.uri === 'string' ? { uri: block.uri } : {}),
+      };
+    }
+    if (block.type === 'resource_link') {
+      if (typeof block.uri !== 'string' || typeof block.name !== 'string') {
+        throw new HttpError(400, 'resource_link content requires uri and name');
+      }
+      return {
+        type: 'resource_link',
+        uri: block.uri,
+        name: block.name,
+        ...(typeof block.mimeType === 'string' ? { mimeType: block.mimeType } : {}),
+        ...(typeof block.title === 'string' ? { title: block.title } : {}),
+        ...(typeof block.description === 'string' ? { description: block.description } : {}),
+        ...(typeof block.size === 'number' ? { size: block.size } : {}),
+      };
+    }
+    if (block.type === 'resource') {
+      const resource = block.resource;
+      if (!resource || typeof resource !== 'object' || Array.isArray(resource)) {
+        throw new HttpError(400, 'resource content requires resource');
+      }
+      const value = resource as Record<string, unknown>;
+      if (typeof value.uri !== 'string'
+        || (typeof value.text !== 'string' && typeof value.blob !== 'string')) {
+        throw new HttpError(400, 'resource content requires uri and text/blob');
+      }
+      return {
+        type: 'resource',
+        resource: {
+          uri: value.uri,
+          ...(typeof value.mimeType === 'string' ? { mimeType: value.mimeType } : {}),
+          ...(typeof value.text === 'string' ? { text: value.text } : {}),
+          ...(typeof value.blob === 'string' ? { blob: value.blob } : {}),
+        },
+      };
+    }
+    throw new HttpError(400, 'unsupported content block');
+  }) as acp.ContentBlock[];
 }
 
 function send(res: ServerResponse, event: AgentEvent): void {
@@ -91,7 +155,10 @@ export function registerAgentRoutes(router: Router, agent: AcpAgent): void {
 
   router.post('/_/agent/api/prompt', async (_req, body) => {
     const input = record(body);
-    return agent.prompt(required(input.sessionID, 'sessionID'), required(input.text, 'text'));
+    const content = input.content === undefined
+      ? [{ type: 'text' as const, text: required(input.text, 'text') }]
+      : contentBlocks(input.content);
+    return agent.prompt(required(input.sessionID, 'sessionID'), content);
   });
   router.post('/_/agent/api/interrupt', async (_req, body) => {
     const input = record(body);

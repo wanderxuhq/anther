@@ -55,6 +55,8 @@ test('t：Agent 面板静态文案在中英文都存在', () => {
   assert.equal(t('agent.planProgress', { done: 1, total: 3 }), '1/3 done');
   assert.equal(t('agent.sessionSettings'), 'Settings');
   assert.equal(t('agent.noPermissionOptions'), 'The agent did not provide permission options.');
+  assert.equal(t('agent.attach'), 'Attach files');
+  assert.equal(t('agent.richImage'), 'Attached image');
   setLang('zh');
   assert.equal(t('agent.newChat'), '新会话');
   assert.equal(t('agent.empty.title'), '需要我做什么？');
@@ -67,4 +69,6 @@ test('t：Agent 面板静态文案在中英文都存在', () => {
   assert.equal(t('agent.planProgress', { done: 1, total: 3 }), '1/3 已完成');
   assert.equal(t('agent.sessionSettings'), '设置');
   assert.equal(t('agent.noPermissionOptions'), 'Agent 没有提供权限选项。');
+  assert.equal(t('agent.attach'), '添加附件');
+  assert.equal(t('agent.richImage'), '附加图片');
 });

@@ -45,6 +45,7 @@ A mobile-first, browser-based web IDE. Run one stateless Node process in a proje
 - Tool cards, diffs, Markdown, permissions, ACP elicitation forms, model selection, fork/delete, and streaming replies are rendered by anther.
 - Built-in Skills installer (toolbar puzzle icon) backed by `vercel-labs/skills`: preview a GitHub/git/local source, pick skills and target ACP agents, then install or remove them. Telemetry is disabled.
 - ACP client filesystem and terminal capabilities: agents can read/write workspace text files and run non-interactive commands, with live terminal output in tool cards. Agent authentication methods are surfaced in the panel.
+- Rich ACP content: images, audio, resource links, and embedded resources render in messages and tool cards. The composer can attach images, audio, and files, gated by the agent's prompt capabilities.
 
 **Workspaces and navigation**
 
@@ -153,6 +154,14 @@ through the ACP terminal bridge; live output appears inside the tool card.
 Filesystem paths are confined to the workspace. Terminal commands run with the
 server user's permissions; their requested `cwd` is resolved and checked against
 the workspace, but the commands themselves are not sandboxed.
+
+Rich ACP content blocks are rendered in user messages, agent messages, and tool
+cards: images, audio, resource links, and embedded text/blob resources. The
+composer can attach images, audio, and files. Image/audio attachments are only
+offered when the agent advertises the matching prompt capability; text files are
+embedded when `embeddedContext` is supported and otherwise sent as resource
+links. Attachments are kept under the JSON body limit. `@file` workspace
+mentions are not implemented yet.
 
 Agent authentication methods from `initialize.authMethods` are surfaced in the
 panel. Agent-type methods can be completed in place, and logout is available

@@ -539,13 +539,13 @@ export class AgentRuntime {
     }
   }
 
-  async prompt(sessionID: string, text: string): Promise<{ accepted: true }> {
+  async prompt(sessionID: string, content: acp.ContentBlock[]): Promise<{ accepted: true }> {
     const ctx = await this.ensure();
     this.busy.add(sessionID);
     this.emit({ type: 'busy', sessionID, busy: true });
     const run = ctx.request(acp.methods.agent.session.prompt, {
       sessionId: sessionID,
-      prompt: [{ type: 'text', text }],
+      prompt: content,
     });
     void run.then((result) => {
       this.emit({ type: 'prompt_done', sessionID, stopReason: result.stopReason, usage: (result as { usage?: unknown }).usage });
@@ -946,7 +946,7 @@ export class AcpAgent {
   async session(id: string) { return (await this.ensureActive()).session(id); }
   async createSession() { return (await this.ensureActive()).createSession(); }
   async messages(id: string) { return (await this.ensureActive()).messages(id); }
-  async prompt(sessionID: string, text: string) { return (await this.ensureActive()).prompt(sessionID, text); }
+  async prompt(sessionID: string, content: acp.ContentBlock[]) { return (await this.ensureActive()).prompt(sessionID, content); }
   async cancel(sessionID: string) { return (await this.ensureActive()).cancel(sessionID); }
   async authenticate(methodID: string) {
     const runtime = await this.ensureActive();

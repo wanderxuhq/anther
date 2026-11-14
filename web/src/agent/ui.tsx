@@ -54,6 +54,13 @@ import type { FeatureTabPatch } from '../feature-types.ts';
 import { t, lang } from '../i18n.ts';
 import { stripTerminalControl, terminalIdsFromContent } from './terminal.ts';
 import { planEntries, upsertPlan, type PlanEntry, type PlanItem } from './plan.ts';
+import { richContent, type RichContent } from './content.ts';
+import {
+  prepareAttachment,
+  promptContentForAttachment,
+  type PromptAttachment,
+  type PromptCapabilities,
+} from './attachment.ts';
 import { configChoices, modeStateFromOptions, secondaryConfigOptions } from './config.ts';
 import { css } from './styles.ts';
 
@@ -100,6 +107,7 @@ type ToolItem = {
   input: string;
   inputObject?: unknown;
   content: string;
+  rich: RichContent[];
   terminalIds: string[];
   files: ToolFile[];
   metadata?: Record<string, unknown>;
@@ -118,6 +126,7 @@ type AssistantItem = {
   id: string;
   text: string;
   reasoning: string;
+  rich: RichContent[];
   tools: ToolItem[];
   time: number;
   model?: string;
@@ -127,7 +136,7 @@ type AssistantItem = {
   streaming: boolean;
 };
 type ChatItem =
-  | { kind: 'user'; id: string; text: string; time: number }
+  | { kind: 'user'; id: string; text: string; rich: RichContent[]; time: number }
   | AssistantItem
   | PlanItem
   | { kind: 'system'; id: string; text: string; textKey?: string; textParams?: Record<string, string | number>; tone: 'info' | 'error' | 'retry' | 'compaction'; time: number };
@@ -258,6 +267,18 @@ function terminalExitLabel(status: TerminalExit): string {
   return t('agent.terminalExited');
 }
 
+function acpToolRich(content: any): RichContent[] {
+  if (!Array.isArray(content)) return [];
+  const rich: RichContent[] = [];
+  for (const part of content) {
+    if (part?.type === 'content') {
+      const value = richContent(part.content);
+      if (value) rich.push(value);
+    }
+  }
+  return rich;
+}
+
 function acpToolStatus(status: unknown): ToolStatus {
   if (status === 'pending') return 'streaming';
   if (status === 'in_progress') return 'running';
@@ -273,6 +294,7 @@ function acpTool(update: any): ToolItem {
     input: stringify(update.rawInput),
     inputObject: update.rawInput,
     content: acpToolText(update.content),
+    rich: acpToolRich(update.content),
     terminalIds: terminalIdsFromContent(update.content),
     files: acpToolFiles(update.content, update.locations),
     metadata: update.rawOutput,
@@ -284,7 +306,7 @@ function normalizeHistory(updates: any[]): ChatItem[] {
   const toolOwners = new Map<string, ToolItem>();
   let assistant: AssistantItem | null = null;
   let assistantID: string | null = null;
-  let user: { kind: 'user'; id: string; text: string; time: number } | null = null;
+  let user: { kind: 'user'; id: string; text: string; rich: RichContent[]; time: number } | null = null;
   let userID: string | null = null;
 
   const ensureAssistant = (id?: string): AssistantItem => {
@@ -294,6 +316,7 @@ function normalizeHistory(updates: any[]): ChatItem[] {
         id: id || nextID('assistant'),
         text: '',
         reasoning: '',
+        rich: [],
         tools: [],
         time: Date.now(),
         streaming: false,
@@ -311,22 +334,26 @@ function normalizeHistory(updates: any[]): ChatItem[] {
         const id = String(update.messageId ?? nextID('user'));
         const text = acpContentText(update.content);
         if (!user || (userID && id !== userID)) {
-          user = { kind: 'user', id, text: '', time: Date.now() };
+          user = { kind: 'user', id, text: '', rich: [], time: Date.now() };
           userID = id;
           out.push(user);
           assistant = null;
           assistantID = null;
         }
         user.text += text;
+        const rich = richContent(update.content);
+        if (rich) user.rich.push(rich);
         break;
       }
       case 'agent_message_chunk': {
         user = null;
         userID = null;
         const text = acpContentText(update.content);
-        if (!text) break;
+        const rich = richContent(update.content);
+        if (!text && !rich) break;
         const item = ensureAssistant(String(update.messageId ?? '').replace(/:reasoning:\d+$/, '') || undefined);
-        item.text += text;
+        if (text) item.text += text;
+        if (rich) item.rich.push(rich);
         break;
       }
       case 'agent_thought_chunk': {
@@ -360,6 +387,7 @@ function normalizeHistory(updates: any[]): ChatItem[] {
           if (update.name !== undefined) tool.name = String(update.name ?? tool.name);
           if (update.content !== undefined) {
             tool.content = acpToolText(update.content);
+            tool.rich = acpToolRich(update.content);
             tool.terminalIds = terminalIdsFromContent(update.content);
           }
           if (update.locations !== undefined) tool.files = acpToolFiles(update.content, update.locations);
@@ -413,7 +441,7 @@ function normalizeHistory(updates: any[]): ChatItem[] {
         break;
     }
   }
-  return out.filter((item) => item.kind !== 'assistant' || item.text || item.reasoning || item.tools.length || item.usage || item.error);
+  return out.filter((item) => item.kind !== 'assistant' || item.text || item.reasoning || item.rich.length || item.tools.length || item.usage || item.error);
 }
 
 function sessionTitle(session: Session | null): string {
@@ -824,6 +852,8 @@ function Composer(props: {
   modes: AgentModeState | null;
   configOptions: ConfigOption[];
   configBusy: boolean;
+  attachments: PromptAttachment[];
+  attachmentBusy: boolean;
   commands: Command[];
   disabled: boolean;
   onDraft: (value: string) => void;
@@ -832,10 +862,13 @@ function Composer(props: {
   onModel: (model: Model) => void;
   onMode: (modeID: string) => void;
   onConfig: (configID: string, value: string | boolean) => void;
+  onAttach: (files: FileList | File[]) => void;
+  onRemoveAttachment: (id: string) => void;
   onCommand: (command: Command) => void;
   onResume: () => void;
 }) {
   let textarea!: HTMLTextAreaElement;
+  let fileInput!: HTMLInputElement;
   const [commandOpen, setCommandOpen] = createSignal(false);
   const commands = createMemo(() => [
     { name: 'resume', description: t('agent.resumeCommand') },
@@ -896,6 +929,47 @@ function Composer(props: {
         />
       </Show>
       <div class="op-composer-box">
+        <input
+          ref={fileInput}
+          class="op-file-input"
+          type="file"
+          multiple
+          onChange={(event) => {
+            const files = event.currentTarget.files;
+            if (files?.length) props.onAttach(files);
+            event.currentTarget.value = '';
+          }}
+        />
+        <Show when={props.attachments.length > 0}>
+          <div class="op-attachments">
+            <For each={props.attachments}>
+              {(attachment) => (
+                <div class="op-attachment" title={attachment.name}>
+                  <Show
+                    when={attachment.kind === 'image' && attachment.data}
+                    fallback={<span class="op-attachment-icon"><Icon name="file" size={13} /></span>}
+                  >
+                    <img
+                      class="op-attachment-thumb"
+                      src={`data:${attachment.mimeType};base64,${attachment.data}`}
+                      alt={attachment.name}
+                    />
+                  </Show>
+                  <span class="op-attachment-name">{attachment.name}</span>
+                  <button
+                    type="button"
+                    class="op-attachment-remove"
+                    title={t('agent.removeAttachment')}
+                    aria-label={t('agent.removeAttachment')}
+                    onClick={() => props.onRemoveAttachment(attachment.id)}
+                  >
+                    <Icon name="x" size={12} />
+                  </button>
+                </div>
+              )}
+            </For>
+          </div>
+        </Show>
         <textarea
           ref={textarea}
           class="op-textarea"
@@ -907,6 +981,13 @@ function Composer(props: {
             props.onDraft(event.currentTarget.value);
             resize();
           }}
+          onPaste={(event) => {
+            const files = event.clipboardData?.files;
+            if (files?.length) {
+              event.preventDefault();
+              props.onAttach(files);
+            }
+          }}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
               event.preventDefault();
@@ -917,6 +998,18 @@ function Composer(props: {
         />
         <div class="op-composer-bar">
           <div class="op-composer-tools">
+            <button
+              type="button"
+              class="op-icon-btn"
+              title={t('agent.attach')}
+              aria-label={t('agent.attach')}
+              disabled={props.disabled || props.attachmentBusy}
+              onClick={() => fileInput.click()}
+            >
+              <Show when={props.attachmentBusy} fallback={<Icon name="paperclip" size={15} />}>
+                <Spinner size={12} />
+              </Show>
+            </button>
             <ModelPicker
               models={props.models}
               providers={props.providers}
@@ -943,7 +1036,7 @@ function Composer(props: {
               <button
                 type="button"
                 class="op-send"
-                disabled={props.disabled || !props.draft.trim()}
+                disabled={props.disabled || (!props.draft.trim() && props.attachments.length === 0)}
                 onClick={submit}
                 title={t('agent.send')}
               >
@@ -1029,6 +1122,7 @@ function ToolCard(props: { tool: ToolItem; onCopy: (text: string) => void; termi
             </Show>
           </div>
         </Show>
+        <RichContentList items={props.tool.rich} />
         <Show when={props.tool.terminalIds.length > 0}>
           <div class="op-tool-terminals">
             <For each={props.tool.terminalIds}>
@@ -1264,6 +1358,107 @@ function FormCard(props: {
   );
 }
 
+function richFileName(uri: string): string {
+  try {
+    const path = decodeURIComponent(new URL(uri).pathname);
+    return path.split('/').filter(Boolean).pop() || uri;
+  } catch {
+    return uri.split('/').filter(Boolean).pop() || uri;
+  }
+}
+
+function RichContentView(props: { item: RichContent }) {
+  const item = props.item;
+  if (item.type === 'image') {
+    return (
+      <img
+        class="op-rich-image"
+        src={`data:${item.mimeType};base64,${item.data}`}
+        alt={t('agent.richImage')}
+        loading="lazy"
+      />
+    );
+  }
+  if (item.type === 'audio') {
+    return (
+      <audio
+        class="op-rich-audio"
+        controls
+        preload="metadata"
+        src={`data:${item.mimeType};base64,${item.data}`}
+      />
+    );
+  }
+  if (item.type === 'resource_link') {
+    return (
+      <div class="op-rich-file" title={item.uri}>
+        <Icon name="file" size={14} />
+        <div class="op-rich-file-main">
+          <span class="op-rich-file-name">{item.title || item.name}</span>
+          <span class="op-rich-file-uri">{item.uri}</span>
+        </div>
+        <Show when={typeof item.size === 'number'}>
+          <span class="op-rich-file-size">{item.size} B</span>
+        </Show>
+      </div>
+    );
+  }
+  const name = richFileName(item.uri);
+  if (item.text !== undefined) {
+    return (
+      <details class="op-rich-resource">
+        <summary>
+          <Icon name="file" size={13} />
+          <span>{name}</span>
+          <span class="op-rich-file-uri">{item.uri}</span>
+        </summary>
+        <pre class="op-rich-text">{item.text}</pre>
+      </details>
+    );
+  }
+  if (item.blob && item.mimeType?.startsWith('image/')) {
+    return (
+      <img
+        class="op-rich-image"
+        src={`data:${item.mimeType};base64,${item.blob}`}
+        alt={t('agent.richImage')}
+        loading="lazy"
+      />
+    );
+  }
+  if (item.blob && item.mimeType?.startsWith('audio/')) {
+    return (
+      <audio
+        class="op-rich-audio"
+        controls
+        preload="metadata"
+        src={`data:${item.mimeType};base64,${item.blob}`}
+      />
+    );
+  }
+  return (
+    <div class="op-rich-file" title={item.uri}>
+      <Icon name="file" size={14} />
+      <div class="op-rich-file-main">
+        <span class="op-rich-file-name">{t('agent.richBlob')}</span>
+        <span class="op-rich-file-uri">{item.uri}</span>
+      </div>
+    </div>
+  );
+}
+
+function RichContentList(props: { items?: RichContent[] }) {
+  return (
+    <Show when={props.items && props.items.length > 0}>
+      <div class="op-rich-list">
+        <For each={props.items}>
+          {(item) => <RichContentView item={item} />}
+        </For>
+      </div>
+    </Show>
+  );
+}
+
 function PlanStatusIcon(props: { status: PlanEntry['status'] }) {
   if (props.status === 'completed') return <Icon name="check" size={12} />;
   if (props.status === 'in_progress') return <Spinner size={11} />;
@@ -1313,7 +1508,10 @@ function MessageItem(props: {
     const user = props.item;
     return (
       <div class="op-message op-user">
-        <div class="op-user-bubble">{user.text}</div>
+        <div class="op-user-bubble">
+          {user.text}
+          <RichContentList items={user.rich} />
+        </div>
         <div class="op-message-foot">
           <span>{formatRelative(user.time)}</span>
           <IconButton icon="copy" title={t('agent.copyMessage')} onClick={() => props.onCopy(user.text)} />
@@ -1365,6 +1563,7 @@ function MessageItem(props: {
       <Show when={item().text}>
         <MarkdownText text={item().text} />
       </Show>
+      <RichContentList items={item().rich} />
       <Show when={item().tools.length > 0}>
         <div class="op-tools">
           <Index each={item().tools}>
@@ -1381,7 +1580,7 @@ function MessageItem(props: {
           </div>
         </div>
       </Show>
-      <Show when={!item().streaming && !item().text && !item().reasoning && item().tools.length === 0 && !item().error}>
+      <Show when={!item().streaming && !item().text && !item().reasoning && item().rich.length === 0 && item().tools.length === 0 && !item().error}>
         <div class="op-message-empty">{t('agent.noResponse')}</div>
       </Show>
     </div>
@@ -2144,6 +2343,8 @@ function App(props: {
   const [defaultConfigOptions, setDefaultConfigOptions] = createSignal<ConfigOption[]>([]);
   const [draftSessionID, setDraftSessionID] = createSignal<string | null>(null);
   const [configBusy, setConfigBusy] = createSignal(false);
+  const [attachments, setAttachments] = createSignal<PromptAttachment[]>([]);
+  const [attachmentBusy, setAttachmentBusy] = createSignal(false);
   const [draft, setDraft] = createSignal('');
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
@@ -2186,6 +2387,8 @@ function App(props: {
     const auth = capabilities()?.auth as { logout?: unknown } | undefined;
     return !!auth?.logout;
   });
+  const promptCapabilities = createMemo<PromptCapabilities>(() =>
+    (capabilities()?.promptCapabilities as PromptCapabilities | undefined) ?? {});
   onMount(() => {
     void initialize();
     const onKey = (event: KeyboardEvent) => {
@@ -2386,6 +2589,8 @@ function App(props: {
       setSelectedModel(null);
       setModes(null);
       setTerminalOutputs({});
+      setAttachments([]);
+      setAttachmentBusy(false);
       setDefaultModes(null);
       setDefaultConfigOptions([]);
       setDraftSessionID(null);
@@ -2639,23 +2844,32 @@ function App(props: {
 
   async function send(): Promise<void> {
     const text = draft().trim();
-    if (!text || currentBusy() || switchingAgent()) return;
+    const attached = attachments();
+    if ((!text && attached.length === 0) || currentBusy() || switchingAgent()) return;
     let id = currentID();
     if (!id) {
       const session = await createSession();
       id = session?.id ?? null;
     }
     if (!id) return;
+    const content = [
+      ...(text ? [{ type: 'text' as const, text }] : []),
+      ...attached.map((attachment) =>
+        promptContentForAttachment(attachment, promptCapabilities().embeddedContext === true)),
+    ];
     setDraft('');
+    setAttachments([]);
     setError(null);
     setBusy(true);
     const localID = nextID('user');
     const updates = updatesBySession.get(id) ?? [];
-    updates.push({ sessionUpdate: 'user_message_chunk', messageId: localID, content: { type: 'text', text } });
+    for (const block of content) {
+      updates.push({ sessionUpdate: 'user_message_chunk', messageId: localID, content: block });
+    }
     updatesBySession.set(id, updates);
     setItems(normalizeHistory(updates));
     try {
-      await props.api.prompt(id, text);
+      await props.api.prompt(id, content);
     } catch (error) {
       setBusy(false);
       setError(formatError(error));
@@ -2774,6 +2988,43 @@ function App(props: {
       setModes(current);
       showToast(formatError(error), true);
     }
+  }
+
+  async function addAttachments(files: FileList | File[]): Promise<void> {
+    if (attachmentBusy()) return;
+    setAttachmentBusy(true);
+    try {
+      const caps = promptCapabilities();
+      const current = attachments();
+      const next: PromptAttachment[] = [];
+      let total = current.reduce((sum, item) => sum + (item.data?.length ?? 0) + (item.text?.length ?? 0), 0);
+      for (const file of [...files]) {
+        if (current.length + next.length >= 6) {
+          showToast(t('agent.attachmentLimit'), true);
+          break;
+        }
+        const result = await prepareAttachment(file, caps);
+        if (result.error) {
+          showToast(t(`agent.attachment.${result.error}`), true);
+          continue;
+        }
+        if (!result.attachment) continue;
+        const size = (result.attachment.data?.length ?? 0) + (result.attachment.text?.length ?? 0);
+        if (total + size > 900_000) {
+          showToast(t('agent.attachmentTooLarge'), true);
+          continue;
+        }
+        total += size;
+        next.push(result.attachment);
+      }
+      if (next.length) setAttachments([...current, ...next]);
+    } finally {
+      setAttachmentBusy(false);
+    }
+  }
+
+  function removeAttachment(id: string): void {
+    setAttachments((prev) => prev.filter((attachment) => attachment.id !== id));
   }
 
   async function changeConfig(configID: string, value: string | boolean): Promise<void> {
@@ -3109,6 +3360,8 @@ function App(props: {
                 modes={currentSession() ? modes() : defaultModes()}
                 configOptions={currentSession()?.configOptions ?? defaultConfigOptions()}
                 configBusy={configBusy()}
+                attachments={attachments()}
+                attachmentBusy={attachmentBusy()}
                 commands={commands()}
                 disabled={!ready() || switchingAgent() || authBlocked()}
                 onDraft={setDraft}
@@ -3117,6 +3370,8 @@ function App(props: {
                 onModel={(model) => void changeModel(model)}
                 onMode={(modeID) => void changeMode(modeID)}
                 onConfig={(configID, value) => void changeConfig(configID, value)}
+                onAttach={(files) => void addAttachments(files)}
+                onRemoveAttachment={removeAttachment}
                 onCommand={(command) => setDraft(`/${command.name} `)}
                 onResume={openResume}
               />

@@ -120,7 +120,7 @@ test('replies with the selected ACP permission option id', async () => {
     });
   });
 
-  await runtime.prompt(session.id, 'ask for permission');
+  await runtime.prompt(session.id, [{ type: 'text', text: 'ask for permission' }]);
   const request = await seen;
   assert.ok(permission);
   await assert.rejects(runtime.replyPermission(request.id, 'missing-opt'), /Unknown permission option/);

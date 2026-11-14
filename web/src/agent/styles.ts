@@ -619,6 +619,87 @@ export const css = `
   word-break: break-word;
   line-height: 1.55;
 }
+.op-rich-list { display: flex; flex-direction: column; gap: 7px; margin-top: 8px; }
+.op-user-bubble .op-rich-list { margin-top: 9px; }
+.op-user-bubble .op-rich-file,
+.op-user-bubble .op-rich-resource {
+  border-color: rgba(255, 255, 255, .28);
+  background: rgba(255, 255, 255, .12);
+  color: #fff;
+}
+.op-user-bubble .op-rich-file > svg,
+.op-user-bubble .op-rich-resource summary > svg { color: rgba(255, 255, 255, .8); }
+.op-user-bubble .op-rich-file-uri,
+.op-user-bubble .op-rich-file-size { color: rgba(255, 255, 255, .68); }
+.op-user-bubble .op-rich-text {
+  border-color: rgba(255, 255, 255, .22);
+  background: rgba(0, 0, 0, .12);
+  color: #fff;
+}
+.op-rich-image {
+  display: block;
+  align-self: flex-start;
+  width: auto;
+  height: auto;
+  max-width: min(100%, 640px);
+  max-height: 420px;
+  object-fit: contain;
+  border: 1px solid var(--op-border);
+  border-radius: var(--op-radius);
+  background: color-mix(in srgb, var(--op-muted) 6%, transparent);
+}
+.op-rich-audio { display: block; align-self: flex-start; width: min(480px, 100%); height: 36px; }
+.op-rich-file {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--op-border);
+  border-radius: var(--op-radius);
+  background: color-mix(in srgb, var(--op-muted) 4%, transparent);
+  color: var(--op-fg);
+}
+.op-rich-file > svg { flex: 0 0 auto; color: var(--op-muted); }
+.op-rich-file-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.op-rich-file-name { font-size: 11.5px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.op-rich-file-uri {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--op-muted);
+  font: 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.op-rich-file-size { flex: 0 0 auto; color: var(--op-muted); font-size: 10px; }
+.op-rich-resource {
+  border: 1px solid var(--op-border);
+  border-radius: var(--op-radius);
+  background: color-mix(in srgb, var(--op-muted) 4%, transparent);
+  overflow: hidden;
+}
+.op-rich-resource summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  cursor: pointer;
+  color: var(--op-fg);
+  font-size: 11.5px;
+  list-style: none;
+}
+.op-rich-resource summary::-webkit-details-marker { display: none; }
+.op-rich-resource summary > svg { flex: 0 0 auto; color: var(--op-muted); }
+.op-rich-text {
+  margin: 0;
+  max-height: 300px;
+  overflow: auto;
+  padding: 8px;
+  border-top: 1px solid var(--op-border);
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .op-message-foot {
   display: flex;
   align-items: center;
@@ -974,6 +1055,47 @@ export const css = `
   padding: 10px 24px 14px;
   background: var(--op-bg);
 }
+.op-file-input { display: none; }
+.op-attachments { display: flex; flex-wrap: wrap; gap: 6px; padding: 9px 10px 0; }
+.op-attachment {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 230px;
+  min-width: 0;
+  padding: 4px 5px 4px 4px;
+  border: 1px solid var(--op-border);
+  border-radius: var(--op-radius);
+  background: color-mix(in srgb, var(--op-muted) 5%, transparent);
+}
+.op-attachment-thumb { width: 26px; height: 26px; object-fit: cover; border-radius: 4px; flex: 0 0 auto; }
+.op-attachment-icon {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  color: var(--op-muted);
+  background: color-mix(in srgb, var(--op-muted) 10%, transparent);
+}
+.op-attachment-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.op-attachment-remove {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  padding: 1px;
+  border: 0;
+  background: transparent;
+  color: var(--op-muted);
+}
+.op-attachment-remove:hover { color: var(--op-danger); }
 .op-composer-box {
   max-width: 920px;
   margin: 0 auto;

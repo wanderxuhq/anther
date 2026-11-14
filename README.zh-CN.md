@@ -45,6 +45,7 @@
 - 工具卡、diff、Markdown、权限、ACP elicitation 表单、模型选择、fork/delete 和流式回复都由 anther 渲染。
 - 内置技能安装器（工具栏拼图图标），基于 `vercel-labs/skills`：预览 GitHub/Git/本地来源，选择技能和目标 ACP agent，然后安装或移除。遥测已关闭。
 - 支持 ACP 客户端文件系统和终端能力：agent 可以读写工作区文本文件、运行非交互命令，终端输出会实时显示在工具卡片里。Agent 的认证方式也会显示在面板中。
+- 支持 ACP 富内容：图片、音频、resource link 和嵌入资源会显示在消息和工具卡片中。输入框可以附加图片、音频和文件，并根据 agent 的 prompt capability 自动限制。
 
 **多工作区与导航**
 
@@ -140,6 +141,12 @@ anther 会广告 ACP 的 `fs` 和 `terminal` 客户端能力。agent 可以读�
 文本文件，也可以通过 ACP 终端桥运行非交互命令，输出会实时显示在工具卡片中。
 文件路径会被限制在工作区内。终端命令以服务端用户的权限运行；请求的 `cwd` 会被
 解析并校验在工作区内，但命令本身没有沙箱隔离。
+
+ACP 富内容块会显示在用户消息、agent 消息和工具卡片中，包括图片、音频、
+resource link 以及嵌入的文本/二进制资源。输入框可以附加图片、音频和文件。
+只有在 agent 声明对应 prompt capability 时才会提供图片/音频附件；文本文件在支持
+`embeddedContext` 时以嵌入资源发送，否则发送 resource link。附件大小受 JSON
+请求体上限约束。`@file` 工作区提及暂未实现。
 
 `initialize.authMethods` 返回的认证方式会显示在面板中。agent 类型的认证可以直接
 在面板里完成；如果 agent 支持 logout，工具栏会显示退出登录。terminal 类型的认证

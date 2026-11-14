@@ -92,7 +92,7 @@ test('kills ACP terminals when the agent process exits unexpectedly', async () =
   const status = await runtime.status();
   assert.equal(status.ready, true);
   const session = await runtime.createSession();
-  await runtime.prompt(session.id, 'start the terminal then exit');
+  await runtime.prompt(session.id, [{ type: 'text', text: 'start the terminal then exit' }]);
   await new Promise((resolve) => setTimeout(resolve, 1200));
   await assert.rejects(access(marker), { code: 'ENOENT' });
 });

@@ -111,7 +111,7 @@ test('caches mode and config updates from the agent', async () => {
     timer = setTimeout(() => reject(new Error('timed out waiting for ACP state updates')), 5000);
   });
   try {
-    await runtime.prompt(session.id, 'update yourself');
+    await runtime.prompt(session.id, [{ type: 'text', text: 'update yourself' }]);
     await Promise.race([done, timeout]);
   } finally {
     if (timer) clearTimeout(timer);
