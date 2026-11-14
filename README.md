@@ -175,7 +175,10 @@ git URL, or a local path inside the workspace, preview the discovered skills, ch
 install for (OpenCode uses `.agents/skills`, Command Code uses
 `.commandcode/skills`), and install. Installed skills can be removed from the
 same panel. Installs use strict duplicate/symlink checks, copy files into each
-target, update `skills-lock.json`, and disable telemetry.
+target, update `skills-lock.json`, and disable telemetry. Installed skills also
+appear in the `/` menu as `/skill:<id>`; picking one inserts an `@<id>` mention
+(OpenCode V2's skill attachment syntax), and `/skill:<id> <task>` sends it
+directly.
 
 anther advertises the ACP `fs` and `terminal` client capabilities. Agents can
 read and write text files inside the workspace, and run non-interactive commands

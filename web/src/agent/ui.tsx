@@ -65,6 +65,7 @@ import {
   type PromptCapabilities,
 } from './attachment.ts';
 import { loadMcpServers, mcpStorageKey, parseKeyValueLines, parseLines, storeMcpServers } from './mcp.ts';
+import { skillCommands, skillMention, skillSlashInput, type SkillCommand } from './skill-command.ts';
 import { MAX_SYSTEM_PROMPT, loadSystemPrompt, storeSystemPrompt, systemPromptStorageKey } from './system-prompt.ts';
 import {
   applyCompactionChunk,
@@ -857,10 +858,12 @@ function AgentPicker(props: {
   );
 }
 
+type ComposerCommand = Command & { skill?: string };
+
 function CommandMenu(props: {
-  commands: Command[];
+  commands: ComposerCommand[];
   query: string;
-  onPick: (command: Command) => void;
+  onPick: (command: ComposerCommand) => void;
   onClose: () => void;
 }) {
   const filtered = createMemo(() => {
@@ -908,6 +911,7 @@ function Composer(props: {
   attachmentBusy: boolean;
   commands: Command[];
   localCommands: Command[];
+  skills: InstalledSkill[];
   disabled: boolean;
   onDraft: (value: string) => void;
   onSend: () => void;
@@ -925,13 +929,19 @@ function Composer(props: {
   let fileInput!: HTMLInputElement;
   const [commandOpen, setCommandOpen] = createSignal(false);
   const local = createMemo(() => props.localCommands);
+  const skillList = createMemo<SkillCommand[]>(() => skillCommands(props.skills, t('agent.useSkill')));
   const isLocal = (name: string): boolean => name === 'resume'
     || local().some((command) => command.name === name);
-  const commands = createMemo(() => {
-    const names = new Set(['resume', ...local().map((command) => command.name)]);
+  const commands = createMemo<ComposerCommand[]>(() => {
+    const names = new Set([
+      'resume',
+      ...local().map((command) => command.name),
+      ...skillList().map((command) => command.name),
+    ]);
     return [
       { name: 'resume', description: t('agent.resumeCommand') },
       ...local(),
+      ...skillList(),
       ...props.commands.filter((command) => !names.has(command.name)),
     ];
   });
@@ -963,6 +973,14 @@ function Composer(props: {
 
   function submit() {
     const value = props.draft.trim();
+    const skill = skillSlashInput(value, props.skills);
+    if (skill) {
+      props.onDraft(skillMention(skill.name, skill.task));
+      setCommandOpen(false);
+      if (skill.task && !props.busy && !props.disabled) props.onSend();
+      else textarea?.focus();
+      return;
+    }
     if (value.startsWith('/') && !value.includes(' ')) {
       const name = value.slice(1);
       if (isLocal(name)) {
@@ -975,7 +993,14 @@ function Composer(props: {
     setCommandOpen(false);
   }
 
-  function pickCommand(command: Command) {
+  function pickCommand(command: ComposerCommand) {
+    if (command.skill) {
+      props.onDraft(skillMention(command.skill));
+      setCommandOpen(false);
+      textarea?.focus();
+      resize();
+      return;
+    }
     if (isLocal(command.name)) {
       runLocal(command.name);
       return;
@@ -2861,6 +2886,7 @@ function App(props: {
   const [resumeOpen, setResumeOpen] = createSignal(false);
   const [skillsOpen, setSkillsOpen] = createSignal(false);
   const [agentPickerOpen, setAgentPickerOpen] = createSignal(false);
+  const [installedSkills, setInstalledSkills] = createSignal<InstalledSkill[]>([]);
   const currentModelLabel = createMemo(() => modelLabel(selectedModel()));
   const authBlocked = createMemo(() => !authenticated() && (authRequired() || authMethods().length > 0));
   const showAuth = createMemo(() => authBlocked() && !authDismissed());
@@ -3074,13 +3100,15 @@ function App(props: {
         connect();
         return;
       }
-      const [modelList, providerList, commandList, sessionList] = await Promise.all([
+      const [modelList, providerList, commandList, sessionList, skillList] = await Promise.all([
         props.api.models(),
         props.api.providers(),
         props.api.commands(),
         props.api.sessions(),
+        props.api.skills().catch(() => ({ skills: [] })),
       ]);
       if (disposed) return;
+      setInstalledSkills(skillList.skills ?? []);
       const chatModels = (modelList.data ?? []).filter((model) =>
         model.enabled !== false && (model.type ?? 'chat') === 'chat');
       setModels(chatModels);
@@ -3320,6 +3348,15 @@ function App(props: {
       }
       handleEvent(event);
     };
+  }
+
+  async function refreshSkills(): Promise<void> {
+    try {
+      const list = await props.api.skills();
+      if (!disposed) setInstalledSkills(list.skills ?? []);
+    } catch {
+      // Skills are optional; the slash menu simply stays as-is.
+    }
   }
 
   async function refreshSessions(): Promise<void> {
@@ -4042,6 +4079,7 @@ function App(props: {
                 attachmentBusy={attachmentBusy()}
                 commands={commands()}
                 localCommands={localCommands()}
+                skills={installedSkills()}
                 disabled={!ready() || switchingAgent() || authBlocked()}
                 onDraft={setDraft}
                 onSend={() => void send()}
@@ -4062,7 +4100,10 @@ function App(props: {
       <Show when={skillsOpen()}>
         <SkillsPanel
           api={props.api}
-          onClose={() => setSkillsOpen(false)}
+          onClose={() => {
+            setSkillsOpen(false);
+            void refreshSkills();
+          }}
           onToast={showToast}
         />
       </Show>

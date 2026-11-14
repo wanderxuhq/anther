@@ -156,7 +156,9 @@ mode 或配置项时，当前会话和会话列表会立即同步。ACP 的 noti
 Agent 指令。输入 GitHub 简写、Git URL 或工作区内的本地路径，预览发现的技能，选择要安装到的 ACP
 agent（OpenCode 使用 `.agents/skills`，Command Code 使用 `.commandcode/skills`），
 然后安装。已安装的技能可以在同一面板中移除。安装会启用严格的重名/符号链接检查，将
-文件复制到各目标目录，更新 `skills-lock.json`，并关闭遥测。
+文件复制到各目标目录，更新 `skills-lock.json`，并关闭遥测。已安装的技能也会出现在
+`/` 菜单中，形式为 `/skill:<id>`；选择后会插入 `@<id>` 提及（OpenCode V2 的技能
+附加语法），也可以直接输入 `/skill:<id> <任务>` 发送。
 
 anther 会广告 ACP 的 `fs` 和 `terminal` 客户端能力。agent 可以读写工作区内的
 文本文件，也可以通过 ACP 终端桥运行非交互命令，输出会实时显示在工具卡片中。
