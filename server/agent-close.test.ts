@@ -13,6 +13,7 @@ const fs = require('node:fs');
 const statePath = process.argv[2];
 const closeMissing = process.argv[3] === 'notfound';
 const deleteMissing = process.argv[4] === 'deletemissing';
+const omitList = process.argv.includes('omitlist');
 let counter = 0;
 let sessions = [];
 let calls = [];
@@ -60,7 +61,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       setTimeout(() => respond(message.id, { configOptions: [] }), 100);
       break;
     case 'session/list':
-      respond(message.id, { sessions });
+      respond(message.id, { sessions: omitList ? [] : sessions });
       break;
     case 'session/delete':
       calls.push({ method: 'delete', sessionId: message.params.sessionId });
@@ -100,11 +101,12 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-async function start(options: { notFound?: boolean; notFoundDelete?: boolean } = {}): Promise<AgentRuntime> {
+async function start(options: { notFound?: boolean; notFoundDelete?: boolean; omitList?: boolean } = {}): Promise<AgentRuntime> {
   const script = path.join(root, 'fake-agent.cjs');
   await writeFile(script, fakeAgent);
   const args = [script, statePath, options.notFound ? 'notfound' : 'ok'];
   if (options.notFoundDelete) args.push('deletemissing');
+  if (options.omitList) args.push('omitlist');
   const discovered: DiscoveredAgent = {
     profile: { id: 'fake-close', name: 'Fake Close', command: process.execPath, args },
     executable: process.execPath,
@@ -196,4 +198,14 @@ test('treats deleting a missing session as success', async () => {
   await runtime.remove(session.id);
   const state = await readState();
   assert.ok(state.calls.some((call) => call.method === 'delete' && call.sessionId === session.id));
+});
+
+test('lists sessions created in this run even when the agent omits them', async () => {
+  await start({ omitList: true });
+  await runtime.status();
+  const first = await runtime.createSession();
+  const second = await runtime.createSession();
+  const listed = await runtime.listSessions();
+  assert.ok(listed.some((session) => session.id === first.id));
+  assert.ok(listed.some((session) => session.id === second.id));
 });

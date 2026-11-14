@@ -3292,19 +3292,16 @@ function App(props: {
       const result = await props.api.sessions();
       if (disposed) return;
       const next = result.data ?? [];
+      const id = currentID();
+      if (id && !next.some((session) => session.id === id)) {
+        const existing = sessions().find((session) => session.id === id);
+        next.unshift(existing ?? { id, title: t('agent.newChat') });
+      }
       const previous = new Map(sessions().map((session) => [session.id, session.title]));
       setSessions(next);
       for (const session of next) {
         if (previous.get(session.id) === session.title) continue;
         props.onUpdateTab?.(`/${encodeURIComponent(session.id)}`, { title: sessionTitle(session) });
-      }
-      const id = currentID();
-      if (id && !next.some((session) => session.id === id)) {
-        setCurrentID(null);
-        setItems([]);
-        setPermissions([]);
-        setForms([]);
-        setBusy(false);
       }
     } catch {
       // Keep the current list; EventSource reconnect will resync.

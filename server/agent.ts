@@ -575,6 +575,22 @@ export class AgentRuntime {
         modes: boot.modes,
       });
     }
+    // Agents can report a session only after it persists its first turn. Keep
+    // sessions created or loaded in this run visible so an immediate cancel
+    // does not make the tab and its local transcript vanish.
+    const known = new Set([...this.configs.keys(), ...this.history.keys()]);
+    for (const id of known) {
+      if (this.retiredBootstraps.has(id)) continue;
+      if (hideBoot && id === boot?.sessionId) continue;
+      if (sessions.some((session) => session.id === id)) continue;
+      sessions.push({
+        id,
+        title: this.titles.get(id) ?? 'New chat',
+        time: { created: Date.now(), updated: Date.now() },
+        configOptions: this.configs.get(id) ?? [],
+        modes: this.modeStates.get(id)?.state,
+      });
+    }
     return sessions;
   }
 
