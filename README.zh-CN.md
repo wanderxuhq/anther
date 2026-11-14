@@ -123,6 +123,9 @@ Mode 选择器使用 ACP `session/set_mode` 或 agent 的 `mode` 配置项；可
 `session/list`，anther 会跟随 `nextCursor` 取完所有分页。点开会话时才加入标签，并
 同时加载历史和配置，因此模型和模式会自动恢复，不需要额外请求。
 
+ACP 的 `plan` 更新会以持续更新的清单形式显示在 Agent 时间线中。agent 自己切换
+mode 或配置项时，当前会话和会话列表会立即同步。
+
 Agent 工具栏中的“技能”操作基于 `vercel-labs/skills`，可以直接在 anther 里安装可复用的
 Agent 指令。输入 GitHub 简写、Git URL 或工作区内的本地路径，预览发现的技能，选择要安装到的 ACP
 agent（OpenCode 使用 `.agents/skills`，Command Code 使用 `.commandcode/skills`），

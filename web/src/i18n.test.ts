@@ -51,6 +51,8 @@ test('t：Agent 面板静态文案在中英文都存在', () => {
   assert.equal(t('agent.installSelected'), 'Install selected');
   assert.equal(t('agent.authRequired'), 'Sign in required');
   assert.equal(t('agent.terminalOutput'), 'Terminal output');
+  assert.equal(t('agent.plan'), 'Plan');
+  assert.equal(t('agent.planProgress', { done: 1, total: 3 }), '1/3 done');
   setLang('zh');
   assert.equal(t('agent.newChat'), '新会话');
   assert.equal(t('agent.empty.title'), '需要我做什么？');
@@ -59,4 +61,6 @@ test('t：Agent 面板静态文案在中英文都存在', () => {
   assert.equal(t('agent.installSelected'), '安装所选');
   assert.equal(t('agent.authRequired'), '需要登录');
   assert.equal(t('agent.terminalOutput'), '终端输出');
+  assert.equal(t('agent.plan'), '计划');
+  assert.equal(t('agent.planProgress', { done: 1, total: 3 }), '1/3 已完成');
 });

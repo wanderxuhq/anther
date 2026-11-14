@@ -281,6 +281,7 @@ function acpTool(update: any): ToolItem {
 
 function normalizeHistory(updates: any[]): ChatItem[] {
   const out: ChatItem[] = [];
+  const toolOwners = new Map<string, ToolItem>();
   let assistant: AssistantItem | null = null;
   let assistantID: string | null = null;
   let user: { kind: 'user'; id: string; text: string; time: number } | null = null;
@@ -340,16 +341,19 @@ function normalizeHistory(updates: any[]): ChatItem[] {
       case 'tool_call': {
         user = null;
         userID = null;
-        const item = ensureAssistant();
         const tool = acpTool(update);
-        const index = item.tools.findIndex((entry) => entry.id === tool.id);
-        if (index >= 0) item.tools[index] = { ...item.tools[index], ...tool };
-        else item.tools.push(tool);
+        const existing = toolOwners.get(tool.id);
+        if (existing) {
+          Object.assign(existing, tool);
+          break;
+        }
+        const item = ensureAssistant();
+        item.tools.push(tool);
+        toolOwners.set(tool.id, tool);
         break;
       }
       case 'tool_call_update': {
-        const item = ensureAssistant();
-        const tool = item.tools.find((entry) => entry.id === String(update.toolCallId));
+        const tool = toolOwners.get(String(update.toolCallId));
         if (tool) {
           if (update.status !== undefined) tool.status = acpToolStatus(update.status);
           if (update.title !== undefined) tool.name = String(update.title ?? tool.name);
@@ -1218,8 +1222,7 @@ function MessageItem(props: {
     );
   }
   if (props.item.kind === 'plan') {
-    const plan = props.item;
-    return <PlanCard entries={plan.entries} />;
+    return <PlanCard entries={props.item.entries} />;
   }
   const item = () => props.item as AssistantItem;
   return (

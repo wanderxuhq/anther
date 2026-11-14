@@ -106,8 +106,16 @@ test('caches mode and config updates from the agent', async () => {
       }
     });
   });
-  await runtime.prompt(session.id, 'update yourself');
-  await done;
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('timed out waiting for ACP state updates')), 5000);
+  });
+  try {
+    await runtime.prompt(session.id, 'update yourself');
+    await Promise.race([done, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 
   const state = await runtime.messages(session.id);
   const thought = state.configOptions.find((option) => option.id === 'thought_level');
