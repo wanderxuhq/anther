@@ -54,7 +54,7 @@ import type { FeatureTabPatch } from '../feature-types.ts';
 import { t, lang } from '../i18n.ts';
 import { stripTerminalControl, terminalIdsFromContent } from './terminal.ts';
 import { planEntries, upsertPlan, type PlanEntry, type PlanItem } from './plan.ts';
-import { modeStateFromOptions } from './config.ts';
+import { configChoices, modeStateFromOptions, secondaryConfigOptions } from './config.ts';
 import { css } from './styles.ts';
 
 export type FeatureTabSpec = {
@@ -652,6 +652,96 @@ function ModeSelect(props: {
   );
 }
 
+function ConfigMenu(props: {
+  options: ConfigOption[];
+  disabled?: boolean;
+  busy?: boolean;
+  onSelect: (configID: string, value: string | boolean) => void;
+}) {
+  const [open, setOpen] = createSignal(false);
+  let root!: HTMLDivElement;
+  const visible = createMemo(() => secondaryConfigOptions(props.options));
+
+  onMount(() => {
+    const onDown = (event: MouseEvent) => {
+      if (open() && root && !event.composedPath().includes(root)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    onCleanup(() => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    });
+  });
+
+  return (
+    <div class="op-config-picker" ref={root}>
+      <Show when={visible().length > 0}>
+        <button
+          type="button"
+          class="op-model-button op-config-button"
+          disabled={props.disabled}
+          onClick={() => setOpen((value) => !value)}
+          title={t('agent.sessionSettings')}
+        >
+          <Icon name="sliders" size={14} />
+          <span class="op-ellipsis">{t('agent.sessionSettings')}</span>
+          <Show when={props.busy}><Spinner size={11} /></Show>
+          <Icon name="chevron-down" size={14} />
+        </button>
+      </Show>
+      <Show when={open() && visible().length > 0}>
+        <div class="op-popover op-config-popover">
+          <div class="op-config-head">
+            <Icon name="sliders" size={15} />
+            <span>{t('agent.sessionSettings')}</span>
+          </div>
+          <div class="op-config-list">
+            <For each={visible()}>
+              {(option) => (
+                <div class="op-config-row">
+                  <div class="op-config-copy">
+                    <span class="op-config-name">{option.name}</span>
+                    <Show when={option.description}>
+                      <span class="op-config-desc">{option.description}</span>
+                    </Show>
+                  </div>
+                  <Show
+                    when={option.type === 'boolean'}
+                    fallback={
+                      <select
+                        class="op-config-select"
+                        value={String(option.currentValue)}
+                        disabled={props.disabled || props.busy}
+                        onChange={(event) => props.onSelect(option.id, event.currentTarget.value)}
+                      >
+                        <For each={configChoices(option)}>
+                          {(choice) => <option value={choice.value} title={choice.description ?? undefined}>{choice.name}</option>}
+                        </For>
+                      </select>
+                    }
+                  >
+                    <input
+                      class="op-config-check"
+                      type="checkbox"
+                      checked={option.currentValue === true}
+                      disabled={props.disabled || props.busy}
+                      onChange={(event) => props.onSelect(option.id, event.currentTarget.checked)}
+                    />
+                  </Show>
+                </div>
+              )}
+            </For>
+          </div>
+        </div>
+      </Show>
+    </div>
+  );
+}
+
 function modeLabel(mode: { id: string; name: string }): string {
   const key = `agent.mode.${mode.id}`;
   const translated = t(key);
@@ -732,6 +822,8 @@ function Composer(props: {
   providers: Provider[];
   model: Model | null;
   modes: AgentModeState | null;
+  configOptions: ConfigOption[];
+  configBusy: boolean;
   commands: Command[];
   disabled: boolean;
   onDraft: (value: string) => void;
@@ -739,6 +831,7 @@ function Composer(props: {
   onStop: () => void;
   onModel: (model: Model) => void;
   onMode: (modeID: string) => void;
+  onConfig: (configID: string, value: string | boolean) => void;
   onCommand: (command: Command) => void;
   onResume: () => void;
 }) {
@@ -832,6 +925,12 @@ function Composer(props: {
               buttonClass="op-composer-model"
             />
             <ModeSelect modes={props.modes} onChange={props.onMode} disabled={props.busy || props.disabled} />
+            <ConfigMenu
+              options={props.configOptions}
+              disabled={props.disabled}
+              busy={props.configBusy}
+              onSelect={props.onConfig}
+            />
             <IconButton
               icon="list"
               title={t('agent.commands')}
@@ -979,7 +1078,7 @@ function ToolCard(props: { tool: ToolItem; onCopy: (text: string) => void; termi
 
 function PermissionCard(props: {
   request: PermissionRequest;
-  onReply: (decision: 'once' | 'always' | 'reject') => void;
+  onReply: (optionID: string) => void;
 }) {
   return (
     <div class="op-permission">
@@ -993,18 +1092,28 @@ function PermissionCard(props: {
       <Show when={props.request.message}>
         <div class="op-permission-message">{props.request.message}</div>
       </Show>
-      <Show when={props.request.options?.length}>
-        <div class="op-permission-resources">
+      <Show
+        when={props.request.options.length > 0}
+        fallback={<div class="op-permission-message">{t('agent.noPermissionOptions')}</div>}
+      >
+        <div class="op-permission-actions">
           <For each={props.request.options}>
-            {(option) => <code>{option.name}</code>}
+            {(option) => {
+              const reject = option.kind.startsWith('reject');
+              const primary = option.kind.startsWith('allow');
+              return (
+                <button
+                  type="button"
+                  class={`op-btn ${reject ? 'danger' : primary ? 'primary' : ''}`}
+                  onClick={() => props.onReply(option.optionId)}
+                >
+                  {option.name}
+                </button>
+              );
+            }}
           </For>
         </div>
       </Show>
-      <div class="op-permission-actions">
-        <button type="button" class="op-btn primary" onClick={() => props.onReply('once')}>{t('agent.allowOnce')}</button>
-        <button type="button" class="op-btn" onClick={() => props.onReply('always')}>{t('agent.alwaysAllow')}</button>
-        <button type="button" class="op-btn danger" onClick={() => props.onReply('reject')}>{t('agent.deny')}</button>
-      </div>
     </div>
   );
 }
@@ -1196,7 +1305,7 @@ function MessageItem(props: {
   terminalOutputs?: Record<string, TerminalOutput>;
   onCopy: (text: string) => void;
   onRetry: () => void;
-  onPermission: (request: PermissionRequest, decision: 'once' | 'always' | 'reject') => void;
+  onPermission: (request: PermissionRequest, optionID: string) => void;
   onForm: (form: FormInfo, answer: Record<string, unknown>) => void;
   onCancelForm: (form: FormInfo) => void;
 }) {
@@ -1287,7 +1396,7 @@ function MessageList(props: {
   onSuggestion: (text: string) => void;
   onCopy: (text: string) => void;
   onRetry: () => void;
-  onPermission: (request: PermissionRequest, decision: 'once' | 'always' | 'reject') => void;
+  onPermission: (request: PermissionRequest, optionID: string) => void;
   onForm: (form: FormInfo, answer: Record<string, unknown>) => void;
   onCancelForm: (form: FormInfo) => void;
 }) {
@@ -2032,6 +2141,9 @@ function App(props: {
   const [selectedModel, setSelectedModel] = createSignal<Model | null>(null);
   const [modes, setModes] = createSignal<AgentModeState | null>(null);
   const [defaultModes, setDefaultModes] = createSignal<AgentModeState | null>(null);
+  const [defaultConfigOptions, setDefaultConfigOptions] = createSignal<ConfigOption[]>([]);
+  const [draftSessionID, setDraftSessionID] = createSignal<string | null>(null);
+  const [configBusy, setConfigBusy] = createSignal(false);
   const [draft, setDraft] = createSignal('');
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
@@ -2195,6 +2307,8 @@ function App(props: {
       setCapabilities(status.capabilities ?? null);
       setModes(status.modes ?? null);
       setDefaultModes(status.modes ?? null);
+      setDefaultConfigOptions(status.configOptions ?? []);
+      setDraftSessionID(status.bootstrapSessionID ?? null);
       setAuthMethods(status.authMethods ?? []);
       setAuthenticated(status.authenticated === true);
       setAuthRequired(status.authRequired === true);
@@ -2273,6 +2387,9 @@ function App(props: {
       setModes(null);
       setTerminalOutputs({});
       setDefaultModes(null);
+      setDefaultConfigOptions([]);
+      setDraftSessionID(null);
+      setConfigBusy(false);
       setCapabilities(null);
       setAuthMethods([]);
       setAuthenticated(false);
@@ -2498,6 +2615,20 @@ function App(props: {
           // Keep the agent's session default when the remembered model is unavailable.
         }
       }
+      for (const option of secondaryConfigOptions(defaultConfigOptions())) {
+        const current = session.configOptions?.find((entry) => entry.id === option.id);
+        if (!current || current.currentValue === option.currentValue) continue;
+        try {
+          const result = await props.api.setConfig(session.id, option.id, option.currentValue);
+          if (result.data) {
+            session.configOptions = result.data;
+            setSessions((prev) => prev.map((item) =>
+              item.id === session.id ? { ...item, configOptions: result.data } : item));
+          }
+        } catch {
+          // Keep the agent's default when a draft option is unavailable.
+        }
+      }
       return session;
     } catch (error) {
       showToast(formatError(error), true);
@@ -2644,9 +2775,43 @@ function App(props: {
     }
   }
 
-  async function replyPermission(request: PermissionRequest, decision: 'once' | 'always' | 'reject'): Promise<void> {
+  async function changeConfig(configID: string, value: string | boolean): Promise<void> {
+    if (configBusy()) return;
+    const id = currentID();
+    const target = id ?? draftSessionID();
+    setConfigBusy(true);
     try {
-      await props.api.replyPermission(request.id, decision);
+      if (!target) {
+        setDefaultConfigOptions((prev) => prev.map((option) =>
+          option.id === configID ? { ...option, currentValue: value } : option));
+        return;
+      }
+      const result = await props.api.setConfig(target, configID, value);
+      const options = result.data ?? [];
+      const nextModes = modeStateFromOptions(options);
+      const nextModel = modelFromConfig(options, models());
+      if (id) {
+        setSessions((prev) => prev.map((session) => session.id === id
+          ? { ...session, configOptions: options, modes: nextModes ?? session.modes }
+          : session));
+        setDefaultConfigOptions(options);
+        if (nextModes) setModes(nextModes);
+        if (nextModel) setSelectedModel(nextModel);
+      } else {
+        setDefaultConfigOptions(options);
+        if (nextModes) setDefaultModes(nextModes);
+        if (nextModel) setSelectedModel(nextModel);
+      }
+    } catch (error) {
+      showToast(formatError(error), true);
+    } finally {
+      setConfigBusy(false);
+    }
+  }
+
+  async function replyPermission(request: PermissionRequest, optionID: string): Promise<void> {
+    try {
+      await props.api.replyPermission(request.id, optionID);
       setPermissions((prev) => prev.filter((item) => item.id !== request.id));
     } catch (error) {
       showToast(formatError(error), true);
@@ -2671,6 +2836,8 @@ function App(props: {
         : session));
       if (sessionID === currentID()) {
         setModes((prev) => prev ? { ...prev, currentModeId } : prev);
+      } else if (sessionID === draftSessionID()) {
+        setDefaultModes((prev) => prev ? { ...prev, currentModeId } : prev);
       }
     }
     if (update.sessionUpdate === 'config_option_update' && Array.isArray(update.configOptions)) {
@@ -2681,6 +2848,11 @@ function App(props: {
         : session));
       if (sessionID === currentID()) {
         if (nextModes) setModes(nextModes);
+        const nextModel = modelFromConfig(options, models());
+        if (nextModel) setSelectedModel(nextModel);
+      } else if (sessionID === draftSessionID()) {
+        setDefaultConfigOptions(options);
+        if (nextModes) setDefaultModes(nextModes);
         const nextModel = modelFromConfig(options, models());
         if (nextModel) setSelectedModel(nextModel);
       }
@@ -2901,7 +3073,7 @@ function App(props: {
                 onSuggestion={suggestion}
                 onCopy={copy}
                 onRetry={retry}
-                onPermission={(request, decision) => void replyPermission(request, decision)}
+                onPermission={(request, optionID) => void replyPermission(request, optionID)}
                 onForm={(form, answer) => void replyForm(form, answer)}
                 onCancelForm={(form) => void cancelForm(form)}
               />
@@ -2934,6 +3106,8 @@ function App(props: {
                 providers={providers()}
                 model={selectedModel()}
                 modes={currentSession() ? modes() : defaultModes()}
+                configOptions={currentSession()?.configOptions ?? defaultConfigOptions()}
+                configBusy={configBusy()}
                 commands={commands()}
                 disabled={!ready() || switchingAgent() || authBlocked()}
                 onDraft={setDraft}
@@ -2941,6 +3115,7 @@ function App(props: {
                 onStop={() => void interrupt()}
                 onModel={(model) => void changeModel(model)}
                 onMode={(modeID) => void changeMode(modeID)}
+                onConfig={(configID, value) => void changeConfig(configID, value)}
                 onCommand={(command) => setDraft(`/${command.name} `)}
                 onResume={openResume}
               />

@@ -2,6 +2,21 @@
 // Pure helpers for ACP session config options.
 import type { AgentModeState, ConfigOption, ConfigOptionChoice, ConfigOptionGroup } from './api.ts';
 
+/** Options that belong in the generic session-settings menu. */
+export function secondaryConfigOptions(options: readonly ConfigOption[] | null | undefined): ConfigOption[] {
+  return (options ?? []).filter((option) => {
+    if (option.type !== 'select' && option.type !== 'boolean') return false;
+    if (option.category === 'model' || option.id === 'model') return false;
+    if (option.category === 'mode' || option.id === 'mode') return false;
+    return true;
+  });
+}
+
+/** Flatten flat or grouped select choices. */
+export function configChoices(option: ConfigOption): ConfigOptionChoice[] {
+  return flattenChoices(option.options);
+}
+
 /** Derive the mode selector state from a session's config options. */
 export function modeStateFromOptions(options: readonly ConfigOption[] | null | undefined): AgentModeState | null {
   const option = options?.find((entry) =>

@@ -81,6 +81,8 @@ export type Status = {
   availableAgents?: DiscoveredAgent[];
   selectedAgent?: string;
   modes?: AgentModeState;
+  configOptions?: ConfigOption[];
+  bootstrapSessionID?: string;
   authMethods?: AuthMethod[];
   authenticated?: boolean;
   authRequired?: boolean;
@@ -287,8 +289,8 @@ export function createApi(base: string) {
     interrupt: (sessionID: string) => post<unknown>('/interrupt', { sessionID }),
     permissions: (sessionID: string) =>
       request<{ data: PermissionRequest[] }>(`/permissions?sessionID=${encodeURIComponent(sessionID)}`),
-    replyPermission: (requestID: string, decision: 'once' | 'always' | 'reject') =>
-      post<void>('/permission/reply', { requestID, decision }),
+    replyPermission: (requestID: string, optionId: string) =>
+      post<void>('/permission/reply', { requestID, optionId }),
     forms: (sessionID: string) =>
       request<{ data: FormInfo[] }>(`/forms?sessionID=${encodeURIComponent(sessionID)}`),
     replyForm: (formID: string, action: FormAction, content?: Record<string, unknown>) =>

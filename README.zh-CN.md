@@ -126,6 +126,10 @@ Mode 选择器使用 ACP `session/set_mode` 或 agent 的 `mode` 配置项；可
 ACP 的 `plan` 更新会以持续更新的清单形式显示在 Agent 时间线中。agent 自己切换
 mode 或配置项时，当前会话和会话列表会立即同步。
 
+输入框会显示所有非 model/mode 的会话配置项，包括 boolean 开关；新会话草稿中的
+设置会应用到第一个会话。权限卡片会按 agent 提供的选项渲染，不再固定为
+允许一次/始终允许/拒绝三个按钮。
+
 Agent 工具栏中的“技能”操作基于 `vercel-labs/skills`，可以直接在 anther 里安装可复用的
 Agent 指令。输入 GitHub 简写、Git URL 或工作区内的本地路径，预览发现的技能，选择要安装到的 ACP
 agent（OpenCode 使用 `.agents/skills`，Command Code 使用 `.commandcode/skills`），

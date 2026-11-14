@@ -105,11 +105,10 @@ export function registerAgentRoutes(router: Router, agent: AcpAgent): void {
   });
   router.post('/_/agent/api/permission/reply', async (_req, body) => {
     const input = record(body);
-    const decision = input.decision;
-    if (decision !== 'once' && decision !== 'always' && decision !== 'reject') {
-      throw new HttpError(400, 'decision must be once, always or reject');
-    }
-    await agent.replyPermission(required(input.requestID, 'requestID'), decision);
+    await agent.replyPermission(
+      required(input.requestID, 'requestID'),
+      required(input.optionId, 'optionId'),
+    );
     return {};
   });
 

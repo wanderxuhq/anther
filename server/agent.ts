@@ -52,6 +52,8 @@ export type AgentStatus = {
   availableAgents?: AgentOption[];
   selectedAgent?: string;
   modes?: AgentModeState;
+  configOptions?: acp.SessionConfigOption[];
+  bootstrapSessionID?: string;
   authMethods?: acp.AuthMethod[];
   authenticated?: boolean;
   authRequired?: boolean;
@@ -274,6 +276,7 @@ export class AgentRuntime {
           clientCapabilities: {
             fs: { readTextFile: true, writeTextFile: true },
             terminal: true,
+            session: { configOptions: { boolean: {} } },
             elicitation: { form: {} },
           },
           clientInfo: { name: 'anther', version: '1' },
@@ -320,6 +323,8 @@ export class AgentRuntime {
         capabilities: this.init?.agentCapabilities,
         defaultModel: this.defaultModel(),
         modes: this.boot?.modes,
+        configOptions: this.boot?.configOptions ?? [],
+        bootstrapSessionID: this.boot?.sessionId,
         authMethods: this.init?.authMethods ?? [],
         authenticated: this.authenticated,
         authRequired: this.authRequired,
@@ -591,11 +596,10 @@ export class AgentRuntime {
 
   async setConfig(sessionID: string, configID: string, value: string | boolean): Promise<acp.SessionConfigOption[]> {
     const ctx = await this.ensure();
-    const result = await ctx.request(acp.methods.agent.session.setConfigOption, {
-      sessionId: sessionID,
-      configId: configID,
-      value,
-    } as acp.SetSessionConfigOptionRequest);
+    const request = typeof value === 'boolean'
+      ? { sessionId: sessionID, configId: configID, type: 'boolean' as const, value }
+      : { sessionId: sessionID, configId: configID, value };
+    const result = await ctx.request(acp.methods.agent.session.setConfigOption, request as acp.SetSessionConfigOptionRequest);
     const options = result.configOptions ?? this.configs.get(sessionID) ?? [];
     this.configs.set(sessionID, options);
     if (sessionID === this.boot?.sessionId) {
@@ -686,11 +690,13 @@ export class AgentRuntime {
       .map(([id, pending]) => permissionInfo(id, pending.params));
   }
 
-  async replyPermission(requestID: string, decision: 'once' | 'always' | 'reject'): Promise<void> {
+  async replyPermission(requestID: string, optionID: string): Promise<void> {
     const pending = this.pending.get(requestID);
     if (!pending) throw new Error('permission request not found');
-    const option = choosePermission(pending.params.options, decision);
-    pending.resolve({ outcome: { outcome: 'selected', optionId: option.optionId } });
+    if (!pending.params.options.some((option) => option.optionId === optionID)) {
+      throw new Error(`Unknown permission option: ${optionID}`);
+    }
+    pending.resolve({ outcome: { outcome: 'selected', optionId: optionID } });
     this.pending.delete(requestID);
     this.emit({ type: 'permission_replied', requestID, sessionID: pending.params.sessionId });
   }
@@ -958,7 +964,7 @@ export class AcpAgent {
   async remove(sessionID: string) { return (await this.ensureActive()).remove(sessionID); }
   async fork(sessionID: string) { return (await this.ensureActive()).fork(sessionID); }
   permissions(sessionID: string) { return this.active?.permissions(sessionID) ?? []; }
-  async replyPermission(requestID: string, decision: 'once' | 'always' | 'reject') { return (await this.ensureActive()).replyPermission(requestID, decision); }
+  async replyPermission(requestID: string, optionID: string) { return (await this.ensureActive()).replyPermission(requestID, optionID); }
   forms(sessionID: string) { return this.active?.forms(sessionID) ?? []; }
   async replyForm(formID: string, action: 'accept' | 'decline' | 'cancel', content?: Record<string, unknown>) { return (await this.ensureActive()).replyForm(formID, action, content); }
 
@@ -1032,17 +1038,4 @@ function permissionInfo(id: string, params: acp.RequestPermissionRequest): Agent
     message,
     options: params.options,
   };
-}
-
-function choosePermission(options: acp.PermissionOption[], decision: 'once' | 'always' | 'reject'): acp.PermissionOption {
-  const order = decision === 'once'
-    ? ['allow_once', 'allow_always']
-    : decision === 'always'
-      ? ['allow_always', 'allow_once']
-      : ['reject_once', 'reject_always'];
-  for (const kind of order) {
-    const option = options.find((entry) => entry.kind === kind);
-    if (option) return option;
-  }
-  return options[0] ?? { optionId: 'reject', name: 'Reject', kind: 'reject_once' };
 }

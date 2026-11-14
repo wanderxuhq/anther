@@ -1098,6 +1098,43 @@ export const css = `
   font-size: 12px;
 }
 
+.op-config-picker { position: relative; min-width: 0; }
+.op-config-button { max-width: 150px; }
+.op-config-popover { left: 0; bottom: calc(100% + 8px); width: min(360px, calc(100vw - 32px)); }
+.op-config-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--op-menu-border);
+  color: var(--op-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.op-config-head > svg { color: var(--op-accent); }
+.op-config-list { max-height: 340px; overflow-y: auto; padding: 4px; }
+.op-config-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  border-radius: var(--op-radius);
+}
+.op-config-row:hover { background: var(--op-menu-hover); }
+.op-config-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.op-config-name { font-size: 12px; font-weight: 550; }
+.op-config-desc { color: var(--op-muted); font-size: 10.5px; line-height: 1.35; }
+.op-config-select {
+  max-width: 140px;
+  height: 28px;
+  padding: 0 5px;
+  border: 1px solid var(--op-border);
+  border-radius: var(--op-radius);
+  background: var(--op-bg);
+  color: var(--op-fg);
+  font-size: 11px;
+}
+.op-config-check { width: 16px; height: 16px; accent-color: var(--op-accent); }
 .op-popover, .op-command-menu {
   position: absolute;
   z-index: 50;

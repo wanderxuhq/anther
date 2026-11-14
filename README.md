@@ -134,6 +134,11 @@ ACP `plan` updates are rendered as a persistent checklist in the Agent timeline.
 Mode and configuration changes made by the agent are applied to the active
 session and to the session list immediately.
 
+The composer exposes all non-model/non-mode session config options, including
+boolean switches; new-chat draft settings are applied to the first session.
+Permission cards render the options supplied by the agent instead of a fixed
+allow-once/always/deny set.
+
 The Skills action in the Agent toolbar uses `vercel-labs/skills` to install
 reusable agent instructions without leaving anther. Enter a GitHub shorthand,
 git URL, or a local path inside the workspace, preview the discovered skills, choose the ACP agents to
