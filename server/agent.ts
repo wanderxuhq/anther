@@ -129,6 +129,7 @@ export class AgentRuntime {
   private readonly historyKnown = new Set<string>();
   private readonly attaching = new Map<string, Promise<void>>();
   private readonly sessionEpoch = new Map<string, number>();
+  private userMessageSeq = 0;
   private generation = 0;
   private commands: acp.AvailableCommand[] = [];
   private readonly listeners = new Set<(event: AgentEvent) => void>();
@@ -747,6 +748,7 @@ export class AgentRuntime {
   }
 
   async prompt(sessionID: string, content: acp.ContentBlock[]): Promise<{ accepted: true }> {
+    this.rememberUserPrompt(sessionID, content);
     const ctx = await this.ensure();
     this.busy.add(sessionID);
     this.emit({ type: 'busy', sessionID, busy: true });
@@ -763,6 +765,16 @@ export class AgentRuntime {
       this.emit({ type: 'busy', sessionID, busy: false });
     });
     return { accepted: true };
+  }
+
+  private rememberUserPrompt(sessionID: string, content: acp.ContentBlock[]): void {
+    if (content.length === 0) return;
+    const messageId = `anther-user-${++this.userMessageSeq}`;
+    const history = this.history.get(sessionID) ?? [];
+    for (const block of content) {
+      history.push({ sessionUpdate: 'user_message_chunk', messageId, content: block } as acp.SessionUpdate);
+    }
+    this.history.set(sessionID, history);
   }
 
   async cancel(sessionID: string): Promise<void> {
@@ -1028,6 +1040,9 @@ export class AgentRuntime {
       return;
     }
     if (!liveOnly) {
+      // The user prompt is already in history (and in the sender's UI). Live
+      // user echoes are redundant; replayed user chunks are still kept.
+      if (update.sessionUpdate === 'user_message_chunk') return;
       const history = this.history.get(params.sessionId) ?? [];
       history.push(update);
       this.history.set(params.sessionId, history);
