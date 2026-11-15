@@ -852,7 +852,7 @@ export function App() {
             title={t('complete')}
             aria-label={t('complete')}
           >
-            <Icon name="sparkles" />
+            <Icon name="lightbulb" />
           </button>
         </Show>
         <Show when={activeKind() === 'terminal'}>
