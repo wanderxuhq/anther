@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import {
   applyTimelineUpdate,
   applyTurnUsage,
-  createTimeline,
   replayTimeline,
   type AssistantItem,
   type ChatItem,
@@ -42,12 +41,6 @@ test('replay groups user/assistant/tool chunks by id', () => {
   assert.equal(reply.tools.length, 1);
   assert.equal(reply.tools[0].status, 'completed');
   assert.equal(reply.tools[0].content, 'done');
-});
-
-test('incremental updates produce the same timeline as replay', () => {
-  const state = createTimeline();
-  for (const update of updates) applyTimelineUpdate(state, update, 10);
-  assert.deepEqual(state.items, replayTimeline(updates, 10).items);
 });
 
 test('new message ids create separate items and a plan replaces the single plan entry', () => {

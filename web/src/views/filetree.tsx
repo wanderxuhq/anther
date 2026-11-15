@@ -21,21 +21,17 @@ import { t } from '../i18n.ts';
 import { preparingDownload, downloadProgressText, startDownload } from '../download.ts';
 import { isArchiveFile } from '../archive.ts';
 import { hasDocumentOutline } from '../readers/document-file.ts';
-import { entriesFromDataTransfer, entriesFromFiles, uploadEntries, type UploadEntry } from '../upload.ts';
+import { entriesFromDataTransfer, entriesFromFiles, uploadEntries, type UploadEntry, type UploadResult } from '../upload.ts';
 const DocumentTree = lazy(() => import('../components/document-tree.tsx'));
 
 import { isDatabaseFile } from '../database/source.ts';
-import { directoryFailedPatch, directoryLoadedPatch, type DirectoryLoadMode, type DirectoryState } from './filetree-directory.ts';
-import { treeWriteSuccess, uploadWriteResult, type TreeWriteResult } from './filetree-write.ts';
-import { createDeleteConfirm } from './filetree-delete.ts';
-import { browserScheduler, createTransientValue } from '../transient-state.ts';
 import { DatabaseIcon } from '../components/database-icon.tsx';
 import { Icon } from '../components/icons.tsx';
 const DatabaseTree = lazy(() => import('../components/database-tree.tsx'));
 
 const ArchiveTree = lazy(() => import('../components/archive-tree.tsx'));
 
-type DirState = DirectoryState<DirEntry>;
+type DirState = { expanded: boolean; loaded?: DirEntry[]; loading?: boolean };
 
 // path → 目录状态。渲染时 nodes[path] 是响应式读取，setNodes 精确更新。
 const [nodes, setNodes] = createStore<{ [path: string]: DirState }>({});
@@ -47,14 +43,42 @@ const [dropTarget, setDropTarget] = createSignal<string | null>(null);
 /** 点击「定位当前文件」后短暂高亮的路径（Scroll from Source）。 */
 const [revealPath, setRevealPath] = createSignal<string | null>(null);
 const REVEAL_HIGHLIGHT_MS = 1500;
-const revealHighlight = createTransientValue<string>((path) => setRevealPath(path), browserScheduler, REVEAL_HIGHLIGHT_MS);
+let revealTimer: ReturnType<typeof setTimeout> | undefined;
+function clearReveal(): void {
+  clearTimeout(revealTimer);
+  revealTimer = undefined;
+  if (revealPath() !== null) setRevealPath(null);
+}
 
 // ---- 文件管理：菜单 + 命名对话框 + 两击确认删除 ----
 type MenuTarget = { path: string; kind: 'dir' | 'file' | 'root' };
 const [menu, setMenu] = createSignal<MenuTarget | null>(null);
 const [dialog, setDialog] = createSignal<DialogState | null>(null);
 const [confirmDel, setConfirmDel] = createSignal<string | null>(null); // 两击确认删除
-const confirmDelete = createDeleteConfirm((path) => setConfirmDel(path), browserScheduler);
+const DELETE_CONFIRM_MS = 3000;
+let confirmTimer: ReturnType<typeof setTimeout> | undefined;
+
+function resetConfirmDelete(): void {
+  clearTimeout(confirmTimer);
+  confirmTimer = undefined;
+  if (confirmDel() !== null) setConfirmDel(null);
+}
+
+/** 第一击 arm，3s 内同路径第二击 confirm；其它路径重新 arm。 */
+function tapConfirmDelete(path: string): 'armed' | 'confirmed' {
+  clearTimeout(confirmTimer);
+  if (confirmDel() === path) {
+    confirmTimer = undefined;
+    setConfirmDel(null);
+    return 'confirmed';
+  }
+  setConfirmDel(path);
+  confirmTimer = setTimeout(() => {
+    confirmTimer = undefined;
+    setConfirmDel(null);
+  }, DELETE_CONFIRM_MS);
+  return 'armed';
+}
 
 /** 根目录子项不带 './' 前缀：与 URL/currentFile 中的相对路径形式一致，保证高亮可匹配 */
 function childPath(parent: string, name: string): string {
@@ -65,7 +89,7 @@ const directoryLoads = new Map<string, Promise<DirEntry[]>>();
 
 /** Load once (or refresh after a mutation), sharing in-flight requests and state updates. */
 async function loadDirectory(path: string, options: { refresh?: boolean; surfaceError?: boolean } = {}): Promise<DirEntry[]> {
-  const mode: DirectoryLoadMode = options.refresh ? 'refresh' : 'load';
+  const mode = options.refresh ? 'refresh' : 'load';
   if (mode === 'load') {
     const pending = directoryLoads.get(path);
     if (pending) return pending;
@@ -79,12 +103,11 @@ async function loadDirectory(path: string, options: { refresh?: boolean; surface
   }
   if (mode === 'load') setNodes(path, { loading: true });
   const task = api.list(path).then(({ entries }) => {
-    setNodes(path, directoryLoadedPatch(mode, entries));
+    setNodes(path, mode === 'refresh' ? { loaded: entries } : { expanded: true, loaded: entries, loading: false });
     setError(null);
     return entries;
   }, (e) => {
-    const patch = directoryFailedPatch<DirEntry>(mode);
-    if (Object.keys(patch).length > 0) setNodes(path, patch);
+    if (mode === 'load') setNodes(path, { loading: false });
     if (options.surfaceError !== false) setError((e as Error).message);
     throw e;
   }).finally(() => {
@@ -125,7 +148,12 @@ function activeTabPath(): string | null {
 }
 
 function flashReveal(path: string): void {
-  revealHighlight.show(path);
+  clearTimeout(revealTimer);
+  setRevealPath(path);
+  revealTimer = setTimeout(() => {
+    revealTimer = undefined;
+    setRevealPath(null);
+  }, REVEAL_HIGHLIGHT_MS);
 }
 
 /** 文件树定位（参考 JetBrains Scroll from Source）：展开祖先目录并滚动高亮当前文件。 */
@@ -170,7 +198,7 @@ function closeMenu(): void {
 }
 
 function showMenu(target: MenuTarget) {
-  confirmDelete.reset();
+  resetConfirmDelete();
   setMenu(target);
 }
 
@@ -192,6 +220,21 @@ function beginCreate(kind: 'file' | 'dir', target: MenuTarget) {
     submitLabel: t('filetree.create'),
     onSubmit: (name) => void doCreate(kind, base, name),
   });
+}
+
+/** Final UI state of one tree write; runTreeWrite owns putting this in the banner. */
+type TreeWriteResult = { error: string | null };
+
+/** Turn per-file upload failures into the same explicit result shape as other writes. */
+function uploadResult(result: UploadResult): TreeWriteResult {
+  if (result.failed.length === 0) return { error: null };
+  const first = result.failed[0];
+  const name = first.path.split('/').pop() ?? first.path;
+  return {
+    error: result.uploaded === 0 && result.failed.length === 1 && first.status === 409
+      ? t('filetree.uploadExists', { name })
+      : t('filetree.uploadFailed', { uploaded: result.uploaded, failed: result.failed.length, name }),
+  };
 }
 
 type TreeWriteOptions<T> = {
@@ -239,7 +282,7 @@ async function doCreate(kind: 'file' | 'dir', base: string, name: string) {
     } else {
       await api.mkDir(p); // 服务端 fs.mkdir；重名 → 409 already exists
     }
-    return treeWriteSuccess();
+    return { error: null };
   }, {
     guard: false,
     after: kind === 'file' ? async () => { await openTab(p); } : undefined,
@@ -267,7 +310,7 @@ async function startUpload(base: string, entries: UploadEntry[]): Promise<void> 
   setUpload({ done: 0, total: entries.length });
   try {
     await runTreeWrite(base, base, async () =>
-    uploadWriteResult(await uploadEntries(base, entries, (done, total) => setUpload({ done, total }))), {
+    uploadResult(await uploadEntries(base, entries, (done, total) => setUpload({ done, total }))), {
       guard: false,
       refreshOnError: true,
       after: () => setNodes(base, 'expanded', true),
@@ -325,18 +368,18 @@ async function doRename(target: MenuTarget, name: string) {
   await runTreeWrite(target.path, parentOf(target.path), async () => {
     await api.rename(target.path, to);
     await relocateFileTabs(target.path, to);
-    return treeWriteSuccess();
+    return { error: null };
   });
 }
 
 function onDeleteTap(target: MenuTarget) {
   // 第一击：按钮变「确认删除？」（红），3s 内第二击生效。
-  if (confirmDelete.tap(target.path) === 'armed') return;
+  if (tapConfirmDelete(target.path) === 'armed') return;
   closeMenu();
   void runTreeWrite(target.path, parentOf(target.path), async () => {
     await api.del(target.path);
     await relocateFileTabs(target.path);
-    return treeWriteSuccess();
+    return { error: null };
   });
 }
 
@@ -494,8 +537,8 @@ export function FileTreeView() {
   void ensureRoot();
   document.addEventListener('pointerdown', onDocumentPointerDown, true);
   onCleanup(() => document.removeEventListener('pointerdown', onDocumentPointerDown, true));
-  onCleanup(() => revealHighlight.clear());
-  onCleanup(() => confirmDelete.reset());
+  onCleanup(clearReveal);
+  onCleanup(resetConfirmDelete);
 
   return (
     <div

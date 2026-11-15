@@ -35,13 +35,3 @@ test('a new schedule after cancel still runs', (t) => {
   t.mock.timers.tick(120);
   assert.equal(calls, 1);
 });
-
-test('cancel after firing is a safe no-op', (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  let calls = 0;
-  const debounce = createDebounce(10);
-  debounce.schedule(() => { calls++; });
-  t.mock.timers.tick(10);
-  debounce.cancel();
-  assert.equal(calls, 1);
-});

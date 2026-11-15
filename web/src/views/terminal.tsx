@@ -13,15 +13,6 @@ import { t } from '../i18n.ts';
 import { CONTROL_LETTERS, TERMINAL_KEYS, applyTerminalModifiers, controlChar, keySequence, type TerminalKey } from '../terminal-keys.ts';
 import { terminalKeyBarOpen, terminalRenderMode } from '../terminal/settings.ts';
 import { createDebounce } from '../debounce.ts';
-import {
-  expireKeyBarFocus,
-  initialKeyBarFocus,
-  KEY_BAR_FOCUS_FALLBACK_MS,
-  prepareKeyBarFocus as prepareFocusState,
-  restoreKeyBarFocus as restoreFocusState,
-  settleKeyBarFocus,
-  type KeyBarFocusState,
-} from '../terminal/key-bar-focus.ts';
 import { classifyMarkdownRows, joinWrappedRows, type MarkdownBlock } from '../terminal/markdown-blocks.ts';
 import { firstContentCell, joinLogicalCells } from '../terminal/logical.ts';
 import { renderGridRow, renderRow, rowClass, rowRawText, type CursorInfo } from '../terminal/render.ts';
@@ -33,6 +24,58 @@ import {
   takeTouchSteps,
 } from '../terminal/touch-scroll.ts';
 import { revealDirectory } from './filetree.tsx';
+
+type KeyBarFocusState = {
+  /** The terminal input had focus when the key bar was pressed. */
+  restoreInput: boolean;
+  /** Keep suppressing focus/blur tracking until the deferred settle runs. */
+  suppressTracking: boolean;
+};
+type KeyBarFocusStep = {
+  state: KeyBarFocusState;
+  refocusNow: boolean;
+  armFallback: boolean;
+  scheduleSettle: boolean;
+  clearTimer: boolean;
+};
+
+const KEY_BAR_FOCUS_FALLBACK_MS = 2000;
+const initialKeyBarFocus = (): KeyBarFocusState => ({ restoreInput: false, suppressTracking: false });
+
+/** pointerdown on the bar: remember input focus and arm the fallback. */
+function prepareFocusState(state: KeyBarFocusState, inputFocused: boolean): KeyBarFocusStep {
+  if (!inputFocused) {
+    return { state, refocusNow: false, armFallback: false, scheduleSettle: false, clearTimer: false };
+  }
+  return {
+    state: { restoreInput: true, suppressTracking: true },
+    refocusNow: false,
+    armFallback: true,
+    scheduleSettle: false,
+    clearTimer: false,
+  };
+}
+
+/** click on the bar: refocus now, then release suppression after the click default action. */
+function restoreFocusState(state: KeyBarFocusState): KeyBarFocusStep {
+  return {
+    state,
+    refocusNow: state.restoreInput,
+    armFallback: false,
+    scheduleSettle: state.suppressTracking,
+    clearTimer: state.suppressTracking,
+  };
+}
+
+/** Deferred (0ms) settle: one more refocus, then release tracking suppression. */
+function settleKeyBarFocus(state: KeyBarFocusState): { state: KeyBarFocusState; refocus: boolean } {
+  return { state: initialKeyBarFocus(), refocus: state.restoreInput };
+}
+
+/** Fallback timer: the click never arrived; drop the gesture without refocusing. */
+function expireKeyBarFocus(): KeyBarFocusState {
+  return initialKeyBarFocus();
+}
 
 const MAX_SCROLLBACK_ROWS = DEFAULT_SCROLLBACK;
 const FONT_SCALE_TO_PX = 0.14;

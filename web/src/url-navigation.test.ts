@@ -58,13 +58,12 @@ before(async () => {
     }, { name: 'url-test-entry', resolveId: (id) => id === entry ? entry : null,
       load: (id) => id === entry ? `
         import { render } from 'solid-js/web';
-        import { App } from '${path.join(import.meta.dirname, 'App.tsx')}';
+        import { App, saveTiming } from '${path.join(import.meta.dirname, 'App.tsx')}';
         import * as stores from '${path.join(import.meta.dirname, 'stores.ts')}';
         import { EditorView } from '@codemirror/view';
         import { createSignal, Show } from 'solid-js';
         import { fileTargetKey } from '${path.join(import.meta.dirname, 'file-target.ts')}';
         import * as downloads from '${path.join(import.meta.dirname, 'download.ts')}';
-        import * as save from '${path.join(import.meta.dirname, 'save-retry.ts')}';
         import { registerReaderNavigation, cancelReaderNavigation } from '${path.join(import.meta.dirname, 'readers/navigation.ts')}';
         import { InstancesPage } from '${path.join(import.meta.dirname, 'views/instances.tsx')}';
         import { DocumentReader } from '${path.join(import.meta.dirname, 'components/document-reader.tsx')}';
@@ -82,7 +81,7 @@ before(async () => {
               <Show when={reader()}><div class="reader-feedback"><ArchiveFeedback path="bundle.zip" entry="a.db" priority={30} retry={() => retry('reader')}/></div></Show>
             </>, document.getElementById('root'));
             return { dispose, setReader };
-          }, stores, EditorView, downloads, save, fileTargetKey, registerReaderNavigation, cancelReaderNavigation, mount: () => render(() => <App />, document.getElementById('root')),
+          }, stores, EditorView, downloads, save: { saveTiming }, fileTargetKey, registerReaderNavigation, cancelReaderNavigation, mount: () => render(() => <App />, document.getElementById('root')),
           mountReader: (factory, host = document.getElementById('root')) => {
             const [url, setUrl] = createSignal('first-document');
             const dispose = render(() => <DocumentReader url={url()} path="document" createReader={factory}/>, host);

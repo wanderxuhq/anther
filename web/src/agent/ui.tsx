@@ -78,11 +78,31 @@ import { loadMcpServers, mcpStorageKey, parseKeyValueLines, parseLines, storeMcp
 import { skillCommands, skillMention, skillSlashInput, type SkillCommand } from './skill-command.ts';
 import { MAX_SYSTEM_PROMPT, loadSystemPrompt, storeSystemPrompt, systemPromptStorageKey } from './system-prompt.ts';
 import { type StatusItem } from './status.ts';
-import { configChoices, effortConfigOption, modelConfigOption, modelFromConfig, otherConfigOptions, secondaryConfigOptions } from './config.ts';
-import { planConfigApply, planModeApply, type ConfigSource, type ConfigTarget } from './config-apply.ts';
-import { fieldKind } from './form-field.ts';
+import {
+  configChoices,
+  effortConfigOption,
+  modelConfigOption,
+  modelFromConfig,
+  otherConfigOptions,
+  planConfigApply,
+  planModeApply,
+  secondaryConfigOptions,
+  type ConfigSource,
+  type ConfigTarget,
+} from './config.ts';
 import { modelKey } from './model-preference.ts';
 import { css } from './styles.ts';
+
+type FormFieldKind = 'external' | 'boolean' | 'multiselect' | 'select' | 'input';
+
+/** One mutually exclusive rendering branch per field; keep the fallback exact. */
+function fieldKind(field: Pick<FormField, 'type' | 'options'>): FormFieldKind {
+  if (field.type === 'external') return 'external';
+  if (field.type === 'boolean') return 'boolean';
+  if (field.type === 'multiselect') return 'multiselect';
+  if (field.type === 'string' && (field.options?.length ?? 0) > 0) return 'select';
+  return 'input';
+}
 
 export type FeatureTabSpec = {
   key: string;

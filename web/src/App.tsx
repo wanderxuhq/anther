@@ -50,7 +50,6 @@ import { DatabaseIcon } from './components/database-icon.tsx';
 import type { DatabaseController } from './database/controller.ts';
 import { ArchiveOptions } from './components/archive-options.tsx';
 import { SystemInfoDialog } from './components/system-info.tsx';
-import { saveTiming, writeWithRetry } from './save-retry.ts';
 
 const NARROW_QUERY = '(max-width: 599px)';
 
@@ -64,6 +63,24 @@ export function useIsNarrow(): () => boolean {
     mq.addEventListener('change', onChange);
   }
   return narrow;
+}
+
+export type SaveTiming = { debounceMs: number; retryMs: number; attempts: number };
+
+/** Tests may shrink these windows through the harness; app behavior uses the defaults. */
+export const saveTiming: SaveTiming = { debounceMs: 1000, retryMs: 1000, attempts: 3 };
+
+/** Write with the same retry policy as the editor: `attempts` tries, retryMs apart. */
+async function writeWithRetry(write: () => Promise<void>, timing: SaveTiming = saveTiming): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await write();
+      return;
+    } catch (error) {
+      if (attempt >= timing.attempts - 1) throw error;
+      await new Promise((resolve) => setTimeout(resolve, timing.retryMs));
+    }
+  }
 }
 
 export function App() {
