@@ -34,11 +34,28 @@ test('fetchLatestVersion reads version and returns null on every failure', async
   assert.equal(await fetchLatestVersion(malformed, 100), null);
 });
 
+test('fetchLatestVersion rejects invalid registry versions', async () => {
+  const serve = (version: string) => (async () => new Response(JSON.stringify({ version }))) as typeof fetch;
+  for (const version of ['not-a-version', '0.1.7 ', ' 0.1.7', '1.0.0-', '1.0', '1.0.0.0', '01.0.0', '1.0.0-+x']) {
+    assert.equal(await fetchLatestVersion(serve(version), 100, 'https://registry.example'), null, version);
+  }
+  // 预发布 + 构建元数据仍是合法 SemVer
+  assert.equal(await fetchLatestVersion(serve('1.0.0-rc.1+build.5'), 100, 'https://registry.example'), '1.0.0-rc.1+build.5');
+});
+
 test('checkForUpdate only reports a strictly newer version', async () => {
   const serve = (version: string) => (async () => new Response(JSON.stringify({ version }))) as typeof fetch;
   assert.deepEqual(await checkForUpdate('0.1.7', serve('0.1.8')), { current: '0.1.7', latest: '0.1.8' });
   assert.equal(await checkForUpdate('0.1.8', serve('0.1.8')), null);
   assert.equal(await checkForUpdate('0.1.9', serve('0.1.8')), null);
+});
+
+test('checkForUpdate rejects invalid versions on either side', async () => {
+  const serve = (version: string) => (async () => new Response(JSON.stringify({ version }))) as typeof fetch;
+  assert.equal(await checkForUpdate('not-a-version', serve('0.2.0')), null);
+  assert.equal(await checkForUpdate('0.1.7 ', serve('0.2.0')), null);
+  assert.equal(await checkForUpdate('0.1.7', serve('not-a-version')), null);
+  assert.equal(await checkForUpdate('0.1.7', serve('1.0')), null);
 });
 
 test('launchContext distinguishes installed, npx-like, and source paths', () => {
@@ -55,6 +72,7 @@ test('packageManager follows the user agent, then the install path', () => {
   assert.equal(packageManager('/usr/lib/node_modules/x', { npm_config_user_agent: 'bun/1.1.0' }), 'bun');
   assert.equal(packageManager('/usr/lib/node_modules/x', {}), 'npm');
   assert.equal(packageManager('/home/u/.local/share/pnpm/global/5/node_modules/x', {}), 'pnpm');
+  assert.equal(packageManager('/home/u/app/node_modules/.pnpm/@wanderxuhq+anther@0.1.7/node_modules/@wanderxuhq/anther/dist/server/update.js', {}), 'pnpm');
   assert.equal(packageManager('/home/u/.bun/install/global/node_modules/x', {}), 'bun');
 });
 
@@ -83,13 +101,14 @@ test('runUpdate reports up-to-date, installs a newer version, and fails cleanly'
   const latest = (version: string) => (async () => new Response(JSON.stringify({ version }))) as typeof fetch;
 
   let logs: string[] = [];
-  assert.equal(await runUpdate({ moduleUrl: installed, version: async () => '0.1.7', fetch: latest('0.1.7'), log: (m) => logs.push(m) }), 0);
+  assert.equal(await runUpdate({ moduleUrl: installed, env: {}, version: async () => '0.1.7', fetch: latest('0.1.7'), log: (m) => logs.push(m) }), 0);
   assert.match(logs.join('\n'), /up to date \(0\.1\.7\)/);
 
   logs = [];
   const calls: string[] = [];
   const result = await runUpdate({
     moduleUrl: installed,
+    env: {},
     version: async () => '0.1.7',
     fetch: latest('0.1.8'),
     spawn: async (command, args) => { calls.push([command, ...args].join(' ')); return 0; },
@@ -100,12 +119,13 @@ test('runUpdate reports up-to-date, installs a newer version, and fails cleanly'
   assert.match(logs.join('\n'), /Updated to 0\.1\.8/);
 
   logs = [];
-  assert.equal(await runUpdate({ moduleUrl: installed, version: async () => '0.1.7', fetch: (async () => { throw new Error('offline'); }) as typeof fetch, log: (m) => logs.push(m) }), 1);
+  assert.equal(await runUpdate({ moduleUrl: installed, env: {}, version: async () => '0.1.7', fetch: (async () => { throw new Error('offline'); }) as typeof fetch, log: (m) => logs.push(m) }), 1);
   assert.match(logs.join('\n'), /Cannot check for updates/);
 
   logs = [];
   assert.equal(await runUpdate({
     moduleUrl: installed,
+    env: {},
     version: async () => '0.1.7',
     fetch: latest('0.1.8'),
     spawn: async () => 1,
@@ -114,11 +134,46 @@ test('runUpdate reports up-to-date, installs a newer version, and fails cleanly'
   assert.match(logs.join('\n'), /npm install -g @wanderxuhq\/anther@0\.1\.8/);
 });
 
+test('runUpdate treats an unparsable current version as unknown and installs latest', async () => {
+  const logs: string[] = [];
+  const calls: string[] = [];
+  const result = await runUpdate({
+    moduleUrl: installed,
+    env: {},
+    version: async () => '1.0',
+    fetch: (async () => new Response(JSON.stringify({ version: '0.1.8' }))) as typeof fetch,
+    spawn: async (command, args) => { calls.push([command, ...args].join(' ')); return 0; },
+    log: (m) => logs.push(m),
+  });
+  assert.equal(result, 0);
+  assert.deepEqual(calls, ['npm install -g @wanderxuhq/anther@0.1.8']);
+  assert.match(logs.join('\n'), /Current version is unknown/);
+  assert.match(logs.join('\n'), /Updated to 0\.1\.8/);
+});
+
+test('runUpdate does not retry when the install fails for a non-ENOENT reason', async () => {
+  const commands: string[] = [];
+  const logs: string[] = [];
+  const result = await runUpdate({
+    moduleUrl: installed,
+    env: {},
+    version: async () => '0.1.7',
+    fetch: (async () => new Response(JSON.stringify({ version: '0.1.8' }))) as typeof fetch,
+    spawn: async (command) => { commands.push(command); return -2; },
+    log: (m) => logs.push(m),
+  });
+  assert.equal(result, 1);
+  assert.deepEqual(commands, ['npm']);
+  assert.match(logs.join('\n'), /Update failed/);
+  assert.match(logs.join('\n'), /npm install -g @wanderxuhq\/anther@0\.1\.8/);
+});
+
 test('runUpdate falls back to the next manager when the binary is missing', async () => {
   const commands: string[] = [];
   const codes = [-1, 0];
   const result = await runUpdate({
     moduleUrl: installed,
+    env: {},
     version: async () => '0.1.7',
     fetch: (async () => new Response(JSON.stringify({ version: '0.1.8' }))) as typeof fetch,
     spawn: async (command) => { commands.push(command); return codes.shift() ?? 1; },
@@ -139,6 +194,15 @@ test('reportUpdateAvailable is silent on failures and when disabled', async () =
   await reportUpdateAvailable({ moduleUrl: installed, env: { ANTHER_NO_UPDATE_CHECK: '1' }, fetch: fake, log: (m) => logs.push(m) });
   assert.equal(fetched, false);
   assert.deepEqual(logs, []);
+});
+
+test('reportUpdateAvailable ignores an invalid current version', async () => {
+  const logs: string[] = [];
+  let fetched = false;
+  const fake = (async () => { fetched = true; return new Response(JSON.stringify({ version: '0.2.0' })); }) as typeof fetch;
+  await reportUpdateAvailable({ moduleUrl: installed, env: {}, version: async () => '1.0', fetch: fake, log: (m) => logs.push(m) });
+  assert.equal(fetched, false);
+  assert.deepEqual<string[]>(logs, []);
 });
 
 test('reportUpdateAvailable prints the version pair and the matching hint', async () => {

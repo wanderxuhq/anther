@@ -26,6 +26,17 @@ export type UpdateNoticeDeps = Omit<RunUpdateDeps, 'spawn'>;
 const MANAGERS: PackageManager[] = ['npm', 'pnpm', 'yarn', 'bun'];
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org';
 const DEFAULT_TIMEOUT_MS = 3000;
+/** 命令不存在 → 可换下一个包管理器；其余 spawn 失败/信号终止不可重试。 */
+const SPAWN_ENOENT = -1;
+const SPAWN_FAILED = -2;
+
+/** 严格 SemVer：三段数字 + 可选预发布（标识符非空）/构建元数据，不接受首尾空白。 */
+const SEMVER_RE = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
+/** registry 与当前版本必须先通过严格校验，避免脏数据进入比较或安装命令。 */
+function isValidVersion(value: unknown): value is string {
+  return typeof value === 'string' && SEMVER_RE.test(value);
+}
 
 /** semver 子集：`v` 前缀、`+build` 元数据与 `-prerelease` 后缀；无法解析返回 null。 */
 function parseVersion(raw: string): { core: number[]; pre: string[] } | null {
@@ -98,18 +109,19 @@ export async function fetchLatestVersion(
     });
     if (!response.ok) return null;
     const body = await response.json() as { version?: unknown };
-    return typeof body?.version === 'string' && body.version !== '' ? body.version : null;
+    return isValidVersion(body?.version) ? body.version : null;
   } catch {
     return null;
   }
 }
 
-/** 仅当 registry 上存在严格更新的版本时返回版本对。 */
+/** 仅当两侧版本都合法且 registry 上存在严格更新的版本时返回版本对。 */
 export async function checkForUpdate(
   current: string,
   fetchImpl: typeof fetch = fetch,
   registry?: string,
 ): Promise<UpdateInfo | null> {
+  if (!isValidVersion(current)) return null;
   const latest = await fetchLatestVersion(fetchImpl, DEFAULT_TIMEOUT_MS, registry);
   if (!latest || compareVersions(latest, current) <= 0) return null;
   return { current, latest };
@@ -149,7 +161,7 @@ export function packageManager(moduleUrl: string, env: NodeJS.ProcessEnv = proce
   if (agent.startsWith('yarn/')) return 'yarn';
   if (agent.startsWith('bun/')) return 'bun';
   const path = moduleUrl.toLowerCase();
-  if (path.includes('/pnpm/')) return 'pnpm';
+  if (path.includes('/.pnpm/') || path.includes('/pnpm/')) return 'pnpm';
   if (path.includes('/yarn/')) return 'yarn';
   if (path.includes('/.bun/')) return 'bun';
   return 'npm';
@@ -175,12 +187,13 @@ export function formatCommand(cmd: { command: string; args: string[] }): string 
   return [cmd.command, ...cmd.args].join(' ');
 }
 
-/** 默认执行器：继承 stdio，让包管理器的进度直接显示在终端；spawn 失败返回 -1。 */
+/** 默认执行器：继承 stdio，让包管理器的进度直接显示在终端。 */
 function defaultSpawn(command: string, args: string[]): Promise<number> {
   return new Promise((resolve) => {
     const child = spawnProcess(command, args, { stdio: 'inherit' });
-    child.once('error', () => resolve(-1));
-    child.once('close', (code) => resolve(code ?? -1));
+    // 只有命令不存在才值得换包管理器；权限等错误与信号终止直接失败
+    child.once('error', (error) => resolve((error as NodeJS.ErrnoException).code === 'ENOENT' ? SPAWN_ENOENT : SPAWN_FAILED));
+    child.once('close', (code) => resolve(code ?? SPAWN_FAILED));
   });
 }
 
@@ -210,12 +223,17 @@ export async function runUpdate(deps: RunUpdateDeps = {}): Promise<number> {
     log('Cannot check for updates. Check your network connection and try again.');
     return 1;
   }
-  if (current === 'unknown' || compareVersions(latest, current) <= 0) {
-    log(`anther is up to date (${current}).`);
-    return 0;
+  if (isValidVersion(current)) {
+    if (compareVersions(latest, current) <= 0) {
+      log(`anther is up to date (${current}).`);
+      return 0;
+    }
+    log(`New version available: ${current} -> ${latest}`);
+  } else {
+    // 当前版本无法解析：不参与比较，直接安装已校验的 latest
+    log(`Current version is unknown; installing ${latest}.`);
   }
 
-  log(`New version available: ${current} -> ${latest}`);
   const preferred = packageManager(moduleUrl, env);
   const order = [preferred, ...MANAGERS.filter((manager) => manager !== preferred)];
   let failed: { command: string; args: string[] } | null = null;
@@ -229,7 +247,7 @@ export async function runUpdate(deps: RunUpdateDeps = {}): Promise<number> {
     }
     failed = cmd;
     // 只有命令不存在（-1）才尝试下一个包管理器；真实安装失败直接报错
-    if (code !== -1) break;
+    if (code !== SPAWN_ENOENT) break;
   }
 
   log('Update failed.');
@@ -246,7 +264,7 @@ export async function reportUpdateAvailable(deps: UpdateNoticeDeps = {}): Promis
     const env = deps.env ?? process.env;
     if (env.ANTHER_NO_UPDATE_CHECK === '1') return;
     const current = await (deps.version ?? appVersion)();
-    if (current === 'unknown') return;
+    if (!isValidVersion(current)) return;
     const moduleUrl = deps.moduleUrl ?? import.meta.url;
     const update = await checkForUpdate(current, deps.fetch ?? fetch, registryBase(env));
     if (!update) return;
