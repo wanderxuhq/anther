@@ -1,8 +1,7 @@
 // web/src/stores.ts
 import { isArchiveFile } from './archive.ts';
 import { pathWithin } from './file-operations.ts';
-import { isArchiveLocation } from './file-target.ts';
-import { fileTargetKey } from './file-target.ts';
+import { fileTargetKey, isArchiveLocation, parseFileTargetKey } from './file-target.ts';
 import type { ReadingLocation } from './readers/location.ts';
 import { batch, createSignal, createMemo } from 'solid-js';
 import { DEFAULT_STATE, DEFAULT_EXCLUDE, parseUrl, serializeUrl, type UrlState, type Panel, type LineRange } from './url-state.ts';
@@ -63,24 +62,21 @@ export const activeTab = createMemo<TabItem | null>(() => {
 });
 /** 当前前台文件路径：当前标签是文件才有值，终端/无标签为 null（主区域二选一） */
 export const currentFile = createMemo<string | null>(() => currentFilePath(tabs(), currentTabId()));
-/** 当前文件标签对应的压缩包内部路径；切换到其他文件或普通打开时清空。 */
-export const activeArchiveRoot = createMemo(() => {
+/** 当前标签对应的压缩包身份；database archive 优先，其次是当前文件标签的包内位置。 */
+const activeArchive = createMemo<{ root: string; entry: string | null; chain: string[] } | null>(() => {
   const tab = activeTab();
-  return tab?.kind === 'database' && tab.archive ? tab.path : currentFile() && isArchiveFile(currentFile()!) ? currentFile() : null;
-});
-export const archiveEntry = createMemo<string | null>(() => {
-  const tab = activeTab();
-  if (tab?.kind === 'database' && tab.archive) return tab.archive.entry;
+  if (tab?.kind === 'database' && tab.archive) return { root: tab.path, ...tab.archive };
+  const path = currentFile();
+  if (!path || !isArchiveFile(path)) return null;
   const location = archiveLocation();
-  return location?.path === currentFile() ? location.entry : null;
+  return location?.path === path
+    ? { root: path, entry: location.entry, chain: location.chain }
+    : { root: path, entry: null, chain: EMPTY_ARCHIVE_CHAIN };
 });
+export const activeArchiveRoot = () => activeArchive()?.root ?? null;
+export const archiveEntry = () => activeArchive()?.entry ?? null;
 /** 当前压缩包内的嵌套路径链；路径不匹配时返回稳定空数组。 */
-export const archiveChain = createMemo<string[]>(() => {
-  const tab = activeTab();
-  if (tab?.kind === 'database' && tab.archive) return tab.archive.chain;
-  const location = archiveLocation();
-  return location?.path === currentFile() ? location.chain : EMPTY_ARCHIVE_CHAIN;
-});
+export const archiveChain = () => activeArchive()?.chain ?? EMPTY_ARCHIVE_CHAIN;
 
 // 搜索跳转管道 / 文档加载路径 / 编辑器句柄
 export const [pendingGoto, setPendingGoto] = createSignal<{ path: string; line0: number; endLine0?: number; reveal?: boolean } | null>(null);
@@ -101,6 +97,46 @@ let terminalsLoaded = false;
 let termCount = 0;
 
 /** 主导航新增历史；连续输入/选区变化只替换当前历史。恢复 URL 不调用此函数。 */
+type TabStateSerializer<K extends TabItem['kind']> = (
+  state: UrlState,
+  tab: Extract<TabItem, { kind: K }>,
+) => void;
+
+/** One tab-kind serializer each; adding a tab kind is a table entry, not another else-if. */
+const PUSH_TAB_STATE: { [K in TabItem['kind']]: TabStateSerializer<K> } = {
+  file: (state, tab) => {
+    state.path = tab.path;
+    state.entry = archiveEntry();
+    state.inside = archiveChain();
+    state.reader = readingLocationFor(currentReadingKey()!);
+    const position = filePosition();
+    state.line = position?.path === currentReadingKey() ? position.line : null;
+  },
+  database: (state, tab) => {
+    state.view = 'database'; state.path = tab.path;
+    state.database = { object: tab.object, mode: tab.mode, sort: tab.sort, archive: tab.archive,
+      filter: tab.filter, offset: tab.offset, cursor: tab.cursor, table: tab.table };
+  },
+  terminal: (state, tab) => { state.term = tab.id; },
+  git: (state) => { state.view = 'git'; },
+  'git-diff': (state, tab) => { state.view = 'diff'; state.path = tab.path; },
+  'git-history': (state) => { state.view = 'history'; state.branch = historyBranch(); },
+  'git-branch': (state) => { state.view = 'branches'; },
+  'git-commit': (state, tab) => { state.view = 'commit'; state.commit = tab.commit; },
+  feature: (state, tab) => {
+    state.view = 'feature';
+    state.feature = { featureID: tab.featureID, panelID: tab.panelID, route: tab.route, subpath: tab.path };
+    lastFeatureTab.set(tab.panelID, tab.id);
+  },
+};
+
+function applyTabState(state: UrlState, tab: TabItem): void {
+  // The mapped table is keyed by kind; TypeScript cannot correlate the indexed
+  // function with the union member through dynamic indexing, so narrow once here.
+  const serialize = PUSH_TAB_STATE[tab.kind] as (state: UrlState, tab: TabItem) => void;
+  serialize(state, tab);
+}
+
 export function pushState(mode: 'push' | 'replace' = 'push'): void {
   // Native hash navigation changes location before hashchange is delivered.
   // A queued scroll/selection notification must not replace that destination.
@@ -113,29 +149,12 @@ export function pushState(mode: 'push' | 'replace' = 'push'): void {
     panel: activePanel(), query: searchQuery(), caseSensitive: searchCaseSensitive(), exclude: searchExclude(),
   };
   const tab = activeTab();
-  if (tab) setPendingTerminal(null);
-  if (tab?.kind === 'file') {
-    state.path = tab.path;
-    state.entry = archiveEntry();
-    state.inside = archiveChain();
-    state.reader = readingLocationFor(currentReadingKey()!);
-    const position = filePosition();
-    state.line = position?.path === currentReadingKey() ? position.line : null;
-  } else if (tab?.kind === 'database') {
-    state.view = 'database'; state.path = tab.path; state.database = { object: tab.object, mode: tab.mode, sort: tab.sort, archive: tab.archive,
-      filter: tab.filter, offset: tab.offset, cursor: tab.cursor, table: tab.table };
-  } else if (tab?.kind === 'terminal') state.term = tab.id;
-  else if (tab?.kind === 'git') state.view = 'git';
-  else if (tab?.kind === 'git-diff') { state.view = 'diff'; state.path = tab.path; }
-  else if (tab?.kind === 'git-history') { state.view = 'history'; state.branch = historyBranch(); }
-  else if (tab?.kind === 'git-branch') state.view = 'branches';
-  else if (tab?.kind === 'git-commit') { state.view = 'commit'; state.commit = tab.commit; }
-  else if (tab?.kind === 'feature') {
-    state.view = 'feature';
-    state.feature = { featureID: tab.featureID, panelID: tab.panelID, route: tab.route, subpath: tab.path };
-    lastFeatureTab.set(tab.panelID, tab.id);
+  if (tab) {
+    setPendingTerminal(null);
+    applyTabState(state, tab);
+  } else {
+    state.term = pendingTerminal();
   }
-  else if (!tab) state.term = pendingTerminal();
   saveDatabaseTabs();
   const url = serializeUrl(state, basePath());
   if (window.location.pathname + window.location.search + window.location.hash !== url) {
@@ -143,6 +162,19 @@ export function pushState(mode: 'push' | 'replace' = 'push'): void {
     else window.history.pushState(null, '', url);
   }
   lastNavigationHref = window.location.href;
+}
+
+/** 切换标签的统一顺序：先更新 tabs，再设前台，最后把状态写回 URL。 */
+function activateTab(add: (prev: TabItem[]) => TabItem[], id: string): void {
+  batch(() => { setTabs(add); setCurrentTabId(id); });
+  pushState();
+}
+
+/** 关闭标签后回退到 next（默认文件优先）；只在它仍是前台时移动前台。 */
+function retireTab(id: string, next = nextActiveTabId(tabs(), id)): void {
+  setTabs((prev) => removeTabById(prev, id));
+  if (currentTabId() === id) setCurrentTabId(next);
+  pushState();
 }
 
 export function selectPanel(panel: Panel): void {
@@ -178,6 +210,42 @@ async function registerFile(path: string): Promise<void> {
   if (currentFile() === path) await api.tabs.front(path);
 }
 
+type RestoredTab = {
+  add?: (prev: TabItem[]) => TabItem[];
+  id: string;
+  featurePanel?: FeaturePanel;
+};
+type RestoreFactory = (state: UrlState) => RestoredTab | null;
+
+/** One view→tab factory per URL view; adding a view must be a table entry, not another else-if. */
+const RESTORE_TABS: Record<UrlState['view'], RestoreFactory> = {
+  file: (state) => state.path ? { add: (prev) => addFileTab(prev, state.path!), id: state.path } : null,
+  database: (state) => {
+    const path = state.path, database = state.database;
+    if (!path || !database) return null;
+    // Explicit undefined values clear stale filter/sort/page state on an existing tab.
+    const target = { ...database, sort: database.sort, filter: database.filter,
+      offset: database.offset, cursor: database.cursor, table: database.table };
+    return { add: (prev) => addDatabaseTab(prev, path, target), id: databaseTabId(path, target) };
+  },
+  git: () => ({ add: addGitTab, id: GIT_TAB_ID }),
+  history: () => ({ add: addGitHistoryTab, id: GIT_HISTORY_TAB_ID }),
+  branches: () => ({ add: addGitBranchTab, id: GIT_BRANCH_TAB_ID }),
+  commit: (state) => state.commit
+    ? { add: (prev) => addGitCommitTab(prev, state.commit!), id: gitCommitTabId(state.commit) }
+    : null,
+  diff: (state) => state.path
+    ? { add: (prev) => addGitDiffTab(prev, state.path!), id: gitDiffTabId(state.path) }
+    : null,
+  feature: (state) => {
+    const feature = state.feature;
+    const panel = feature ? findFeaturePanel(feature.featureID, feature.panelID) : undefined;
+    return panel && feature
+      ? { add: (prev) => addFeatureTab(prev, panel, feature.subpath), id: featureTabId(panel, feature.subpath), featurePanel: panel }
+      : null;
+  },
+};
+
 /** 初始加载、直接链接、前进/后退共用；先补齐本地标签再激活，网络响应不改变导航目标。 */
 export function restoreUrl(state: UrlState, syncServer = true): void {
   // 解析会丢弃不属于当前视图的参数；同步修正地址，避免刷新后 URL 与页面不一致。
@@ -212,35 +280,22 @@ export function restoreUrl(state: UrlState, syncServer = true): void {
     setPendingTerminal(!terminalsLoaded ? state.term : null);
     if (state.term) {
       setCurrentTabId(terminalExists(tabs(), state.term) ? state.term : null);
-    } else if (state.view === 'database' && state.path && state.database) {
-      setTabs((prev) => addDatabaseTab(prev, state.path!, { ...state.database!, sort: state.database!.sort, filter: state.database!.filter,
-        offset: state.database!.offset, cursor: state.database!.cursor, table: state.database!.table }));
-      setCurrentTabId(databaseTabId(state.path, state.database));
-    } else if (state.view === 'git') {
-      setTabs(addGitTab); setCurrentTabId(GIT_TAB_ID);
-    } else if (state.view === 'history') {
-      setTabs(addGitHistoryTab); setCurrentTabId(GIT_HISTORY_TAB_ID);
-    } else if (state.view === 'branches') {
-      setTabs(addGitBranchTab); setCurrentTabId(GIT_BRANCH_TAB_ID);
-    } else if (state.view === 'commit' && state.commit) {
-      setTabs((prev) => addGitCommitTab(prev, state.commit!)); setCurrentTabId(gitCommitTabId(state.commit));
-    } else if (state.view === 'diff' && state.path) {
-      setTabs((prev) => addGitDiffTab(prev, state.path!)); setCurrentTabId(gitDiffTabId(state.path));
-    } else if (state.view === 'feature' && state.feature) {
-      const panel = findFeaturePanel(state.feature.featureID, state.feature.panelID);
-      if (panel) {
-        const tabID = featureTabId(panel, state.feature!.subpath);
-        setTabs((prev) => addFeatureTab(prev, panel, state.feature!.subpath));
-        setCurrentTabId(tabID);
-        lastFeatureTab.set(panel.panelID, tabID);
-        setActivePanel('tabs');
+    } else {
+      const restored = RESTORE_TABS[state.view](state);
+      if (restored) {
+        if (restored.add) setTabs(restored.add);
+        setCurrentTabId(restored.id);
+        if (restored.featurePanel) {
+          lastFeatureTab.set(restored.featurePanel.panelID, restored.id);
+          setActivePanel('tabs');
+        }
+      } else setCurrentTabId(null);
+      if (state.view === 'file' && state.path) {
+        if (state.line) setPendingGoto({ path: state.path, line0: state.line.start - 1,
+          endLine0: state.line.end > state.line.start ? state.line.end - 1 : undefined });
+        else setPendingGoto({ path: state.path, line0: 0, reveal: false });
       }
-    } else if (state.path) {
-      setTabs((prev) => addFileTab(prev, state.path!)); setCurrentTabId(state.path);
-      if (state.line) setPendingGoto({ path: state.path, line0: state.line.start - 1,
-        endLine0: state.line.end > state.line.start ? state.line.end - 1 : undefined });
-      else setPendingGoto({ path: state.path, line0: 0, reveal: false });
-    } else setCurrentTabId(null);
+    }
   });
   if (syncServer && currentFile()) {
     saveTabsSnapshot(fileTabPaths(tabs()));
@@ -398,11 +453,16 @@ export function gotoLine0(path: string, line0: number): void {
   void openTab(path, { start: line, end: line }).catch(() => {});
 }
 
-export async function closeTab(path: string): Promise<void> {
+export async function closeTab(path: string, nextId?: string | null): Promise<void> {
   await api.tabs.close(path);
-  const closedId = path;
-  setTabs((prev) => removeTabById(prev, closedId));
-  if (currentTabId() === closedId) setCurrentTabId(nextActiveTabId(tabs(), closedId));
+  setTabs((prev) => removeTabById(prev, path));
+  if (currentTabId() === path) {
+    const fallback = nextId === undefined ? nextActiveTabId(tabs(), path)
+      : nextId === null ? null
+      : tabs().some((item) => item.id === nextId) ? nextId
+      : nextActiveTabId(tabs(), path);
+    setCurrentTabId(fallback);
+  }
   saveTabsSnapshot(fileTabPaths(tabs()));
   pushState();
 }
@@ -437,17 +497,13 @@ export async function closeTerminal(id: string): Promise<void> {
 
 /** 前端移除终端标签（closeTerminal 成功后 / WS exit 帧 / 重连 4404 失效） */
 export function removeTerminalTab(id: string): void {
-  setTabs((prev) => removeTabById(prev, id));
-  if (currentTabId() === id) setCurrentTabId(nextActiveTabId(tabs(), id));
-  pushState();
+  retireTab(id);
 }
 
 /** 打开/复用 git 面板标签（单例，完全对齐 openTerminal 的"有则切过去、无则新建"模式）。
  *  git 无服务端进程，纯前端状态；status 由 GitView 挂载时自行拉取。 */
 export function openGit(): void {
-  setTabs((prev) => addGitTab(prev));
-  setCurrentTabId(GIT_TAB_ID);
-  pushState();
+  activateTab(addGitTab, GIT_TAB_ID);
 }
 
 /** 打开功能面板；不带子路径时优先回到该面板最近打开的 tab。 */
@@ -465,26 +521,18 @@ export function openFeature(panel: FeaturePanel, path = ''): void {
       return;
     }
   }
-  setTabs((prev) => addFeatureTab(prev, panel, path));
-  setCurrentTabId(featureTabId(panel, path));
-  pushState();
+  activateTab((prev) => addFeatureTab(prev, panel, path), featureTabId(panel, path));
 }
 
 /** Open an exact feature subpath, bypassing the remembered last tab. */
 export function openFeatureAt(panel: FeaturePanel, path: string, title = panel.title): void {
   setActivePanel('tabs');
-  setTabs((prev) => addFeatureTab(prev, { ...panel, title }, path));
-  setCurrentTabId(featureTabId(panel, path));
-  pushState();
+  activateTab((prev) => addFeatureTab(prev, { ...panel, title }, path), featureTabId(panel, path));
 }
 
 /** Close one feature subpath; only move the active tab when it was closed. */
 export function closeFeatureAt(panel: FeaturePanel, path: string): void {
-  const id = featureTabId(panel, path);
-  const wasActive = currentTabId() === id;
-  setTabs((prev) => removeTabById(prev, id));
-  if (wasActive) setCurrentTabId(nextActiveTabId(tabs(), id));
-  pushState();
+  retireTab(featureTabId(panel, path));
 }
 
 /** Update the title/icon of an existing feature tab without activating it. */
@@ -522,16 +570,12 @@ export function applyFeatureTabs(panel: FeaturePanel, state: FeatureTabsState): 
 
 /** 打开/复用某文件的 git-diff 标签，同文件点第二次复用。 */
 export function openGitDiff(path: string): void {
-  setTabs((prev) => addGitDiffTab(prev, path));
-  setCurrentTabId(gitDiffTabId(path));
-  pushState();
+  activateTab((prev) => addGitDiffTab(prev, path), gitDiffTabId(path));
 }
 
 /** 关闭 git / git-diff 标签：只关视图不杀进程（git 无进程），回退到下一个标签 */
 export function closeGitTab(id: string): void {
-  setTabs((prev) => removeTabById(prev, id));
-  if (currentTabId() === id) setCurrentTabId(nextActiveTabId(tabs(), id));
-  pushState();
+  retireTab(id);
 }
 
 /** 拉分支元信息（启动时一次）：currentBranch 失败/非仓库保持 null。checkout/createBranch 成功后各自直接 set。 */
@@ -544,23 +588,17 @@ export async function refreshGitMeta(): Promise<void> {
 
 /** 打开/复用历史标签（单例），URL 保留历史分支筛选。 */
 export function openGitHistory(): void {
-  setTabs((prev) => addGitHistoryTab(prev));
-  setCurrentTabId(GIT_HISTORY_TAB_ID);
-  pushState();
+  activateTab(addGitHistoryTab, GIT_HISTORY_TAB_ID);
 }
 
 /** 打开/复用分支标签（单例） */
 export function openGitBranch(): void {
-  setTabs((prev) => addGitBranchTab(prev));
-  setCurrentTabId(GIT_BRANCH_TAB_ID);
-  pushState();
+  activateTab(addGitBranchTab, GIT_BRANCH_TAB_ID);
 }
 
 /** 打开/复用某提交的 diff 标签，同提交去重。 */
 export function openGitCommit(hash: string): void {
-  setTabs((prev) => addGitCommitTab(prev, hash));
-  setCurrentTabId(gitCommitTabId(hash));
-  pushState();
+  activateTab((prev) => addGitCommitTab(prev, hash), gitCommitTabId(hash));
 }
 
 /**
@@ -597,8 +635,7 @@ function restoreDatabaseTabs() {
   } catch { /* Invalid or unavailable local snapshot. */ }
 }
 export function openDatabaseTab(path: string, target: DatabaseTarget = { object: null, mode: 'data' }) {
-  batch(() => { setTabs((prev) => addDatabaseTab(prev, path, target)); setCurrentTabId(databaseTabId(path, target)); });
-  pushState();
+  activateTab((prev) => addDatabaseTab(prev, path, target), databaseTabId(path, target));
 }
 export function updateDatabaseSort(id: string, sort: DatabaseTab['sort']) {
   setTabs((prev) => prev.map((tab) => tab.kind === 'database' && tab.id === id ? { ...tab, sort } : tab));
@@ -616,11 +653,8 @@ export async function closeAnyTab(id: string): Promise<void> {
     // 终端里点开的文件预览：关闭后回到来源终端（与预览关闭按钮一致）。
     const origin = id === currentTabId() ? filePreviewOrigin : null;
     filePreviewOrigin = null;
-    await closeTab(tab.path);
-    if (origin && tabs().some((item) => item.id === origin)) {
-      setCurrentTabId(origin);
-      pushState();
-    }
+    const next = origin && tabs().some((item) => item.id === origin) ? origin : undefined;
+    await closeTab(tab.path, next);
     return;
   }
   if (tab.kind === 'terminal') { await closeTerminal(id); return; }
@@ -633,12 +667,9 @@ export async function relocateFileTabs(from: string, to?: string) {
   const affected = fileTabPaths(tabs()).filter((path) => pathWithin(path, from));
   const move = (path: string) => to! + path.slice(from.length);
   const moveKey = (key: string): string | null => {
-    if (pathWithin(key, from)) return to ? move(key) : null;
-    if (key.startsWith('/_/entry/')) {
-      const [path, chain, entry] = JSON.parse(key.slice('/_/entry/'.length));
-      if (pathWithin(path, from)) return to ? fileTargetKey({ path: move(path), archive: { chain, entry } }) : null;
-    }
-    return key;
+    const target = parseFileTargetKey(key);
+    if (!target || !pathWithin(target.path, from)) return key;
+    return to ? fileTargetKey({ path: move(target.path), archive: target.archive }) : null;
   };
   batch(() => {
     for (const [key, location] of [...readingLocations]) {

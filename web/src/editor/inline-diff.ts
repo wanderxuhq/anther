@@ -31,7 +31,7 @@ class DiffMarker extends GutterMarker {
 /** 行内 diff 编辑器：状态栏（+/−/空）+ 新文件行号双 gutter + 行级红绿背景。返回 EditorHandle（只读无操作 + 搜索）。 */
 export function createInlineDiffEditor(container: HTMLElement, file: DiffFile): DiffHandle {
   const { doc, kinds, numbers } = buildInlineDoc(file);
-  const lineCount = doc === '' ? 0 : doc.split('\n').length;
+  const lineCount = kinds.length;
 
   // 最左状态栏：+（add，绿）/ −（del，红）/ 空（ctx）
   const statusGutter = gutter({

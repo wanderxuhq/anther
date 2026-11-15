@@ -10,7 +10,6 @@ import {
   onMount,
   untrack,
 } from 'solid-js';
-import type { JSX } from 'solid-js';
 import { render } from 'solid-js/web';
 import {
   createApi,
@@ -54,9 +53,20 @@ import {
 } from './agent-preference.ts';
 import type { FeatureTabPatch } from '../feature-types.ts';
 import { t, lang } from '../i18n.ts';
-import { stripTerminalControl, terminalIdsFromContent } from './terminal.ts';
-import { planEntries, upsertPlan, type PlanEntry, type PlanItem } from './plan.ts';
-import { richContent, type RichContent } from './content.ts';
+import { stripTerminalControl } from './terminal.ts';
+import { type PlanEntry } from './plan.ts';
+import { type RichContent } from './content.ts';
+import {
+  applyTimelineUpdate,
+  applyTurnUsage,
+  createTimeline,
+  nextTimelineId,
+  replayTimeline,
+  type AssistantItem,
+  type ChatItem,
+  type ToolItem,
+  type Usage,
+} from './timeline.ts';
 import { externalHttpUrl } from './external.ts';
 import {
   prepareAttachment,
@@ -67,13 +77,11 @@ import {
 import { loadMcpServers, mcpStorageKey, parseKeyValueLines, parseLines, storeMcpServers } from './mcp.ts';
 import { skillCommands, skillMention, skillSlashInput, type SkillCommand } from './skill-command.ts';
 import { MAX_SYSTEM_PROMPT, loadSystemPrompt, storeSystemPrompt, systemPromptStorageKey } from './system-prompt.ts';
-import {
-  applyCompactionChunk,
-  applyCompactionUpdate,
-  noticeItem,
-  type StatusItem,
-} from './status.ts';
-import { configChoices, effortConfigOption, modeStateFromOptions, otherConfigOptions, secondaryConfigOptions } from './config.ts';
+import { type StatusItem } from './status.ts';
+import { configChoices, effortConfigOption, modelConfigOption, modelFromConfig, otherConfigOptions, secondaryConfigOptions } from './config.ts';
+import { planConfigApply, planModeApply, type ConfigSource, type ConfigTarget } from './config-apply.ts';
+import { fieldKind } from './form-field.ts';
+import { modelKey } from './model-preference.ts';
 import { css } from './styles.ts';
 
 export type FeatureTabSpec = {
@@ -110,59 +118,9 @@ export type FeatureUiHandle = {
   update?(patch: { theme?: string; lang?: string; path?: string }): void;
 };
 
-type ToolStatus = 'streaming' | 'running' | 'completed' | 'error';
-type ToolFile = { uri: string; mime: string; name?: string | null };
-type ToolItem = {
-  id: string;
-  name: string;
-  status: ToolStatus;
-  input: string;
-  inputObject?: unknown;
-  content: string;
-  rich: RichContent[];
-  terminalIds: string[];
-  files: ToolFile[];
-  metadata?: Record<string, unknown>;
-  error?: string;
-  time?: { created?: number; ran?: number; completed?: number };
-};
-type Tokens = {
-  input?: number;
-  output?: number;
-  reasoning?: number;
-  cache?: { read?: number; write?: number };
-};
-type Usage = { cost?: number; tokens?: Tokens };
-type AssistantItem = {
-  kind: 'assistant';
-  id: string;
-  text: string;
-  reasoning: string;
-  rich: RichContent[];
-  tools: ToolItem[];
-  time: number;
-  model?: string;
-  agent?: string;
-  usage?: Usage;
-  error?: string;
-  streaming: boolean;
-};
-type ChatItem =
-  | { kind: 'user'; id: string; text: string; rich: RichContent[]; content: PromptContent[]; time: number }
-  | AssistantItem
-  | PlanItem
-  | StatusItem;
-
-let localID = 0;
-const nextID = (prefix: string) => `${prefix}-${++localID}`;
-
 function isFree(model: Model): boolean {
   const cost = model.cost?.[0];
   return !!cost && cost.input === 0 && cost.output === 0;
-}
-
-function modelKey(model: Model): string {
-  return `${model.providerID}/${model.id}`;
 }
 
 function modelFullLabel(model: Model | null | undefined): string {
@@ -214,6 +172,12 @@ function formatDuration(start?: number, end?: number): string {
   return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
 }
 
+function terminalExitLabel(status: TerminalExit): string {
+  if (status.signal) return t('agent.terminalSignaled', { signal: status.signal });
+  if (status.exitCode !== null) return t('agent.terminalExit', { code: status.exitCode });
+  return t('agent.terminalExited');
+}
+
 function formatError(error: unknown): string {
   if (!error) return '';
   if (typeof error === 'string') return error;
@@ -228,238 +192,6 @@ function formatError(error: unknown): string {
     }
   }
   return String(error);
-}
-
-function stringify(value: unknown): string {
-  if (value === undefined || value === null) return '';
-  if (typeof value === 'string') return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function acpContentText(content: any): string {
-  if (!content) return '';
-  if (typeof content === 'string') return content;
-  if (content.type === 'text') return String(content.text ?? '');
-  return '';
-}
-
-function acpToolText(content: any): string {
-  if (!Array.isArray(content)) return '';
-  const parts: string[] = [];
-  for (const part of content) {
-    if (!part || typeof part !== 'object') continue;
-    if (part.type === 'content') {
-      const text = acpContentText(part.content);
-      if (text) parts.push(text);
-    } else if (part.type === 'diff') {
-      parts.push(`--- ${part.path}\n+++ ${part.path}\n${part.oldText ?? ''}\n${part.newText ?? ''}`);
-    } else if (part.type === 'terminal') {
-      // Rendered from the live terminal output panel.
-    }
-  }
-  return parts.join('\n');
-}
-
-function acpToolFiles(content: any, locations?: any): ToolFile[] {
-  const files: ToolFile[] = [];
-  for (const part of Array.isArray(content) ? content : []) {
-    if (part?.type === 'file' && typeof part.uri === 'string') {
-      files.push({ uri: part.uri, mime: String(part.mime ?? ''), name: part.name ?? null });
-    }
-  }
-  for (const location of Array.isArray(locations) ? locations : []) {
-    if (typeof location?.path === 'string' && !files.some((file) => file.uri === location.path)) {
-      files.push({ uri: location.path, mime: '', name: location.path.split('/').pop() ?? location.path });
-    }
-  }
-  return files;
-}
-
-function terminalExitLabel(status: TerminalExit): string {
-  if (status.signal) return t('agent.terminalSignaled', { signal: status.signal });
-  if (status.exitCode !== null) return t('agent.terminalExit', { code: status.exitCode });
-  return t('agent.terminalExited');
-}
-
-function acpToolRich(content: any): RichContent[] {
-  if (!Array.isArray(content)) return [];
-  const rich: RichContent[] = [];
-  for (const part of content) {
-    if (part?.type === 'content') {
-      const value = richContent(part.content);
-      if (value) rich.push(value);
-    }
-  }
-  return rich;
-}
-
-function acpToolStatus(status: unknown): ToolStatus {
-  if (status === 'pending') return 'streaming';
-  if (status === 'in_progress') return 'running';
-  if (status === 'failed') return 'error';
-  return 'completed';
-}
-
-function acpTool(update: any): ToolItem {
-  return {
-    id: String(update.toolCallId ?? update.id ?? nextID('tool')),
-    name: String(update.name || update.title || 'tool'),
-    status: acpToolStatus(update.status),
-    input: stringify(update.rawInput),
-    inputObject: update.rawInput,
-    content: acpToolText(update.content),
-    rich: acpToolRich(update.content),
-    terminalIds: terminalIdsFromContent(update.content),
-    files: acpToolFiles(update.content, update.locations),
-    metadata: update.rawOutput,
-  };
-}
-
-function normalizeHistory(updates: any[]): ChatItem[] {
-  const out: ChatItem[] = [];
-  const toolOwners = new Map<string, ToolItem>();
-  let assistant: AssistantItem | null = null;
-  let assistantID: string | null = null;
-  let user: { kind: 'user'; id: string; text: string; rich: RichContent[]; content: PromptContent[]; time: number } | null = null;
-  let userID: string | null = null;
-  let updateIndex = 0;
-
-  const ensureAssistant = (id?: string): AssistantItem => {
-    if (!assistant || (id && assistantID && id !== assistantID)) {
-      assistant = {
-        kind: 'assistant',
-        id: id || nextID('assistant'),
-        text: '',
-        reasoning: '',
-        rich: [],
-        tools: [],
-        time: Date.now(),
-        streaming: false,
-      };
-      assistantID = assistant.id;
-      out.push(assistant);
-    }
-    return assistant;
-  };
-
-  for (const update of updates) {
-    if (!update || typeof update !== 'object') continue;
-    updateIndex += 1;
-    switch (update.sessionUpdate) {
-      case 'user_message_chunk': {
-        const id = String(update.messageId ?? nextID('user'));
-        const text = acpContentText(update.content);
-        if (!user || (userID && id !== userID)) {
-          user = { kind: 'user', id, text: '', rich: [], content: [], time: Date.now() };
-          userID = id;
-          out.push(user);
-          assistant = null;
-          assistantID = null;
-        }
-        user.text += text;
-        const rich = richContent(update.content);
-        if (rich) user.rich.push(rich);
-        if (update.content && typeof update.content === 'object') {
-          user.content.push(update.content as PromptContent);
-        }
-        break;
-      }
-      case 'agent_message_chunk': {
-        user = null;
-        userID = null;
-        const text = acpContentText(update.content);
-        const rich = richContent(update.content);
-        if (!text && !rich) break;
-        const item = ensureAssistant(String(update.messageId ?? '').replace(/:reasoning:\d+$/, '') || undefined);
-        if (text) item.text += text;
-        if (rich) item.rich.push(rich);
-        break;
-      }
-      case 'agent_thought_chunk': {
-        user = null;
-        userID = null;
-        const text = acpContentText(update.content);
-        if (!text) break;
-        const item = ensureAssistant(String(update.messageId ?? '').replace(/:reasoning:\d+$/, '') || undefined);
-        item.reasoning += text;
-        break;
-      }
-      case 'tool_call': {
-        user = null;
-        userID = null;
-        const tool = acpTool(update);
-        const existing = toolOwners.get(tool.id);
-        if (existing) {
-          Object.assign(existing, tool);
-          break;
-        }
-        const item = ensureAssistant();
-        item.tools.push(tool);
-        toolOwners.set(tool.id, tool);
-        break;
-      }
-      case 'tool_call_update': {
-        const tool = toolOwners.get(String(update.toolCallId));
-        if (tool) {
-          if (update.status !== undefined) tool.status = acpToolStatus(update.status);
-          if (update.title !== undefined) tool.name = String(update.title ?? tool.name);
-          if (update.name !== undefined) tool.name = String(update.name ?? tool.name);
-          if (update.content !== undefined) {
-            tool.content = acpToolText(update.content);
-            tool.rich = acpToolRich(update.content);
-            tool.terminalIds = terminalIdsFromContent(update.content);
-          }
-          if (update.locations !== undefined) tool.files = acpToolFiles(update.content, update.locations);
-          if (update.rawInput !== undefined) { tool.inputObject = update.rawInput; tool.input = stringify(update.rawInput); }
-          if (update.rawOutput !== undefined) tool.metadata = update.rawOutput;
-        }
-        break;
-      }
-      case 'usage_update': {
-        const item = ensureAssistant();
-        item.usage = {
-          cost: typeof update.cost?.amount === 'number' ? update.cost.amount : item.usage?.cost,
-          tokens: {
-            input: Number(update.used ?? 0),
-            output: 0,
-            reasoning: item.usage?.tokens?.reasoning,
-          },
-        };
-        break;
-      }
-      case 'notice': {
-        const item = noticeItem(update, Date.now(), `notice-${updateIndex}`);
-        if (item) out.push(item);
-        break;
-      }
-      case 'compaction_update': {
-        out.splice(0, out.length, ...applyCompactionUpdate(out, update, Date.now(), nextID('compaction')));
-        break;
-      }
-      case 'compaction_summary_chunk': {
-        out.splice(0, out.length, ...applyCompactionChunk(out, update, Date.now(), nextID('compaction')));
-        break;
-      }
-      case 'plan': {
-        const entries = planEntries(update);
-        if (!entries) break;
-        const plan: PlanItem = { kind: 'plan', id: 'plan', entries, time: Date.now() };
-        out.splice(0, out.length, ...upsertPlan(out, plan));
-        assistant = null;
-        assistantID = null;
-        user = null;
-        userID = null;
-        break;
-      }
-      default:
-        break;
-    }
-  }
-  return out.filter((item) => item.kind !== 'assistant' || item.text || item.reasoning || item.rich.length || item.tools.length || item.usage || item.error);
 }
 
 function sessionTitle(session: Session | null): string {
@@ -480,13 +212,6 @@ function chooseDefaultModel(models: Model[], status: Status | null): Model | nul
   }
   const normal = models.filter((model) => !isFree(model));
   return normal[0] ?? models[0] ?? null;
-}
-
-function modelFromConfig(options: Session['configOptions'], models: Model[]): Model | null {
-  const option = options?.find((entry) => entry.id === 'model' || entry.category === 'model');
-  if (!option || typeof option.currentValue !== 'string') return null;
-  const [providerID, ...rest] = option.currentValue.split('/');
-  return models.find((model) => model.providerID === providerID && model.id === rest.join('/')) ?? null;
 }
 
 function toolLabel(name: string): string {
@@ -531,13 +256,6 @@ function isDiff(text: string): boolean {
   const hasHeader = lines.some((line) => line.startsWith('diff --git') || line.startsWith('@@') || line.startsWith('+++') || line.startsWith('---'));
   const hasChanges = lines.some((line) => line.startsWith('+') || line.startsWith('-'));
   return hasHeader && hasChanges;
-}
-
-function parseCommand(text: string, commands: Command[]): { name: string; args: string } | null {
-  const match = /^\/([A-Za-z0-9_-]+)(?:\s+([\s\S]*))?$/.exec(text.trim());
-  if (!match) return null;
-  if (!commands.some((command) => command.name === match[1])) return null;
-  return { name: match[1], args: (match[2] ?? '').trim() };
 }
 
 function IconButton(props: {
@@ -1048,6 +766,7 @@ function Composer(props: {
   let textarea!: HTMLTextAreaElement;
   let fileInput!: HTMLInputElement;
   const [commandOpen, setCommandOpen] = createSignal(false);
+  const [slashDismissed, setSlashDismissed] = createSignal(false);
   const [coarsePointer, setCoarsePointer] = createSignal(
     typeof window !== 'undefined'
       && typeof window.matchMedia === 'function'
@@ -1092,6 +811,7 @@ function Composer(props: {
   });
   const otherOptions = createMemo(() => otherConfigOptions(props.configOptions));
   const slashQuery = createMemo(() => {
+    if (slashDismissed()) return null;
     const value = props.draft;
     if (!value.startsWith('/') || value.includes(' ')) return null;
     return value.slice(1);
@@ -1110,11 +830,16 @@ function Composer(props: {
     resize();
   });
 
+  function closeCommands(): void {
+    setCommandOpen(false);
+    setSlashDismissed(true);
+  }
+
   function runLocal(name: string): void {
     props.onDraft('');
     if (name === 'resume') props.onResume();
     else props.onLocalCommand(name);
-    setCommandOpen(false);
+    closeCommands();
   }
 
   function submit() {
@@ -1122,7 +847,7 @@ function Composer(props: {
     const skill = skillSlashInput(value, props.skills);
     if (skill) {
       props.onDraft(skillMention(skill.name, skill.task));
-      setCommandOpen(false);
+      closeCommands();
       if (skill.task && !props.busy && !props.disabled) props.onSend();
       else textarea?.focus();
       return;
@@ -1136,13 +861,13 @@ function Composer(props: {
     }
     if (props.busy || props.disabled || props.attachmentBusy) return;
     props.onSend();
-    setCommandOpen(false);
+    closeCommands();
   }
 
   function pickCommand(command: ComposerCommand) {
     if (command.skill) {
       props.onDraft(skillMention(command.skill));
-      setCommandOpen(false);
+      closeCommands();
       textarea?.focus();
       resize();
       return;
@@ -1152,7 +877,7 @@ function Composer(props: {
       return;
     }
     props.onCommand(command);
-    setCommandOpen(false);
+    closeCommands();
     textarea?.focus();
     resize();
   }
@@ -1164,7 +889,7 @@ function Composer(props: {
           commands={commands()}
           query={commandQuery()}
           onPick={pickCommand}
-          onClose={() => setCommandOpen(false)}
+          onClose={closeCommands}
         />
       </Show>
       <div class="op-composer-box">
@@ -1217,6 +942,7 @@ function Composer(props: {
           placeholder={t(coarsePointer() ? 'agent.composer.placeholderMobile' : 'agent.composer.placeholder', { agent: props.agentName })}
           disabled={props.disabled}
           onInput={(event) => {
+            setSlashDismissed(false);
             props.onDraft(event.currentTarget.value);
             resize();
           }}
@@ -1234,7 +960,7 @@ function Composer(props: {
                 submit();
               }
             }
-            if (event.key === 'Escape') setCommandOpen(false);
+            if (event.key === 'Escape') closeCommands();
           }}
         />
         <div class="op-composer-bar">
@@ -1287,7 +1013,11 @@ function Composer(props: {
               class={`op-icon-btn op-command-trigger ${showCommands() ? 'active' : ''}`}
               title={t('agent.commands')}
               aria-label={t('agent.commands')}
-              onClick={() => setCommandOpen((value) => !value)}
+              onClick={() => {
+                if (showCommands()) { closeCommands(); return; }
+                setSlashDismissed(false);
+                setCommandOpen(true);
+              }}
             >
               <span class="op-command-slash">/</span>
             </button>
@@ -1593,12 +1323,12 @@ function FormCard(props: {
                 <Show when={field.required}><span class="op-required">*</span></Show>
               </span>
               <Show when={field.description}><span class="op-field-desc">{field.description}</span></Show>
-              <Show when={field.type === 'external'}>
+              <Show when={fieldKind(field) === 'external'}>
                 <a class="op-external" href={field.url ?? '#'} target="_blank" rel="noopener noreferrer">
                   {t('agent.openExternal')}
                 </a>
               </Show>
-              <Show when={field.type === 'boolean'}>
+              <Show when={fieldKind(field) === 'boolean'}>
                 <label class="op-check">
                   <input
                     type="checkbox"
@@ -1608,7 +1338,7 @@ function FormCard(props: {
                   <span>{field.placeholder || t('agent.yes')}</span>
                 </label>
               </Show>
-              <Show when={field.type === 'multiselect'}>
+              <Show when={fieldKind(field) === 'multiselect'}>
                 <div class="op-multiselect">
                   <For each={field.options ?? []}>
                     {(option) => (
@@ -1629,7 +1359,7 @@ function FormCard(props: {
                   </For>
                 </div>
               </Show>
-              <Show when={field.type === 'string' && (field.options?.length ?? 0) > 0}>
+              <Show when={fieldKind(field) === 'select'}>
                 <select
                   class="op-input"
                   value={String(values()[field.key] ?? field.default ?? '')}
@@ -1641,12 +1371,7 @@ function FormCard(props: {
                   </For>
                 </select>
               </Show>
-              <Show when={
-                field.type !== 'external'
-                && field.type !== 'boolean'
-                && field.type !== 'multiselect'
-                && !(field.type === 'string' && (field.options?.length ?? 0) > 0)
-              }>
+              <Show when={fieldKind(field) === 'input'}>
                 <input
                   class="op-input"
                   type={field.type === 'number' || field.type === 'integer'
@@ -1882,7 +1607,6 @@ function MessageItem(props: {
         <span class="op-avatar"><Icon name="sparkles" size={15} /></span>
         <span class="op-assistant-name">{props.agentName}</span>
         <Show when={item().model}><span class="op-assistant-model">{item().model}</span></Show>
-        <Show when={item().streaming}><Spinner size={12} /></Show>
         <span class="op-message-spacer" />
         <Show when={item().usage && ((item().usage!.cost ?? 0) > 0 || item().usage!.tokens)}>
           <span class="op-usage">
@@ -1895,7 +1619,7 @@ function MessageItem(props: {
         <IconButton icon="copy" title={t('agent.copyResponse')} onClick={() => props.onCopy(item().text)} />
       </div>
       <Show when={item().reasoning}>
-        <details class="op-reasoning" open={item().streaming}>
+        <details class="op-reasoning">
           <summary>
             <Icon name="brain" size={14} />
             <span>{t('agent.reasoning')}</span>
@@ -1924,7 +1648,7 @@ function MessageItem(props: {
           </div>
         </div>
       </Show>
-      <Show when={!item().streaming && !item().text && !item().reasoning && item().rich.length === 0 && item().tools.length === 0 && !item().error}>
+      <Show when={!item().text && !item().reasoning && item().rich.length === 0 && item().tools.length === 0 && !item().error}>
         <div class="op-message-empty">{t('agent.noResponse')}</div>
       </Show>
     </div>
@@ -2968,11 +2692,12 @@ function App(props: {
   const [sessions, setSessions] = createSignal<Session[]>([]);
   const [currentID, setCurrentID] = createSignal<string | null>(null);
   const [items, setItems] = createSignal<ChatItem[]>([]);
+  let timeline = createTimeline();
+  const resetTimeline = () => { timeline = createTimeline(); setItems(timeline.items); };
   const [models, setModels] = createSignal<Model[]>([]);
   const [providers, setProviders] = createSignal<Provider[]>([]);
   const [commands, setCommands] = createSignal<Command[]>([]);
   const [selectedModel, setSelectedModel] = createSignal<Model | null>(null);
-  const [modes, setModes] = createSignal<AgentModeState | null>(null);
   const [defaultModes, setDefaultModes] = createSignal<AgentModeState | null>(null);
   const [defaultConfigOptions, setDefaultConfigOptions] = createSignal<ConfigOption[]>([]);
   const [draftSessionID, setDraftSessionID] = createSignal<string | null>(null);
@@ -2999,7 +2724,6 @@ function App(props: {
   const [authDismissed, setAuthDismissed] = createSignal(false);
   const [mcpOpen, setMcpOpen] = createSignal(false);
   const [mcpServers, setMcpServers] = createSignal<McpServer[]>([]);
-  const [mcpReady, setMcpReady] = createSignal(false);
   const [mcpLoading, setMcpLoading] = createSignal(false);
   const [mcpSaving, setMcpSaving] = createSignal(false);
   const [mcpError, setMcpError] = createSignal<string | null>(null);
@@ -3011,7 +2735,6 @@ function App(props: {
   const [promptError, setPromptError] = createSignal<string | null>(null);
   let events: EventSource | undefined;
   let disposed = false;
-  const updatesBySession = new Map<string, any[]>();
 
   const routeSessionID = createMemo(() => sessionPathID(props.path));
   const routeMissing = createMemo(() => {
@@ -3019,16 +2742,16 @@ function App(props: {
     return !!id && ready() && !sessions().some((session) => session.id === id);
   });
   const currentSession = createMemo(() => sessions().find((session) => session.id === currentID()) ?? null);
+  const modes = createMemo(() => currentSession()?.modes ?? defaultModes());
   const sessionReady = createMemo(() => {
     const id = routeSessionID();
     return !id || (currentID() === id && !!currentSession());
   });
-  const currentBusy = createMemo(() => busy());
+
   const [resumeOpen, setResumeOpen] = createSignal(false);
   const [skillsOpen, setSkillsOpen] = createSignal(false);
   const [agentPickerOpen, setAgentPickerOpen] = createSignal(false);
   const [installedSkills, setInstalledSkills] = createSignal<InstalledSkill[]>([]);
-  const currentModelLabel = createMemo(() => modelLabel(selectedModel()));
   const authBlocked = createMemo(() => !authenticated() && (authRequired() || authMethods().length > 0));
   const showAuth = createMemo(() => authBlocked() && !authDismissed());
   const canLogout = createMemo(() => {
@@ -3096,12 +2819,11 @@ function App(props: {
     if (!requested) {
       if (currentID()) {
         setCurrentID(null);
-        setItems([]);
+        resetTimeline();
         setPermissions([]);
         setForms([]);
         setBusy(false);
       }
-      setModes(defaultModes());
       setResumeOpen(false);
       return;
     }
@@ -3111,7 +2833,7 @@ function App(props: {
       return;
     }
     setCurrentID(null);
-    setItems([]);
+    resetTimeline();
     setPermissions([]);
     setForms([]);
     setBusy(false);
@@ -3125,17 +2847,71 @@ function App(props: {
       id: 'runtime-agent',
       title: t('agent.acpAgent'),
       icon: 'brain',
-      disabled: switchingAgent() || currentBusy(),
+      disabled: switchingAgent() || busy(),
       onClick: () => setAgentPickerOpen(true),
     }] : [];
     untrack(() => props.onToolbar?.(actions));
   });
 
+  async function syncMcp(): Promise<void> {
+    const stored = loadMcpServers(window.localStorage, props.mcpStorageKey);
+    try {
+      const mcp = stored.length > 0 ? await props.api.setMcp(stored) : await props.api.mcp();
+      if (disposed) return;
+      setMcpServers(mcp.data ?? []);
+      if (stored.length > 0) {
+        storeMcpServers(window.localStorage, props.mcpStorageKey, mcp.data ?? []);
+      }
+    } catch (error) {
+      if (disposed) return;
+      setMcpError(formatError(error));
+      // The local copy may be stale or invalid; fall back to the server list
+      // so the manager never shows an empty list while the server has config.
+      try {
+        const mcp = await props.api.mcp();
+        if (disposed) return;
+        const list = mcp.data ?? [];
+        setMcpServers(list);
+        // Do not overwrite a valid local copy with an empty server list after
+        // a failed sync; the next reload can retry the PUT.
+        if (list.length > 0) {
+          storeMcpServers(window.localStorage, props.mcpStorageKey, list);
+        }
+      } catch {
+        // MCP config is optional; status below still loads the agent.
+      }
+    }
+  }
+
+  async function syncSystemPrompt(): Promise<void> {
+    const stored = loadSystemPrompt(window.localStorage, props.systemPromptStorageKey);
+    try {
+      const result = stored ? await props.api.setSystemPrompt(stored) : await props.api.systemPrompt();
+      if (disposed) return;
+      const text = result.data ?? '';
+      setPromptText(text);
+      if (text || stored) {
+        storeSystemPrompt(window.localStorage, props.systemPromptStorageKey, text);
+      }
+    } catch (error) {
+      if (disposed) return;
+      setPromptError(formatError(error));
+      try {
+        const result = await props.api.systemPrompt();
+        if (disposed) return;
+        const text = result.data ?? '';
+        setPromptText(text);
+        if (text) storeSystemPrompt(window.localStorage, props.systemPromptStorageKey, text);
+      } catch {
+        // The system prompt is optional; status below still loads the agent.
+      }
+    }
+  }
+
   async function initialize(targetPath = props.path): Promise<void> {
     try {
       setInitError(null);
       setCapabilities(null);
-      setMcpReady(false);
       setPromptReady(false);
       const discovery = await props.api.discovery().catch((): AgentDiscovery => ({ agents: [] }));
       if (disposed) return;
@@ -3152,62 +2928,10 @@ function App(props: {
         if (disposed) return;
       }
 
-      const storedMcp = loadMcpServers(window.localStorage, props.mcpStorageKey);
-      try {
-        const mcp = storedMcp.length > 0
-          ? await props.api.setMcp(storedMcp)
-          : await props.api.mcp();
-        if (disposed) return;
-        setMcpServers(mcp.data ?? []);
-        if (storedMcp.length > 0) {
-          storeMcpServers(window.localStorage, props.mcpStorageKey, mcp.data ?? []);
-        }
-      } catch (error) {
-        if (disposed) return;
-        setMcpError(formatError(error));
-        // The local copy may be stale or invalid; fall back to the server list
-        // so the manager never shows an empty list while the server has config.
-        try {
-          const mcp = await props.api.mcp();
-          if (disposed) return;
-          const list = mcp.data ?? [];
-          setMcpServers(list);
-          // Do not overwrite a valid local copy with an empty server list after
-          // a failed sync; the next reload can retry the PUT.
-          if (list.length > 0) {
-            storeMcpServers(window.localStorage, props.mcpStorageKey, list);
-          }
-        } catch {
-          // MCP config is optional; status below still loads the agent.
-        }
-      }
+      await syncMcp();
       if (disposed) return;
-      setMcpReady(true);
 
-      const storedPrompt = loadSystemPrompt(window.localStorage, props.systemPromptStorageKey);
-      try {
-        const result = storedPrompt
-          ? await props.api.setSystemPrompt(storedPrompt)
-          : await props.api.systemPrompt();
-        if (disposed) return;
-        const text = result.data ?? '';
-        setPromptText(text);
-        if (text || storedPrompt) {
-          storeSystemPrompt(window.localStorage, props.systemPromptStorageKey, text);
-        }
-      } catch (error) {
-        if (disposed) return;
-        setPromptError(formatError(error));
-        try {
-          const result = await props.api.systemPrompt();
-          if (disposed) return;
-          const text = result.data ?? '';
-          setPromptText(text);
-          if (text) storeSystemPrompt(window.localStorage, props.systemPromptStorageKey, text);
-        } catch {
-          // The system prompt is optional; status below still loads the agent.
-        }
-      }
+      await syncSystemPrompt();
       if (disposed) return;
       setPromptReady(true);
 
@@ -3223,7 +2947,6 @@ function App(props: {
       }
       setAgentName(status.agent?.title || status.agent?.name || t('agent.name'));
       setCapabilities(status.capabilities ?? null);
-      setModes(status.modes ?? null);
       setDefaultModes(status.modes ?? null);
       setDefaultConfigOptions(status.configOptions ?? []);
       setDraftSessionID(status.bootstrapSessionID ?? null);
@@ -3234,7 +2957,7 @@ function App(props: {
       if (status.authRequired && !status.authenticated) {
         setSessions([]);
         setCurrentID(null);
-        setItems([]);
+        resetTimeline();
         setPermissions([]);
         setForms([]);
         setReady(true);
@@ -3276,7 +2999,7 @@ function App(props: {
   async function changeRuntimeAgent(id: string): Promise<void> {
     const previous = selectedRuntime();
     if (!id || id === previous || switchingAgent()) return;
-    if (currentBusy()) {
+    if (busy()) {
       showToast(t('agent.switchBlocked'), true);
       return;
     }
@@ -3296,7 +3019,7 @@ function App(props: {
       setResumeOpen(false);
       setSessions([]);
       setCurrentID(null);
-      setItems([]);
+      resetTimeline();
       setPermissions([]);
       setForms([]);
       setBusy(false);
@@ -3304,7 +3027,6 @@ function App(props: {
       setModels([]);
       setProviders([]);
       setSelectedModel(null);
-      setModes(null);
       setTerminalOutputs({});
       setAttachments([]);
       setAttachmentBusy(false);
@@ -3526,21 +3248,14 @@ function App(props: {
       const result = await props.api.messages(id);
       if (disposed || currentID() !== id) return;
       const configOptions = result.configOptions ?? [];
-      if (result.modes) {
-        setModes(result.modes);
-        setSessions((prev) => prev.map((item) =>
-          item.id === id ? { ...item, modes: result.modes } : item));
-      }
+      if (result.modes) updateSessionModes(id, () => result.modes);
       if (configOptions.length > 0) {
-        setSessions((prev) => prev.map((item) =>
-          item.id === id ? { ...item, configOptions } : item));
+        updateSessionConfig(id, configOptions);
         const model = modelFromConfig(configOptions, models());
         if (model) setSelectedModel(model);
       }
-      const updates = result.data ?? [];
-      const normalized = normalizeHistory(updates);
-      updatesBySession.set(id, updates);
-      setItems(normalized);
+      timeline = replayTimeline(result.data ?? []);
+      setItems(timeline.items);
     } catch (error) {
       if (!disposed && currentID() === id) showToast(formatError(error), true);
     }
@@ -3581,9 +3296,8 @@ function App(props: {
     if (id === currentID()) return;
     const session = sessions().find((item) => item.id === id);
     if (session) props.onUpdateTab?.(`/${encodeURIComponent(id)}`, { title: sessionTitle(session) });
-    setModes(session?.modes ?? defaultModes());
     setCurrentID(id);
-    setItems([]);
+    resetTimeline();
     setPermissions([]);
     setForms([]);
     setError(null);
@@ -3600,11 +3314,10 @@ function App(props: {
       return;
     }
     setCurrentID(null);
-    setItems([]);
+    resetTimeline();
     setPermissions([]);
     setForms([]);
     setBusy(false);
-    setModes(defaultModes());
   }
 
   function runLocalCommand(name: string): void {
@@ -3623,12 +3336,12 @@ function App(props: {
         break;
       case 'fork': {
         const session = currentSession();
-        if (session && !currentBusy() && !switchingAgent()) void forkSession(session.id);
+        if (session && !busy() && !switchingAgent()) void forkSession(session.id);
         break;
       }
       case 'delete': {
         const session = currentSession();
-        if (session && !currentBusy() && !switchingAgent()) setConfirmDelete(session.id);
+        if (session && !busy() && !switchingAgent()) setConfirmDelete(session.id);
         break;
       }
       case 'logout':
@@ -3645,8 +3358,7 @@ function App(props: {
       setSessions((prev) => [session, ...prev.filter((item) => item.id !== session.id)]);
       setCurrentID(session.id);
       setDraftSessionID(null);
-      updatesBySession.set(session.id, []);
-      setItems([]);
+      resetTimeline();
       setPermissions([]);
       setForms([]);
       setBusy(false);
@@ -3654,17 +3366,13 @@ function App(props: {
       const sessionModel = modelFromConfig(session.configOptions, models());
       if (sessionModel) setSelectedModel(sessionModel);
       const initialModes = session.modes ?? defaultModes();
-      setModes(initialModes);
       const preferredMode = defaultModes()?.currentModeId;
       if (initialModes && preferredMode
         && initialModes.currentModeId !== preferredMode
         && initialModes.availableModes.some((mode) => mode.id === preferredMode)) {
         try {
           const result = await props.api.setMode(session.id, preferredMode);
-          session.modes = result.modes;
-          setModes(result.modes);
-          setSessions((prev) => prev.map((item) =>
-            item.id === session.id ? { ...item, modes: result.modes } : item));
+          mirrorSessionModes(session, result.modes);
         } catch {
           // Keep the agent's default mode for this new session.
         }
@@ -3672,12 +3380,12 @@ function App(props: {
       const preferred = loadStoredModel(props.storageKey, models());
       if (preferred && !sameModel(sessionModel, preferred)) {
         try {
-          const result = await props.api.setConfig(session.id, 'model', modelKey(preferred));
-          if (result.data) {
-            session.configOptions = result.data;
-            setSessions((prev) => prev.map((item) =>
-              item.id === session.id ? { ...item, configOptions: result.data } : item));
-          }
+          const result = await props.api.setConfig(
+            session.id,
+            modelConfigOption(session.configOptions)?.id ?? 'model',
+            modelKey(preferred),
+          );
+          if (result.data) mirrorSessionConfig(session, result.data);
           setSelectedModel(preferred);
         } catch {
           // Keep the agent's session default when the remembered model is unavailable.
@@ -3688,11 +3396,7 @@ function App(props: {
         if (!current || current.currentValue === option.currentValue) continue;
         try {
           const result = await props.api.setConfig(session.id, option.id, option.currentValue);
-          if (result.data) {
-            session.configOptions = result.data;
-            setSessions((prev) => prev.map((item) =>
-              item.id === session.id ? { ...item, configOptions: result.data } : item));
-          }
+          if (result.data) mirrorSessionConfig(session, result.data);
         } catch {
           // Keep the agent's default when a draft option is unavailable.
         }
@@ -3705,7 +3409,7 @@ function App(props: {
   }
 
   async function sendContent(content: PromptContent[], clearComposer = false): Promise<void> {
-    if (content.length === 0 || currentBusy() || switchingAgent()) return;
+    if (content.length === 0 || busy() || switchingAgent()) return;
     let id = currentID();
     if (!id) {
       const session = await createSession();
@@ -3714,13 +3418,11 @@ function App(props: {
     if (!id) return;
     setError(null);
     setBusy(true);
-    const localID = nextID('user');
-    const updates = updatesBySession.get(id) ?? [];
+    const messageId = nextTimelineId('user');
     for (const block of content) {
-      updates.push({ sessionUpdate: 'user_message_chunk', messageId: localID, content: block });
+      applyTimelineUpdate(timeline, { sessionUpdate: 'user_message_chunk', messageId, content: block });
     }
-    updatesBySession.set(id, updates);
-    setItems(normalizeHistory(updates));
+    setItems(timeline.items);
     try {
       await props.api.prompt(id, content);
       if (clearComposer) {
@@ -3738,7 +3440,7 @@ function App(props: {
     if (attachmentBusy()) return;
     const text = draft().trim();
     const attached = attachments();
-    if ((!text && attached.length === 0) || currentBusy() || switchingAgent()) return;
+    if ((!text && attached.length === 0) || busy() || switchingAgent()) return;
     const content: PromptContent[] = [
       ...(text ? [{ type: 'text' as const, text }] : []),
       ...attached.map((attachment) =>
@@ -3769,7 +3471,7 @@ function App(props: {
       setSessions(next);
       if (currentID() === id) {
         setCurrentID(null);
-        setItems([]);
+        resetTimeline();
         setPermissions([]);
         setForms([]);
         setBusy(false);
@@ -3832,8 +3534,6 @@ function App(props: {
     try {
       await props.api.interrupt(id);
       setBusy(false);
-      setItems((prev) => prev.map((item) =>
-        item.kind === 'assistant' ? { ...item, streaming: false } : item));
     } catch (error) {
       showToast(formatError(error), true);
     }
@@ -3845,11 +3545,11 @@ function App(props: {
     const id = currentID();
     if (!id) return;
     try {
-      const result = await props.api.setConfig(id, 'model', `${model.providerID}/${model.id}`);
-      if (result.data) {
-        setSessions((prev) => prev.map((item) =>
-          item.id === id ? { ...item, configOptions: result.data } : item));
-      }
+      const configID = modelConfigOption(currentSession()?.configOptions)?.id ?? 'model';
+      const result = await props.api.setConfig(id, configID, modelKey(model));
+      // The picker already persisted the preference via storeModel; mirror the
+      // server snapshot without rewriting defaults (same policy as a push).
+      if (result.data) applyConfigSnapshot(id, 'current', result.data, 'update');
     } catch (error) {
       showToast(formatError(error), true);
     }
@@ -3857,21 +3557,21 @@ function App(props: {
 
   async function changeMode(modeID: string): Promise<void> {
     const id = currentID();
-    const current = id ? modes() : defaultModes();
+    const current = modes();
     if (!current || current.currentModeId === modeID) return;
     if (!id) {
-      setDefaultModes({ ...current, currentModeId: modeID });
+      if (planModeApply('draft', 'menu').updateDefaultModes) {
+        setDefaultModes({ ...current, currentModeId: modeID });
+      }
       return;
     }
-    setModes({ ...current, currentModeId: modeID });
+    updateSessionModes(id, () => ({ ...current, currentModeId: modeID }));
     try {
       const result = await props.api.setMode(id, modeID);
-      setModes(result.modes);
-      setDefaultModes(result.modes);
-      setSessions((prev) => prev.map((item) =>
-        item.id === id ? { ...item, modes: result.modes } : item));
+      if (planModeApply('current', 'menu').updateDefaultModes) setDefaultModes(result.modes);
+      updateSessionModes(id, () => result.modes);
     } catch (error) {
-      setModes(current);
+      updateSessionModes(id, () => current);
       showToast(formatError(error), true);
     }
   }
@@ -3913,6 +3613,69 @@ function App(props: {
     setAttachments((prev) => prev.filter((attachment) => attachment.id !== id));
   }
 
+  function sessionConfigTarget(sessionID: string): ConfigTarget {
+    return sessionID === currentID() ? 'current' : sessionID === draftSessionID() ? 'draft' : 'background';
+  }
+
+  /** Apply a mode id to the live session and, when the policy says so, the defaults. */
+  function applyModeSnapshot(
+    sessionID: string,
+    target: ConfigTarget,
+    source: ConfigSource,
+    currentModeId: string,
+  ): void {
+    updateSessionModes(sessionID, (modes) =>
+      modes ? { ...modes, currentModeId } : modes);
+    if (planModeApply(target, source).updateDefaultModes) {
+      setDefaultModes((prev) => prev ? { ...prev, currentModeId } : prev);
+    }
+  }
+
+  /** Mirror a mode snapshot onto a session created in this run. */
+  function mirrorSessionModes(session: Session, modes: AgentModeState): void {
+    session.modes = modes;
+    updateSessionModes(session.id, () => modes);
+  }
+
+  /** Patch one session's modes without touching defaults or the model picker. */
+  function updateSessionModes(
+    sessionID: string,
+    update: (modes: AgentModeState | undefined) => AgentModeState | undefined,
+  ): void {
+    setSessions((prev) => prev.map((item) =>
+      item.id === sessionID ? { ...item, modes: update(item.modes) } : item));
+  }
+
+  /** Patch one session's config options without defaults/model side effects. */
+  function updateSessionConfig(sessionID: string, options: ConfigOption[]): void {
+    setSessions((prev) => prev.map((item) =>
+      item.id === sessionID ? { ...item, configOptions: options } : item));
+  }
+
+  /** Mirror a config snapshot onto a session created in this run; no default/model side effects. */
+  function mirrorSessionConfig(session: Session, options: ConfigOption[]): void {
+    session.configOptions = options;
+    updateSessionConfig(session.id, options);
+  }
+
+  /** Apply a config snapshot to the owning session plus any active defaults. */
+  function applyConfigSnapshot(
+    sessionID: string | null,
+    target: ConfigTarget,
+    options: ConfigOption[],
+    source: ConfigSource,
+  ): void {
+    const plan = planConfigApply(options, models(), target, source);
+    if (sessionID) {
+      setSessions((prev) => prev.map((session) => session.id === sessionID
+        ? { ...session, configOptions: plan.options, modes: plan.modes ?? session.modes }
+        : session));
+    }
+    if (plan.updateDefaults) setDefaultConfigOptions(plan.options);
+    if (plan.updateDefaultModes && plan.modes) setDefaultModes(plan.modes);
+    if (plan.selectModel && plan.model) setSelectedModel(plan.model);
+  }
+
   async function changeConfig(configID: string, value: string | boolean): Promise<void> {
     if (configBusy()) return;
     const id = currentID();
@@ -3926,20 +3689,7 @@ function App(props: {
       }
       const result = await props.api.setConfig(target, configID, value);
       const options = result.data ?? [];
-      const nextModes = modeStateFromOptions(options);
-      const nextModel = modelFromConfig(options, models());
-      if (id) {
-        setSessions((prev) => prev.map((session) => session.id === id
-          ? { ...session, configOptions: options, modes: nextModes ?? session.modes }
-          : session));
-        setDefaultConfigOptions(options);
-        if (nextModes) setModes(nextModes);
-        if (nextModel) setSelectedModel(nextModel);
-      } else {
-        setDefaultConfigOptions(options);
-        if (nextModes) setDefaultModes(nextModes);
-        if (nextModel) setSelectedModel(nextModel);
-      }
+      applyConfigSnapshot(id, id ? 'current' : 'draft', options, 'menu');
     } catch (error) {
       showToast(formatError(error), true);
     } finally {
@@ -3967,33 +3717,12 @@ function App(props: {
   }
 
   function applySessionStateUpdate(sessionID: string, update: Record<string, any>): void {
+    const target = sessionConfigTarget(sessionID);
     if (update.sessionUpdate === 'current_mode_update' && typeof update.currentModeId === 'string') {
-      const currentModeId = update.currentModeId;
-      setSessions((prev) => prev.map((session) => session.id === sessionID
-        ? { ...session, modes: session.modes ? { ...session.modes, currentModeId } : session.modes }
-        : session));
-      if (sessionID === currentID()) {
-        setModes((prev) => prev ? { ...prev, currentModeId } : prev);
-      } else if (sessionID === draftSessionID()) {
-        setDefaultModes((prev) => prev ? { ...prev, currentModeId } : prev);
-      }
+      applyModeSnapshot(sessionID, target, 'update', update.currentModeId);
     }
     if (update.sessionUpdate === 'config_option_update' && Array.isArray(update.configOptions)) {
-      const options = update.configOptions as ConfigOption[];
-      const nextModes = modeStateFromOptions(options);
-      setSessions((prev) => prev.map((session) => session.id === sessionID
-        ? { ...session, configOptions: options, modes: nextModes ?? session.modes }
-        : session));
-      if (sessionID === currentID()) {
-        if (nextModes) setModes(nextModes);
-        const nextModel = modelFromConfig(options, models());
-        if (nextModel) setSelectedModel(nextModel);
-      } else if (sessionID === draftSessionID()) {
-        setDefaultConfigOptions(options);
-        if (nextModes) setDefaultModes(nextModes);
-        const nextModel = modelFromConfig(options, models());
-        if (nextModel) setSelectedModel(nextModel);
-      }
+      applyConfigSnapshot(sessionID, target, update.configOptions as ConfigOption[], 'update');
     }
   }
 
@@ -4006,9 +3735,6 @@ function App(props: {
       case 'busy':
         if (event.sessionID !== currentID()) return;
         setBusy(event.busy);
-        if (!event.busy) {
-          setItems((prev) => prev.map((item) => item.kind === 'assistant' ? { ...item, streaming: false } : item));
-        }
         break;
       case 'update': {
         const update = event.update as Record<string, any>;
@@ -4016,10 +3742,8 @@ function App(props: {
           applySessionStateUpdate(event.sessionID, update);
         }
         if (event.sessionID !== currentID()) return;
-        const list = updatesBySession.get(event.sessionID) ?? [];
-        list.push(event.update);
-        updatesBySession.set(event.sessionID, list);
-        setItems(normalizeHistory(list));
+        applyTimelineUpdate(timeline, event.update);
+        setItems(timeline.items);
         if (update.sessionUpdate === 'available_commands_update') {
           setCommands((update.availableCommands ?? []) as Command[]);
         } else if (update.sessionUpdate === 'session_info_update') {
@@ -4059,16 +3783,10 @@ function App(props: {
         if (event.sessionID === currentID()) {
           setBusy(false);
           const usage = usageFromPrompt(event.usage);
-          setItems((prev) => {
-            let last = -1;
-            for (let i = prev.length - 1; i >= 0; i--) {
-              if (prev[i].kind === 'assistant') { last = i; break; }
-            }
-            return prev.map((item, index) =>
-              item.kind === 'assistant'
-                ? { ...item, streaming: false, ...(index === last && usage ? { usage } : {}) }
-                : item);
-          });
+          if (usage) {
+            timeline = applyTurnUsage(timeline, usage);
+            setItems(timeline.items);
+          }
         }
         void refreshSessions();
         break;
@@ -4170,7 +3888,7 @@ function App(props: {
             >
               <MessageList
                 items={items()}
-                busy={currentBusy()}
+                busy={busy()}
                 agentName={agentName()}
                 terminalOutputs={terminalOutputs()}
                 onCopy={copy}
@@ -4203,12 +3921,12 @@ function App(props: {
               </Show>
               <Composer
                 draft={draft()}
-                busy={currentBusy()}
+                busy={busy()}
                 agentName={agentName()}
                 models={models()}
                 providers={providers()}
                 model={selectedModel()}
-                modes={currentSession() ? modes() : defaultModes()}
+                modes={modes()}
                 configOptions={currentSession()?.configOptions ?? defaultConfigOptions()}
                 configBusy={configBusy()}
                 attachments={attachments()}

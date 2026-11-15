@@ -5,8 +5,10 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Router } from '../http.ts';
-import type { LspManager } from '../lsp-manager.ts';
+import { MAX_RESTARTS, type LspManager } from '../lsp-manager.ts';
 import { WebSocket } from 'ws';
+import { parseWsJson } from '../../shared/ws-json.ts';
+import { sendWsJson } from '../ws-send.ts';
 
 export function pathToLanguageId(p: string): string | null {
   const base = p.slice(p.lastIndexOf('/') + 1);
@@ -24,22 +26,17 @@ type Conn = { ws: WebSocket; open: Map<string, string> }; // uri → engineId
 export function registerLspRoutes(http: Router, manager: LspManager): void {
   const connections = new Set<Conn>();
 
-  const sendJson = (ws: WebSocket, obj: unknown) => {
-    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
-  };
-
-  // 诊断扇出：发给打开了该 uri 的所有连接；重放缓存由 manager 已存
+  // 诊断扇出：manager 已缓存该 uri 的诊断，这里只负责发给打开了它的连接。
   manager.onDiagnostics = (uri, diags) => {
-    manager.cacheDiagnostics(uri, diags);
-    for (const c of connections) if (c.open.has(uri)) sendJson(c.ws, { type: 'diagnostics', uri, diagnostics: diags });
+    for (const c of connections) if (c.open.has(uri)) sendWsJson(c.ws, { type: 'diagnostics', uri, diagnostics: diags });
   };
 
   // 会话退出：<=MAX_RESTARTS 次 → 通知相关连接重发 open（幂等）；超限 → unavailable
   manager.onSessionExit = (engineId, restartCount) => {
-    const type = restartCount <= 3 ? 'restarted' : 'unavailable';
+    const type = restartCount <= MAX_RESTARTS ? 'restarted' : 'unavailable';
     for (const c of connections) {
       if ([...c.open.values()].includes(engineId)) {
-        sendJson(c.ws, { type, engineId, restartCount });
+        sendWsJson(c.ws, { type, engineId, restartCount });
       }
     }
   };
@@ -49,7 +46,7 @@ export function registerLspRoutes(http: Router, manager: LspManager): void {
     connections.add(conn);
 
     const respond = (id: number | undefined, obj: Record<string, unknown>) => {
-      if (id !== undefined) sendJson(ws, { id, ...obj });
+      if (id !== undefined) sendWsJson(ws, { id, ...obj });
     };
     const engineFor = (p: string): string | null => pathToLanguageId(p);
 
@@ -65,10 +62,10 @@ export function registerLspRoutes(http: Router, manager: LspManager): void {
           await manager.sessionFor(engineId).open(uri, text, engineId);
           // 按连接幂等：本连接已 open 过该 uri（崩溃后重发 open）则不重复计数，
           // 计数只在两个不同连接都打开同一文件时各加一次（跨连接共享同一 tsserver 的前提）。
-          if (!conn.open.has(uri)) manager.markOpen(engineId, uri);
+          if (!conn.open.has(uri)) manager.markOpen(engineId);
           conn.open.set(uri, engineId);
           const cached = manager.lastDiagnosticsFor(uri);
-          if (cached) sendJson(ws, { type: 'diagnostics', uri, diagnostics: cached }); // 重放
+          if (cached) sendWsJson(ws, { type: 'diagnostics', uri, diagnostics: cached }); // 重放
           respond(id, { ok: true });
         } else if (method === 'change') {
           const relPath = String(p.path ?? '');
@@ -84,7 +81,7 @@ export function registerLspRoutes(http: Router, manager: LspManager): void {
           if (engineId) {
             // 只在连接确实持有该 uri 时才减计数：误关/重复关别的连接的 uri 不驱动全局计数，
             // 否则一次假 close 就压到 0 → 空闲计时误回收仍在用的引擎。
-            if (had) manager.markClosed(engineId, uri);
+            if (had) manager.markClosed(engineId);
             await manager.sessionFor(engineId).close(uri).catch(() => {}); // 会话已崩则吞掉
           }
           respond(id, { ok: true });
@@ -107,15 +104,14 @@ export function registerLspRoutes(http: Router, manager: LspManager): void {
     };
 
     ws.on('message', (raw) => {
-      let msg: { id?: number; method?: string; params?: Record<string, unknown> };
-      try { msg = JSON.parse(raw.toString()); } catch { return; }
-      if (typeof msg.method !== 'string') return;
+      const msg = parseWsJson<{ id?: number; method?: string; params?: Record<string, unknown> }>(raw);
+      if (!msg || typeof msg.method !== 'string') return;
       void handle(msg.method, msg.params, msg.id);
     });
 
     ws.on('close', () => {
       // 连接断开：把它持有的 uri 全部 markClosed（否则 tsserver 常驻 + 空闲回收永不触发）
-      for (const [uri, engineId] of conn.open) manager.markClosed(engineId, uri);
+      for (const engineId of conn.open.values()) manager.markClosed(engineId);
       conn.open.clear();
       connections.delete(conn);
     });

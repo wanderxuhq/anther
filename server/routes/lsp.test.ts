@@ -88,8 +88,9 @@ test('open → 响应 ok；关闭连接后全局 open 计数归零', async () =>
   const got = await res;
   assert.equal(got.ok, true);
   ws.close();
-  await sleep(100);
-  // markClosed 已执行（空闲回收 disabled，dispose 不触发）——通过再次 dispose 无残留验证
+  // 连接关闭后服务端 markClosed 把该引擎的全局打开计数减到 0。
+  const openCount = (manager as unknown as { openCount: Map<string, number> }).openCount;
+  await waitFor(() => (openCount.get('typescript') ?? 0) === 0);
   await manager.dispose();
 });
 

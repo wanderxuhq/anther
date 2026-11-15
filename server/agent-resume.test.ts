@@ -21,7 +21,11 @@ let calls = [];
 const send = (message) => process.stdout.write(JSON.stringify(message) + '\n');
 const respond = (id, result) => send({ jsonrpc: '2.0', id, result });
 const fail = (id, code, message) => send({ jsonrpc: '2.0', id, error: { code, message } });
-const save = () => fs.writeFileSync(statePath, JSON.stringify(calls), 'utf8');
+const save = () => {
+  const temp = statePath + '.tmp';
+  fs.writeFileSync(temp, JSON.stringify(calls), 'utf8');
+  fs.renameSync(temp, statePath);
+};
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   let message;
   try { message = JSON.parse(line); } catch { return; }
@@ -85,6 +89,18 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
+/** The fake agent logs from its own process; wait for the expected call instead of racing it. */
+async function waitForCalls(check: (calls: Array<Record<string, unknown>>) => boolean): Promise<Array<Record<string, unknown>>> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try {
+      const calls = JSON.parse(await readFile(statePath, 'utf8')) as Array<Record<string, unknown>>;
+      if (check(calls)) return calls;
+    } catch { /* write may be in flight */ }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('agent call log did not settle');
+}
+
 async function start(): Promise<AgentRuntime> {
   const script = path.join(root, 'fake-agent.cjs');
   await writeFile(script, fakeAgent);
@@ -114,7 +130,7 @@ test('resumes a session when the agent does not support load', async () => {
   assert.equal(first.configOptions.find((option) => option.id === 'model')?.currentValue, 'fake/a');
   assert.equal(first.modes?.currentModeId, 'build');
 
-  const calls = JSON.parse(await readFile(statePath, 'utf8')) as Array<Record<string, unknown>>;
+  const calls = await waitForCalls((log) => log.some((call) => call.method === 'resume'));
   assert.equal(calls.filter((call) => call.method === 'resume').length, 1);
   const resumed = calls.find((call) => call.method === 'resume');
   assert.equal(resumed?.sessionId, 'sess_old');
@@ -126,12 +142,12 @@ test('resumes a session when the agent does not support load', async () => {
   assert.deepEqual((resumed?.mcpServers as Array<{ name: string }>).map((server) => server.name), ['files']);
 
   await runtime.prompt('sess_old', [{ type: 'text', text: 'continue' }]);
-  const after = JSON.parse(await readFile(statePath, 'utf8')) as Array<Record<string, unknown>>;
-  assert.ok(after.some((call) => call.method === 'prompt' && call.sessionId === 'sess_old'));
+  await waitForCalls((log) => log.some((call) => call.method === 'prompt' && call.sessionId === 'sess_old'));
 
   await runtime.messages('sess_old');
   const session = await runtime.createSession();
   await runtime.messages(session.id);
-  const final = JSON.parse(await readFile(statePath, 'utf8')) as Array<Record<string, unknown>>;
+  const final = await waitForCalls((log) => log.some((call) => call.method === 'new')
+    && log.filter((call) => call.method === 'resume').length === 1);
   assert.equal(final.filter((call) => call.method === 'resume').length, 1);
 });

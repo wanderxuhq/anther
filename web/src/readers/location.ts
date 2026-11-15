@@ -9,6 +9,9 @@ export type ReadingLocation =
   | { kind: 'pdf'; page: number; x?: number; y?: number; zoom?: number }
   | { kind: 'markdown'; heading: string };
 
+/** Debounce for scroll/position changes before publishing a reading location. */
+export const POSITION_PUBLISH_DEBOUNCE_MS = 180;
+
 export const locationLBP = (value: string): LBPRange | null => value.length <= 4096 ? parseLBP('_::' + value) : null;
 export const compactLBP = (range: LBPRange) => serializeLBP(range).slice(range.bookId.length + 2);
 const positive = (value: string | null) => value && /^\d+$/.test(value) && Number.isSafeInteger(+value) && +value > 0 ? +value : null;
@@ -45,11 +48,11 @@ export function parseReadingLocation(path: string, params: URLSearchParams): Rea
     ? { kind: 'markdown', heading } : null;
 }
 
-export function writeReadingLocation(params: URLSearchParams, path: string, location: ReadingLocation | null) {
-  if (!location) return;
+/** Map a location to URL fields; null means the value cannot be represented for this path. */
+function locationFields(location: ReadingLocation, path: string): URLSearchParams | null {
   const fields = new URLSearchParams();
   if (location.kind === 'image') {
-    if (location.zoom === undefined) return;
+    if (location.zoom === undefined) return null;
     if (location.x !== undefined) fields.set('x', String(location.x));
     if (location.y !== undefined) fields.set('y', String(location.y));
   } else if (location.kind === 'media') {
@@ -61,20 +64,18 @@ export function writeReadingLocation(params: URLSearchParams, path: string, loca
     if (location.x !== undefined) fields.set('x', String(location.x));
     if (location.y !== undefined) fields.set('y', String(location.y));
   } else if (location.kind === 'markdown') fields.set('heading', location.heading);
-  else return;
+  else return null;
   if ('zoom' in location && location.zoom !== undefined) fields.set('zoom', String(Math.round(location.zoom * 10000) / 100));
+  return fields;
+}
+
+export function writeReadingLocation(params: URLSearchParams, path: string, location: ReadingLocation | null) {
+  if (!location) return;
+  const fields = locationFields(location, path);
+  if (!fields) return;
   const valid = parseReadingLocation(path, fields);
   if (!valid || valid.kind !== location.kind) return;
-  if (valid.kind === 'image') {
-    if (valid.x !== undefined) params.set('x', String(valid.x)); if (valid.y !== undefined) params.set('y', String(valid.y));
-  } else if (valid.kind === 'media') {
-    params.set('time', String(valid.time)); if (valid.rate !== undefined) params.set('rate', String(valid.rate));
-  } else if (valid.kind === 'table') writeTablePosition(params, valid);
-  else if (valid.kind === 'epub') params.set('lbp', valid.lbp);
-  else if (valid.kind === 'pdf') {
-    params.set('page', String(valid.page));
-    if (valid.x !== undefined) params.set('x', String(valid.x));
-    if (valid.y !== undefined) params.set('y', String(valid.y));
-  } else params.set('heading', valid.heading);
-  if ('zoom' in valid && valid.zoom !== undefined) params.set('zoom', String(Math.round(valid.zoom * 10000) / 100));
+  const normalized = locationFields(valid, path);
+  if (!normalized) return;
+  for (const [key, value] of normalized) params.set(key, value);
 }

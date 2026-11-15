@@ -8,3 +8,9 @@ export function parentOf(path: string): string {
 export function isValidName(name: string): boolean {
   return name !== '' && name !== '.' && name !== '..' && !name.includes('/');
 }
+/** 文件树 reveal 的逐级路径；默认包含末段，定位文件时排除文件名。 */
+export function pathSegments(path: string, includeLeaf = true): string[] {
+  const parts = path.split('/').filter(Boolean);
+  if (!includeLeaf) parts.pop();
+  return parts;
+}

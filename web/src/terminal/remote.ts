@@ -143,7 +143,7 @@ export class RemoteTerminalScreen {
   }
 
   takeDirty(): DirtyRegion {
-    const result: DirtyRegion = { rows: this.dirtyRows, cursor: this.dirtyCursor, scrolled: 0 };
+    const result: DirtyRegion = { rows: this.dirtyRows, cursor: this.dirtyCursor };
     this.dirtyRows = new Set();
     this.dirtyCursor = false;
     return result;

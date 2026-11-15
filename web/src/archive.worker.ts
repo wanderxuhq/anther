@@ -1,6 +1,6 @@
 import type { SevenZipModule, SevenZipModuleFactory, FSNode } from '7z-wasm';
 import type { Entry, ZipReader, HttpRangeReader, BlobReader } from '@zip.js/zip.js';
-import { archivePath, DEFAULT_ARCHIVE_LIMITS, isZipFile, parseSevenZipListing, type ArchiveEntry, type ArchiveRequest, type ArchiveReply } from './archive.ts';
+import { archiveChainFromKey, archiveChainKey, archivePath, DEFAULT_ARCHIVE_LIMITS, isZipFile, parseSevenZipListing, type ArchiveEntry, type ArchiveRequest, type ArchiveReply } from './archive.ts';
 import sevenModuleUrl from '7z-wasm/7zz.es6.js?url';
 import sevenWasmUrl from '7z-wasm/7zz.wasm?url';
 import zipWasmUrl from '@zip.js/zip.js/dist/zip-module.wasm?url';
@@ -14,14 +14,15 @@ let sevenLog: string[] = [];
 let archiveName = '', rootUrl = '', rootEtag = '';
 let activeChain: string[] = [];
 let limits = DEFAULT_ARCHIVE_LIMITS, heldBytes = 0;
-let limitFailure: 'depth' | 'budget' | undefined;
-const nested = new Map<string, { chain: string[]; blob: Blob }>();
-const cachedBytes = () => [...nested.values()].reduce((sum, item) => sum + item.blob.size, 0);
+const nested = new Map<string, Blob>();
+const cachedBytes = () => [...nested.values()].reduce((sum, blob) => sum + blob.size, 0);
 const prefixOf = (prefix: string[], chain: string[]) => prefix.every((name, index) => chain[index] === name);
-function budgetError() { limitFailure = 'budget'; return Object.assign(new Error('Archive buffer budget exceeded'), { limit: 'budget' }); }
+function budgetError() { return Object.assign(new Error('Archive buffer budget exceeded'), { limit: 'budget' as const }); }
 function discardUnused() {
   // Current inputs stay pinned. Other branches can be reconstructed on demand.
-  for (const [key, value] of nested) if (!prefixOf(value.chain, activeChain)) nested.delete(key);
+  for (const key of nested.keys()) {
+    if (!prefixOf(archiveChainFromKey(key), activeChain)) nested.delete(key);
+  }
 }
 function outputBudget() { discardUnused(); return Math.max(0, limits.maxBufferedBytes - heldBytes - cachedBytes()); }
 let requestId = 0, lastProgress = 0;
@@ -103,7 +104,7 @@ async function openSource(source: string | Blob, path: string, password?: string
 }
 
 async function open(url: string, path: string, chain: string[], passwords: (string | undefined)[]) {
-  if (chain.length + 1 > limits.maxDepth) { limitFailure = 'depth'; throw new Error('Archive nesting depth exceeded'); }
+  if (chain.length + 1 > limits.maxDepth) throw Object.assign(new Error('Archive nesting depth exceeded'), { limit: 'depth' as const });
   if (chain.some((name) => archivePath(name) !== name)) throw new Error('Unsupported nested archive path');
   const head = await fetch(url, { method: 'HEAD' });
   if (!head.ok) throw new Error(`HTTP ${head.status}`);
@@ -115,16 +116,16 @@ async function open(url: string, path: string, chain: string[], passwords: (stri
   if (cachedBytes() + heldBytes > limits.maxBufferedBytes) throw budgetError();
   // Begin at the deepest retained input, then materialize only the requested path.
   let depth = chain.length;
-  while (depth > 0 && !nested.has(JSON.stringify(chain.slice(0, depth)))) depth--;
+  while (depth > 0 && !nested.has(archiveChainKey(chain.slice(0, depth)))) depth--;
   activeChain = chain.slice(0, depth);
-  const source = depth ? nested.get(JSON.stringify(activeChain))!.blob : url;
+  const source = depth ? nested.get(archiveChainKey(activeChain))! : url;
   await openSource(source, depth ? chain[depth - 1] : path, passwords[depth]);
   while (depth < chain.length) {
     const entry = entries.find((entry) => entry.path === chain[depth]);
     if (!entry) throw new Error('Nested archive no longer exists');
     const blob = await extract(entry.id, passwords[depth]);
     depth++; activeChain = chain.slice(0, depth);
-    nested.set(JSON.stringify(activeChain), { chain: activeChain, blob });
+    nested.set(archiveChainKey(activeChain), blob);
     await openSource(blob, chain[depth - 1], passwords[depth]);
   }
   return entries;
@@ -202,11 +203,11 @@ async function extract(id: number, password?: string): Promise<Blob> {
 
 channel.onmessage = async ({ data }) => {
   requestId = data.id; lastProgress = 0;
-  limits = data.limits ?? DEFAULT_ARCHIVE_LIMITS; heldBytes = Math.max(0, data.heldBytes ?? 0); limitFailure = undefined;
+  limits = data.limits ?? DEFAULT_ARCHIVE_LIMITS; heldBytes = Math.max(0, data.heldBytes ?? 0);
   try {
     if (data.action === 'open') channel.postMessage({ id: data.id, entries: await open(data.url!, data.path!, data.chain ?? [], data.passwords ?? [data.password]) });
     else channel.postMessage({ id: data.id, blob: await extract(data.entry!, data.password) });
   } catch (error) {
-    channel.postMessage({ id: data.id, error: (error as Error).message || 'Unable to read this archive', passwordRequired: !!(error as { passwordRequired?: boolean }).passwordRequired, passwordDepth: activeChain.length, limit: limitFailure });
+    channel.postMessage({ id: data.id, error: (error as Error).message || 'Unable to read this archive', passwordRequired: !!(error as { passwordRequired?: boolean }).passwordRequired, passwordDepth: activeChain.length, limit: (error as { limit?: 'depth' | 'budget' }).limit });
   }
 };

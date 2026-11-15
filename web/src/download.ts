@@ -5,6 +5,8 @@ import { t } from './i18n.ts';
 
 export const [preparingDownload, setPreparingDownload] = createSignal(false);
 const [archiveProgress, setArchiveProgress] = createSignal<ArchiveDownload | null>(null);
+/** Status polling cadence; tests shorten it instead of sleeping for real seconds. */
+export const downloadTiming = { pollMs: 1000 };
 export function downloadProgressText() {
   const status = archiveProgress(), progress = status?.progress;
   if (!status) return t('download.preparing');
@@ -42,7 +44,7 @@ export async function startDownload(source: string | { url: string; filename: st
       let result = await controlRequest((signal) => api.prepareDownload(source, signal));
       while (result.kind === 'archive' && result.status === 'preparing') {
         setArchiveProgress(result);
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await new Promise((resolve) => setTimeout(resolve, downloadTiming.pollMs));
         const id = result.id;
         result = await controlRequest((signal) => api.downloadStatus(id, signal));
       }

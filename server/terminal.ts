@@ -5,8 +5,7 @@
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import { PtySession } from './pty.ts';
-import { TerminalQueryResponder, type TerminalQueryMeta } from './terminal-queries.ts';
-import { DEFAULT_SCROLLBACK, TerminalScreen } from '../shared/terminal/vt.ts';
+import { DEFAULT_SCROLLBACK, TerminalScreen, type TerminalQueryMeta } from '../shared/terminal/vt.ts';
 import { serializeDiff, serializeScreen, type ScreenDiff, type ScreenSnapshot } from '../shared/terminal/serialize.ts';
 
 export type TerminalInfo = { id: string; name: string };
@@ -26,11 +25,8 @@ export class Terminal extends EventEmitter {
   readonly pty: PtySession;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private flushDelay = FLUSH_MS;
-  private cols = 80;
-  private rows = 24;
   private resizeChain: Promise<void> = Promise.resolve();
   private meta: TerminalQueryMeta = {};
-  private readonly queries: TerminalQueryResponder;
   private readonly tracker: TerminalScreen;
 
   constructor(id: string, name: string, pty: PtySession) {
@@ -38,30 +34,20 @@ export class Terminal extends EventEmitter {
     this.id = id;
     this.name = name;
     this.pty = pty;
-    this.queries = new TerminalQueryResponder(
-      (data) => this.pty.write(data),
-      () => ({ cols: this.cols, rows: this.rows }),
-      () => this.meta,
-    );
-    // 服务端保存完整屏幕 + 回滚区，DSR6 和浏览器画面都来自这一份状态。
+    // 服务端保存完整屏幕 + 回滚区；查询应答和浏览器画面共用同一份解析状态。
     this.tracker = new TerminalScreen({
       cols: 80,
       rows: 24,
       scrollbackLimit: DEFAULT_SCROLLBACK,
-      onResponse: (data) => {
-        // 只回 DSR6（CSI row;col R / CSI ? row;col R），其余查询由上面的
-        // TerminalQueryResponder 处理，避免重复。
-        if (/^\x1b\[\??\d+;\d+R$/.test(data)) this.pty.write(data);
-      },
+      meta: () => this.meta,
+      onResponse: (data) => this.pty.write(data),
     });
     pty.on('data', (chunk: string) => this.feed(chunk));
   }
 
   private feed(chunk: string): void {
-    // 先更新服务端屏幕/光标状态，再处理查询：全部直接写回 PTY，
-    // 不经过 40ms 批处理和 WebSocket。
+    // 更新服务端屏幕/光标状态；查询回应直接写回 PTY，不经过 WS。
     this.tracker.process(chunk);
-    this.queries.feed(chunk);
     this.scheduleFlush();
   }
 
@@ -103,8 +89,6 @@ export class Terminal extends EventEmitter {
       .catch(() => { /* 上一次 stty 失败不应阻塞后续 resize */ })
       .then(async () => {
         await this.pty.resize(cols, rows);
-        this.cols = cols;
-        this.rows = rows;
         this.tracker.resize(cols, rows);
         // 尺寸变化后即使没有新输出，也要把新画面发给浏览器。
         this.scheduleFlush();
@@ -141,6 +125,7 @@ export class TerminalManager {
       await pty.ready;
     } catch (e) {
       this.map(userId).delete(id);
+      await pty.kill(); // 启动失败也要回收进程，避免孤儿 script/bash
       throw e;
     }
     return { id, name: term.name };

@@ -99,13 +99,20 @@ type PendingForm = {
   resolve: (response: acp.CreateElicitationResponse) => void;
 };
 
-type Bootstrap = {
-  sessionId: string;
-  configOptions: acp.SessionConfigOption[];
-  modes?: AgentModeState;
-};
+type Bootstrap = { sessionId: string };
 
 const START_TIMEOUT_MS = 60_000;
+
+/** Resolve after `ms` without leaving a live timer behind when the promise wins. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(undefined), ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
 
 export class AgentRuntime {
   private child?: ChildProcess;
@@ -114,7 +121,6 @@ export class AgentRuntime {
   private readyPromise?: Promise<void>;
   private readyResolve?: () => void;
   private readyReject?: (error: Error) => void;
-  private closedResolve?: () => void;
   private closedPromise?: Promise<void>;
   private error?: string;
   private disposed = false;
@@ -138,7 +144,6 @@ export class AgentRuntime {
   private readonly titles = new Map<string, string>();
   private readonly configs = new Map<string, acp.SessionConfigOption[]>();
   private readonly modeStates = new Map<string, StoredModes>();
-  private readonly busy = new Set<string>();
   private permissionSeq = 0;
   private formSeq = 0;
   private readonly replays = new Map<string, acp.SessionUpdate[]>();
@@ -152,7 +157,7 @@ export class AgentRuntime {
   constructor(
     private readonly dir: string,
     private readonly discovered: DiscoveredAgent,
-    private readonly files: FileStore,
+    files: FileStore,
     private readonly mcpServers: () => acp.McpServer[] = () => [],
     private readonly systemPrompt: () => string | undefined = () => undefined,
   ) {
@@ -204,7 +209,6 @@ export class AgentRuntime {
       let resolveClosed!: () => void;
       const closed = new Promise<void>((done) => {
         resolveClosed = done;
-        this.closedResolve = done;
       });
       this.closedPromise = closed;
 
@@ -214,19 +218,7 @@ export class AgentRuntime {
       child.on('exit', (code, signal) => {
         const message = `ACP agent exited (${signal ?? code ?? 'unknown'})`;
         if (this.child === child) {
-          this.cancelForms();
-          this.cancelPermissions();
-          void this.acpTerminals.close();
-          this.init = undefined;
-          this.authRequired = false;
-          this.authenticated = false;
-          this.boot = undefined;
-          this.bootstrapUsed = false;
-          this.attached.clear();
-          this.historyKnown.clear();
-          this.attaching.clear();
-          this.sessionEpoch.clear();
-          this.generation += 1;
+          this.resetAfterChildExit();
           if (!this.disposed) {
             this.emit({ type: 'state', status: 'closed', message });
             if (this.error === undefined) this.error = message;
@@ -322,6 +314,23 @@ export class AgentRuntime {
     });
   }
 
+  /** Reset per-connection state after the agent process exits on its own. */
+  private resetAfterChildExit(): void {
+    this.cancelForms();
+    this.cancelPermissions();
+    void this.acpTerminals.close();
+    this.init = undefined;
+    this.authRequired = false;
+    this.authenticated = false;
+    this.boot = undefined;
+    this.bootstrapUsed = false;
+    this.attached.clear();
+    this.historyKnown.clear();
+    this.attaching.clear();
+    this.sessionEpoch.clear();
+    this.generation += 1;
+  }
+
   private fail(error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
     this.error = message;
@@ -346,13 +355,14 @@ export class AgentRuntime {
         this.authRequired = true;
         this.authenticated = false;
       }
+      const bootstrap = this.bootstrapState(boot);
       return {
         ready: true,
         agent: this.init?.agentInfo ?? undefined,
         capabilities: this.init?.agentCapabilities,
-        defaultModel: this.defaultModel(boot?.configOptions),
-        modes: boot?.modes,
-        configOptions: boot?.configOptions ?? [],
+        defaultModel: this.defaultModel(bootstrap.configOptions),
+        modes: bootstrap.modes,
+        configOptions: bootstrap.configOptions,
         bootstrapSessionID: this.bootstrapUsed ? undefined : boot?.sessionId,
         authMethods: this.init?.authMethods ?? [],
         authenticated: this.authenticated,
@@ -420,17 +430,23 @@ export class AgentRuntime {
     }
   }
 
-  private retireBootstrap(sessionID: string): void {
+  /** Drop all per-session caches; callers keep their own retirement/boot semantics. */
+  private dropSessionCaches(sessionID: string, keepTitle = false): void {
     this.configs.delete(sessionID);
     this.modeStates.delete(sessionID);
-    this.titles.delete(sessionID);
+    if (!keepTitle) this.titles.delete(sessionID);
     this.history.delete(sessionID);
+    this.replays.delete(sessionID);
     this.sessionMcp.delete(sessionID);
     this.sessionPrompt.delete(sessionID);
     this.attached.delete(sessionID);
     this.historyKnown.delete(sessionID);
     this.attaching.delete(sessionID);
     this.bumpSession(sessionID);
+  }
+
+  private retireBootstrap(sessionID: string): void {
+    this.dropSessionCaches(sessionID);
     if (this.boot?.sessionId === sessionID) this.boot = undefined;
     if (this.disposed) return;
     this.retiredBootstraps.add(sessionID);
@@ -469,19 +485,16 @@ export class AgentRuntime {
     this.authRequired = false;
     this.authenticated = true;
     if (result.sessionId) {
-      this.configs.set(result.sessionId, configOptions);
+      this.recordSession(result.sessionId, { configOptions, modes, mcpServers, systemPrompt: systemPrompt ?? null });
       this.history.set(result.sessionId, []);
       this.attached.add(result.sessionId);
       this.historyKnown.add(result.sessionId);
-      this.sessionMcp.set(result.sessionId, mcpServers);
-      this.sessionPrompt.set(result.sessionId, systemPrompt ?? null);
-      if (modes) this.modeStates.set(result.sessionId, modes);
     }
-    return { sessionId: result.sessionId, configOptions, modes: modes?.state };
+    return { sessionId: result.sessionId };
   }
 
   private defaultModel(
-    options: acp.SessionConfigOption[] = this.boot?.configOptions ?? [],
+    options: acp.SessionConfigOption[] = this.bootstrapState(this.boot).configOptions,
   ): { providerID: string; id: string } | null {
     const model = this.modelOption(options);
     if (!model || typeof model.currentValue !== 'string') return null;
@@ -493,7 +506,7 @@ export class AgentRuntime {
   }
 
   private models(): AgentModel[] {
-    const option = this.modelOption(this.boot?.configOptions ?? []);
+    const option = this.modelOption(this.bootstrapState(this.boot).configOptions);
     if (!option || !('options' in option) || !option.options) return [];
     const entries = option.options.flatMap((entry) => 'options' in entry ? entry.options : [entry]);
     return entries.map((entry) => {
@@ -553,44 +566,37 @@ export class AgentRuntime {
     // the UI until the user sends the first message. Retired bootstraps are
     // hidden too, even when the agent cannot delete them.
     const hideBoot = !this.bootstrapUsed;
-    const sessions = list
-      .filter((session) => !this.retiredBootstraps.has(session.sessionId))
-      .filter((session) => !(hideBoot && session.sessionId === boot?.sessionId))
-      .map((session) => {
-        const parsed = session.updatedAt ? Date.parse(session.updatedAt) : NaN;
-        const updated = Number.isFinite(parsed) ? parsed : Date.now();
-        return {
-          id: session.sessionId,
-          title: this.titles.get(session.sessionId) ?? session.title ?? 'New chat',
-          time: { created: updated, updated },
-          configOptions: this.configs.get(session.sessionId) ?? [],
-          modes: this.modeStates.get(session.sessionId)?.state,
-        };
-      });
-    if (!hideBoot && boot && !sessions.some((session) => session.id === boot.sessionId)) {
+    const hidden = (id: string) => this.retiredBootstraps.has(id) || (hideBoot && id === boot?.sessionId);
+    const row = (id: string, title: string | undefined, time: { created: number; updated: number }) => ({
+      id,
+      title: this.titles.get(id) ?? title ?? 'New chat',
+      time,
+      configOptions: this.configs.get(id) ?? [],
+      modes: this.modeStates.get(id)?.state,
+    });
+    const sessions = list.filter((session) => !hidden(session.sessionId)).map((session) => {
+      const parsed = session.updatedAt ? Date.parse(session.updatedAt) : NaN;
+      const updated = Number.isFinite(parsed) ? parsed : Date.now();
+      return row(session.sessionId, session.title ?? undefined, { created: updated, updated });
+    });
+    const seen = new Set(sessions.map((session) => session.id));
+    if (!hideBoot && boot && !seen.has(boot.sessionId)) {
+      const state = this.bootstrapState(boot);
       sessions.unshift({
         id: boot.sessionId,
         title: this.titles.get(boot.sessionId) ?? 'New chat',
         time: { created: Date.now(), updated: Date.now() },
-        configOptions: boot.configOptions,
-        modes: boot.modes,
+        configOptions: state.configOptions,
+        modes: state.modes,
       });
+      seen.add(boot.sessionId);
     }
     // Agents can report a session only after it persists its first turn. Keep
     // sessions created or loaded in this run visible so an immediate cancel
     // does not make the tab and its local transcript vanish.
-    const known = new Set([...this.configs.keys(), ...this.history.keys()]);
-    for (const id of known) {
-      if (this.retiredBootstraps.has(id)) continue;
-      if (hideBoot && id === boot?.sessionId) continue;
-      if (sessions.some((session) => session.id === id)) continue;
-      sessions.push({
-        id,
-        title: this.titles.get(id) ?? 'New chat',
-        time: { created: Date.now(), updated: Date.now() },
-        configOptions: this.configs.get(id) ?? [],
-        modes: this.modeStates.get(id)?.state,
-      });
+    const now = Date.now();
+    for (const id of new Set([...this.configs.keys(), ...this.history.keys()])) {
+      if (!seen.has(id) && !hidden(id)) sessions.push(row(id, undefined, { created: now, updated: now }));
     }
     return sessions;
   }
@@ -613,12 +619,13 @@ export class AgentRuntime {
     const boot = await this.ensureBootstrap();
     if (!this.bootstrapUsed) {
       this.bootstrapUsed = true;
+      const state = this.bootstrapState(boot);
       return {
         id: boot.sessionId,
         title: this.titles.get(boot.sessionId) ?? 'New chat',
         time: { created: Date.now(), updated: Date.now() },
-        configOptions: boot.configOptions,
-        modes: boot.modes,
+        configOptions: state.configOptions,
+        modes: state.modes,
       };
     }
     const ctx = await this.ensure();
@@ -631,19 +638,39 @@ export class AgentRuntime {
     });
     const configOptions = result.configOptions ?? [];
     const modes = modeStateFrom(result.modes, configOptions);
-    this.configs.set(result.sessionId, configOptions);
+    this.recordSession(result.sessionId, { configOptions, modes, mcpServers, systemPrompt: systemPrompt ?? null });
     this.history.set(result.sessionId, []);
     this.attached.add(result.sessionId);
     this.historyKnown.add(result.sessionId);
-    this.sessionMcp.set(result.sessionId, mcpServers);
-    this.sessionPrompt.set(result.sessionId, systemPrompt ?? null);
-    if (modes) this.modeStates.set(result.sessionId, modes);
     return {
       id: result.sessionId,
       title: 'New chat',
       time: { created: Date.now(), updated: Date.now() },
       configOptions,
       modes: modes?.state,
+    };
+  }
+
+  /** Session metadata has one owner per field; callers pass only the fields they actually changed. */
+  private recordSession(id: string, snapshot: {
+    configOptions: acp.SessionConfigOption[];
+    modes?: StoredModes;
+    mcpServers: acp.McpServer[];
+    systemPrompt?: acp.SystemPrompt | null;
+  }): void {
+    this.configs.set(id, snapshot.configOptions);
+    if (snapshot.modes) this.modeStates.set(id, snapshot.modes);
+    this.sessionMcp.set(id, snapshot.mcpServers);
+    if (snapshot.systemPrompt !== undefined) this.sessionPrompt.set(id, snapshot.systemPrompt);
+  }
+
+  private bootstrapState(boot: Bootstrap | undefined): {
+    configOptions: acp.SessionConfigOption[];
+    modes?: AgentModeState;
+  } {
+    return {
+      configOptions: boot ? this.configs.get(boot.sessionId) ?? [] : [],
+      modes: boot ? this.modeStates.get(boot.sessionId)?.state : undefined,
     };
   }
 
@@ -717,11 +744,13 @@ export class AgentRuntime {
       this.attached.add(id);
       this.historyKnown.add(id);
       if (!this.history.has(id)) this.history.set(id, []);
-      this.sessionMcp.set(id, mcpServers);
-      if (promptSupported) this.sessionPrompt.set(id, systemPrompt ?? null);
-      if (result.configOptions) this.configs.set(id, result.configOptions);
-      const modes = modeStateFrom(result.modes, result.configOptions ?? this.configs.get(id) ?? []);
-      if (modes) this.modeStates.set(id, modes);
+      const configOptions = result.configOptions ?? this.configs.get(id) ?? [];
+      this.recordSession(id, {
+        configOptions,
+        modes: modeStateFrom(result.modes, configOptions),
+        mcpServers,
+        ...(promptSupported ? { systemPrompt: systemPrompt ?? null } : {}),
+      });
       return;
     }
     const replay: acp.SessionUpdate[] = [];
@@ -737,11 +766,13 @@ export class AgentRuntime {
       this.attached.add(id);
       this.historyKnown.add(id);
       this.history.set(id, replay);
-      this.sessionMcp.set(id, mcpServers);
-      if (promptSupported) this.sessionPrompt.set(id, systemPrompt ?? null);
-      if (result.configOptions) this.configs.set(id, result.configOptions);
-      const modes = modeStateFrom(result.modes, result.configOptions ?? this.configs.get(id) ?? []);
-      if (modes) this.modeStates.set(id, modes);
+      const configOptions = result.configOptions ?? this.configs.get(id) ?? [];
+      this.recordSession(id, {
+        configOptions,
+        modes: modeStateFrom(result.modes, configOptions),
+        mcpServers,
+        ...(promptSupported ? { systemPrompt: systemPrompt ?? null } : {}),
+      });
     } finally {
       this.replays.delete(id);
     }
@@ -750,7 +781,6 @@ export class AgentRuntime {
   async prompt(sessionID: string, content: acp.ContentBlock[]): Promise<{ accepted: true }> {
     this.rememberUserPrompt(sessionID, content);
     const ctx = await this.ensure();
-    this.busy.add(sessionID);
     this.emit({ type: 'busy', sessionID, busy: true });
     const run = ctx.request(acp.methods.agent.session.prompt, {
       sessionId: sessionID,
@@ -761,7 +791,6 @@ export class AgentRuntime {
     }).catch((error) => {
       this.emit({ type: 'state', status: 'error', message: error instanceof Error ? error.message : String(error) });
     }).finally(() => {
-      this.busy.delete(sessionID);
       this.emit({ type: 'busy', sessionID, busy: false });
     });
     return { accepted: true };
@@ -828,9 +857,6 @@ export class AgentRuntime {
     const result = await ctx.request(acp.methods.agent.session.setConfigOption, request as acp.SetSessionConfigOptionRequest);
     const options = result.configOptions ?? this.configs.get(sessionID) ?? [];
     this.configs.set(sessionID, options);
-    if (sessionID === this.boot?.sessionId) {
-      this.boot = { ...this.boot, configOptions: options };
-    }
     return options;
   }
 
@@ -868,11 +894,7 @@ export class AgentRuntime {
       stored.state.currentModeId = modeID;
     }
 
-    const state = this.modeStates.get(sessionID)?.state ?? stored.state;
-    if (sessionID === this.boot?.sessionId) {
-      this.boot = { ...this.boot, modes: state };
-    }
-    return state;
+    return this.modeStates.get(sessionID)?.state ?? stored.state;
   }
 
   async remove(sessionID: string): Promise<void> {
@@ -883,11 +905,9 @@ export class AgentRuntime {
       await ctx.request(acp.methods.agent.session.delete, { sessionId: sessionID });
     } catch (error) {
       // ACP treats deleting an already-missing session as success.
-      if (!(error instanceof RequestError && error.code === -32002)) throw error;
+      if (!this.isMissingSession(error)) throw error;
     }
-    await this.acpTerminals.closeSession(sessionID);
-    this.forgetSession(sessionID);
-    this.emit({ type: 'sessions_changed' });
+    await this.finishSession(sessionID, false);
   }
 
   async closeSession(sessionID: string): Promise<void> {
@@ -902,26 +922,23 @@ export class AgentRuntime {
       await ctx.request(acp.methods.agent.session.close, { sessionId: sessionID });
     } catch (error) {
       // ACP treats closing an already-missing session as success.
-      if (!(error instanceof RequestError && error.code === -32002)) throw error;
+      if (!this.isMissingSession(error)) throw error;
     }
+    await this.finishSession(sessionID, true);
+  }
+
+  private isMissingSession(error: unknown): boolean {
+    return error instanceof RequestError && error.code === -32002;
+  }
+
+  private async finishSession(sessionID: string, keepTitle: boolean): Promise<void> {
     await this.acpTerminals.closeSession(sessionID);
-    this.forgetSession(sessionID, true);
+    this.forgetSession(sessionID, keepTitle);
     this.emit({ type: 'sessions_changed' });
   }
 
   private forgetSession(sessionID: string, keepTitle = false): void {
-    this.configs.delete(sessionID);
-    this.modeStates.delete(sessionID);
-    if (!keepTitle) this.titles.delete(sessionID);
-    this.history.delete(sessionID);
-    this.replays.delete(sessionID);
-    this.sessionMcp.delete(sessionID);
-    this.sessionPrompt.delete(sessionID);
-    this.attached.delete(sessionID);
-    this.historyKnown.delete(sessionID);
-    this.attaching.delete(sessionID);
-    this.bumpSession(sessionID);
-    this.busy.delete(sessionID);
+    this.dropSessionCaches(sessionID, keepTitle);
     this.retiredBootstraps.delete(sessionID);
     if (this.boot?.sessionId === sessionID) {
       this.bootEpoch += 1;
@@ -946,11 +963,8 @@ export class AgentRuntime {
     };
     const configOptions = result.configOptions ?? [];
     const modes = modeStateFrom(result.modes, configOptions);
-    this.configs.set(result.sessionId, configOptions);
-    this.sessionMcp.set(result.sessionId, mcpServers);
-    this.sessionPrompt.set(result.sessionId, systemPrompt ?? null);
+    this.recordSession(result.sessionId, { configOptions, modes, mcpServers, systemPrompt: systemPrompt ?? null });
     this.attached.add(result.sessionId);
-    if (modes) this.modeStates.set(result.sessionId, modes);
     return {
       id: result.sessionId,
       title: 'New chat',
@@ -1057,24 +1071,12 @@ export class AgentRuntime {
     }
     if (update.sessionUpdate === 'current_mode_update') {
       const stored = this.modeStates.get(params.sessionId);
-      if (stored) {
-        stored.state.currentModeId = update.currentModeId;
-        if (params.sessionId === this.boot?.sessionId) {
-          this.boot = { ...this.boot, modes: stored.state };
-        }
-      }
+      if (stored) stored.state.currentModeId = update.currentModeId;
     }
     if (update.sessionUpdate === 'config_option_update') {
       this.configs.set(params.sessionId, update.configOptions);
       const modes = modeStateFrom(undefined, update.configOptions);
-      if (modes) {
-        this.modeStates.set(params.sessionId, modes);
-        if (params.sessionId === this.boot?.sessionId) {
-          this.boot = { ...this.boot, configOptions: update.configOptions, modes: modes.state };
-        }
-      } else if (params.sessionId === this.boot?.sessionId) {
-        this.boot = { ...this.boot, configOptions: update.configOptions };
-      }
+      if (modes) this.modeStates.set(params.sessionId, modes);
     }
     this.emit({ type: 'update', sessionID: params.sessionId, update, created: Date.now() });
   }
@@ -1091,17 +1093,13 @@ export class AgentRuntime {
     if (child) {
       try { child.stdin?.end(); } catch { /* ignore */ }
       try { child.kill('SIGTERM'); } catch { /* ignore */ }
-      await Promise.race([
-        closed ?? Promise.resolve(),
-        new Promise((resolve) => setTimeout(resolve, 2000)),
-      ]);
+      await withTimeout(closed ?? Promise.resolve(), 2000);
       try { child.kill('SIGKILL'); } catch { /* ignore */ }
     }
     this.readyPromise = undefined;
     this.readyResolve = undefined;
     this.readyReject = undefined;
     this.closedPromise = undefined;
-    this.closedResolve = undefined;
     this.init = undefined;
     this.error = undefined;
     this.authRequired = false;
@@ -1110,33 +1108,31 @@ export class AgentRuntime {
     this.boot = undefined;
     this.bootPending = undefined;
     this.bootstrapUsed = false;
-    this.retiredBootstraps.clear();
-    this.sessionMcp.clear();
-    this.sessionPrompt.clear();
-    this.attached.clear();
-    this.historyKnown.clear();
-    this.attaching.clear();
+    const sessions = new Set<string>([
+      ...this.configs.keys(),
+      ...this.modeStates.keys(),
+      ...this.titles.keys(),
+      ...this.history.keys(),
+      ...this.replays.keys(),
+      ...this.sessionMcp.keys(),
+      ...this.sessionPrompt.keys(),
+      ...this.attached,
+      ...this.historyKnown,
+      ...this.attaching.keys(),
+      ...this.sessionEpoch.keys(),
+    ]);
+    for (const sessionID of sessions) this.dropSessionCaches(sessionID);
     this.sessionEpoch.clear();
+    this.retiredBootstraps.clear();
     this.generation += 1;
     this.commands = [];
-    this.configs.clear();
-    this.modeStates.clear();
-    this.titles.clear();
-    this.busy.clear();
-    this.history.clear();
-    this.replays.clear();
     this.permissionSeq = 0;
     this.formSeq = 0;
   }
 
   async close(): Promise<void> {
     const unusedBoot = this.bootstrapUsed ? undefined : this.boot;
-    if (unusedBoot) {
-      await Promise.race([
-        this.deleteSession(unusedBoot.sessionId),
-        new Promise((resolve) => setTimeout(resolve, 2000)),
-      ]);
-    }
+    if (unusedBoot) await withTimeout(this.deleteSession(unusedBoot.sessionId), 2000);
     this.disposed = true;
     await this.stopProcess();
   }

@@ -122,6 +122,60 @@ test('DSR/DA1 回应', () => {
   assert.deepEqual(responses, ['\x1b[1;1R', '\x1b[?62;22c']);
 });
 
+test('DA1/DA2/DSR5 查询回应，忽略回显的应答序列', () => {
+  const responses: string[] = [];
+  const s = createTerminalScreen({ cols: 80, rows: 24, onResponse: (data) => responses.push(data) });
+  s.process('\x1b[c\x1b[0c\x1b[>c\x1b[>0c\x1b[5n');
+  assert.deepEqual(responses, [
+    '\x1b[?62;22c', '\x1b[?62;22c', '\x1b[>0;1;0c', '\x1b[>0;1;0c', '\x1b[0n',
+  ]);
+  responses.length = 0;
+  s.process('\x1b[?62;22c\x1b[>0;1;0c\x1b[8;24;80t\x1b[0n');
+  assert.deepEqual(responses, []);
+});
+
+test('窗口/像素/单元格尺寸与 OSC 颜色查询', () => {
+  const responses: string[] = [];
+  const s = createTerminalScreen({
+    cols: 80, rows: 24,
+    meta: () => ({
+      pixelWidth: 800, pixelHeight: 480, cellWidth: 10, cellHeight: 20,
+      fg: { r: 30, g: 30, b: 30 }, bg: { r: 255, g: 255, b: 255 }, cursor: { r: 30, g: 30, b: 30 },
+    }),
+    onResponse: (data) => responses.push(data),
+  });
+  s.process('\x1b[14t\x1b[16t\x1b[18t\x1b[19t\x1b]10;?\x07\x1b]11;?\x07\x1b]12;?\x07');
+  assert.deepEqual(responses, [
+    '\x1b[4;480;800t', '\x1b[6;20;10t', '\x1b[8;24;80t', '\x1b[9;24;80t',
+    '\x1b]10;rgb:1e1e/1e1e/1e1e\x1b\\',
+    '\x1b]11;rgb:ffff/ffff/ffff\x1b\\',
+    '\x1b]12;rgb:1e1e/1e1e/1e1e\x1b\\',
+  ]);
+});
+
+test('跨 chunk 的 CSI / OSC 查询', () => {
+  const responses: string[] = [];
+  const s = createTerminalScreen({
+    cols: 80, rows: 24,
+    meta: () => ({ bg: { r: 0, g: 0, b: 0 } }),
+    onResponse: (data) => responses.push(data),
+  });
+  s.process('\x1b');
+  s.process('[');
+  s.process('c');
+  s.process('\x1b]11');
+  s.process(';?');
+  s.process('\x07');
+  assert.deepEqual(responses, ['\x1b[?62;22c', '\x1b]11;rgb:0000/0000/0000\x1b\\']);
+});
+
+test('没有 meta 颜色时不回 OSC，但 DA/尺寸仍回', () => {
+  const responses: string[] = [];
+  const s = createTerminalScreen({ cols: 80, rows: 24, onResponse: (data) => responses.push(data) });
+  s.process('\x1b]11;?\x07\x1b[c\x1b[18t');
+  assert.deepEqual(responses, ['\x1b[?62;22c', '\x1b[8;24;80t']);
+});
+
 test('脏行追踪：只报告变化的行', () => {
   const s = screen(10, 3);
   const initial = s.takeDirty();

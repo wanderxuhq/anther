@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { configChoices, effortConfigOption, modeStateFromOptions, otherConfigOptions, secondaryConfigOptions } from './config.ts';
+import { configChoices, effortConfigOption, modeStateFromOptions, modelConfigOption, modelFromConfig, otherConfigOptions, secondaryConfigOptions } from './config.ts';
 import type { ConfigOption } from './api.ts';
 
 function modeOption(overrides: Partial<ConfigOption> = {}): ConfigOption {
@@ -56,6 +56,13 @@ test('returns null when there is no mode option', () => {
   assert.equal(modeStateFromOptions([
     modeOption({ type: 'boolean', currentValue: true, options: undefined }),
   ]), null);
+});
+
+test('finds the model option by id or category', () => {
+  assert.equal(modelConfigOption(undefined), undefined);
+  assert.equal(modelConfigOption([modeOption()]), undefined);
+  assert.equal(modelConfigOption([modeOption({ id: 'model', category: null })])?.id, 'model');
+  assert.equal(modelConfigOption([modeOption({ id: 'primary_model', category: 'model' })])?.id, 'primary_model');
 });
 
 test('hides model and mode options from the generic menu', () => {
@@ -117,4 +124,21 @@ test('picks the effort option out of the generic settings', () => {
   ];
   assert.equal(effortConfigOption(options)?.id, 'thought_level');
   assert.deepEqual(otherConfigOptions(options).map((option) => option.id), ['brave_mode']);
+});
+
+test('resolves the session model option to an available model', () => {
+  const option = modeOption({
+    id: 'model',
+    category: 'model',
+    currentValue: 'openai/gpt-4o',
+    options: [{ value: 'openai/gpt-4o', name: 'GPT-4o' }],
+  });
+  const models = [
+    { id: 'other', providerID: 'fake' },
+    { id: 'gpt-4o', providerID: 'openai' },
+  ];
+  assert.equal(modelFromConfig([option], models)?.id, 'gpt-4o');
+  assert.equal(modelFromConfig([option], [{ id: 'gpt-4o', providerID: 'fake' }]), null);
+  assert.equal(modelFromConfig([modeOption()], models), null);
+  assert.equal(modelFromConfig(undefined, models), null);
 });

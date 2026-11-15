@@ -9,6 +9,9 @@ import { StringDecoder } from 'node:string_decoder';
 
 const MARKER_RE = /^PTYMARKER (\S+)\r?\n/;
 const FIRST_BUF_LIMIT = 64 * 1024; // marker 解析的兜底上限（防异常 shell 无限攒）
+// 正常启动 < 2s；超时只针对“进程活着但永远不出 marker”的异常 shell，
+// 避免 create() 的 HTTP 请求无限等待。
+const READY_TIMEOUT_MS = 15_000;
 
 export class PtySession extends EventEmitter {
   readonly pid: number;
@@ -16,6 +19,8 @@ export class PtySession extends EventEmitter {
   private child: ChildProcess;
   private dev: string | null = null;
   private firstBuf = '';
+  private readyDone = false;
+  private readyTimer: ReturnType<typeof setTimeout>;
   // 多字节 UTF-8 可能被 pipe 切断；逐块 toString 会产生替换符，StringDecoder 负责拼接。
   private decoder = new StringDecoder('utf8');
   private readyResolve!: () => void;
@@ -43,13 +48,35 @@ export class PtySession extends EventEmitter {
       this.readyResolve = resolve;
       this.readyReject = reject;
     });
+    this.readyTimer = setTimeout(() => {
+      this.rejectReady(new Error('pty did not report its device before ready timeout'));
+    }, READY_TIMEOUT_MS);
     this.child.on('error', (e) => {
       // spawn 失败（ENOENT 等）：只 reject ready，不 emit 'error'（EventEmitter 无
       // 监听者时抛未捕获异常，会崩掉进程）
-      this.readyReject(e);
+      this.rejectReady(e);
     });
     this.child.stdout!.on('data', (d: Buffer) => this.onStdout(d));
-    this.child.on('exit', (code) => this.emit('exit', code ?? 0));
+    this.child.on('exit', (code) => {
+      // 进程在 marker 之前就退出（cwd 不存在、script 启动失败等）时，
+      // 不能让 ready 永远 pending；调用方需要能结束等待并清理。
+      this.rejectReady(new Error(`pty exited before ready (code ${code ?? 0})`));
+      this.emit('exit', code ?? 0);
+    });
+  }
+
+  private resolveReady(): void {
+    if (this.readyDone) return;
+    this.readyDone = true;
+    clearTimeout(this.readyTimer);
+    this.readyResolve();
+  }
+
+  private rejectReady(error: Error): void {
+    if (this.readyDone) return;
+    this.readyDone = true;
+    clearTimeout(this.readyTimer);
+    this.readyReject(error);
   }
 
   get readyDevPath(): string | null { return this.dev; }
@@ -64,14 +91,14 @@ export class PtySession extends EventEmitter {
         this.dev = m[1];
         const rest = this.firstBuf.slice(m[0].length);
         this.firstBuf = '';
-        this.readyResolve();
+        this.resolveReady();
         if (rest) this.emit('data', rest);
       } else if (this.firstBuf.length > FIRST_BUF_LIMIT) {
         // 异常 shell 没出 marker：兜底放行（resize 变 no-op），不吞输出
         this.dev = '';
         const rest = this.firstBuf;
         this.firstBuf = '';
-        this.readyResolve();
+        this.resolveReady();
         if (rest) this.emit('data', rest);
       }
       return; // marker 未齐，继续攒

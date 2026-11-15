@@ -126,10 +126,10 @@ async function readState(): Promise<FakeState> {
 async function waitFor<T>(
   read: () => Promise<T | undefined>,
   label: string,
-  timeout = 4000,
+  nominalMs = 4000,
 ): Promise<T> {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
+  const maxPolls = Math.max(1, Math.round(nominalMs / 20));
+  for (let poll = 0; poll < maxPolls; poll++) {
     const value = await read();
     if (value !== undefined) return value;
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -198,6 +198,49 @@ test('treats deleting a missing session as success', async () => {
   await runtime.remove(session.id);
   const state = await readState();
   assert.ok(state.calls.some((call) => call.method === 'delete' && call.sessionId === session.id));
+});
+
+test('removing a session drops cached history and reloads it on demand', async () => {
+  await start();
+  await runtime.status();
+  const session = await runtime.createSession();
+  const cached = await runtime.messages(session.id);
+  assert.deepEqual(cached.updates, []);
+  await runtime.remove(session.id);
+  const reloaded = await runtime.messages(session.id);
+  assert.equal(reloaded.updates.length, 1);
+});
+
+test('stopping the process clears per-session caches', async () => {
+  await start();
+  await runtime.status();
+  const session = await runtime.createSession();
+  await runtime.messages(session.id);
+  const internals = runtime as unknown as {
+    configs: Map<string, unknown>;
+    modeStates: Map<string, unknown>;
+    titles: Map<string, unknown>;
+    history: Map<string, unknown>;
+    sessionMcp: Map<string, unknown>;
+    sessionPrompt: Map<string, unknown>;
+    attached: Set<string>;
+    historyKnown: Set<string>;
+    attaching: Map<string, unknown>;
+    sessionEpoch: Map<string, unknown>;
+    retiredBootstraps: Set<string>;
+    boot?: unknown;
+  };
+  assert.ok(internals.configs.size > 0);
+  assert.ok(internals.history.size > 0);
+  await runtime.close();
+  for (const map of [internals.configs, internals.modeStates, internals.titles, internals.history,
+    internals.sessionMcp, internals.sessionPrompt, internals.attaching, internals.sessionEpoch]) {
+    assert.equal(map.size, 0);
+  }
+  assert.equal(internals.attached.size, 0);
+  assert.equal(internals.historyKnown.size, 0);
+  assert.equal(internals.retiredBootstraps.size, 0);
+  assert.equal(internals.boot, undefined);
 });
 
 test('lists sessions created in this run even when the agent omits them', async () => {

@@ -14,8 +14,7 @@ export function registerTabsRoutes(http: Router, tabs: TabStore): void {
   const withPath =
     (fn: (userId: string, path: string) => void): Handler =>
     async (req, body) => {
-      if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
-      const p = (body as { path?: string }).path;
+      const p = (body as { path?: unknown } | undefined)?.path;
       if (typeof p !== 'string') throw new HttpError(400, 'missing path');
       fn(userId(req), p);
     };
@@ -25,7 +24,7 @@ export function registerTabsRoutes(http: Router, tabs: TabStore): void {
   http.put('/api/tabs/front', withPath((u, p) => tabs.setFront(u, p)));
 
   http.put('/api/tabs/restore', async (_req, body) => {
-    const paths = (body as { paths?: unknown }).paths;
+    const paths = (body as { paths?: unknown } | undefined)?.paths;
     if (!Array.isArray(paths)) throw new HttpError(400, 'missing paths');
     return { restored: tabs.restore(paths.filter((x) => typeof x === 'string')) };
   });

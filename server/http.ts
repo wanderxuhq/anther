@@ -92,7 +92,8 @@ export class Router {
 }
 
 type Resolved = {
-  router: Router;
+  /** 按优先级排列：shell 路由在前，宿主工作区（若已挂载）作为 fallback。 */
+  routers: Router[];
   base: string;
   /** 原始 pathname，用于静态文件查找。 */
   pathname: string;
@@ -100,11 +101,9 @@ type Resolved = {
   restPath: string;
   /** 去掉挂载前缀后的 pathname + query，写回 req.url，路由无需感知挂载。 */
   restUrl: string;
-  search: string;
+  query: URLSearchParams;
   reserved: boolean;
 };
-
-const requestRouters = new WeakMap<IncomingMessage, Router>();
 
 function normalizeBase(base: string): string {
   if (base === '') return '';
@@ -145,23 +144,6 @@ export class HttpServer extends Router {
     this.staticDir = opts.staticDir;
     this.mount('', this);
     this.server = this.createServer();
-
-    // async 守卫：handler 是 void|Promise<void>，.catch 无法直接挂（void 无 .catch）；
-    // 用 async 回调 + try/catch，与 SSE 路径（await + catch 写错误）同款。
-    this.wss.on('connection', async (ws, req) => {
-      const router = requestRouters.get(req) ?? this;
-      router.trackWs(ws);
-      ws.on('close', () => router.untrackWs(ws));
-      const url = new URL(req.url ?? '/', 'http://localhost');
-      const h = router.wsHandler(url.pathname);
-      try {
-        if (h) await h(ws, req, url.searchParams);
-        else ws.close();
-      } catch (e) {
-        console.error(`ws handler ${url.pathname}:`, e);
-        ws.close();
-      }
-    });
   }
 
   /** 每个监听 server 复用同一套请求/升级处理；热切换时替换的是 server，不是路由。 */
@@ -179,17 +161,27 @@ export class HttpServer extends Router {
       socket.destroy();
       return;
     }
-    const candidates = resolved.base === '' && this.rootWorkspace && this.rootWorkspace !== resolved.router
-      ? [resolved.router, this.rootWorkspace]
-      : [resolved.router];
-    const router = candidates.find((candidate) => candidate.wsHandler(resolved.restPath));
-    if (!router) {
+    const found = resolved.routers
+      .map((router) => [router, router.wsHandler(resolved.restPath)] as const)
+      .find((entry): entry is [Router, WsHandler] => entry[1] !== undefined);
+    if (!found) {
       socket.destroy();
       return;
     }
-    requestRouters.set(req, router);
+    const [router, handler] = found;
     req.url = resolved.restUrl;
-    this.wss.handleUpgrade(req, socket, head, (ws) => this.wss.emit('connection', ws, req));
+    this.wss.handleUpgrade(req, socket, head, (ws) => {
+      router.trackWs(ws);
+      ws.on('close', () => router.untrackWs(ws));
+      void (async () => {
+        try {
+          await handler(ws, req, resolved.query);
+        } catch (e) {
+          console.error(`ws handler ${resolved.restPath}:`, e);
+          ws.close();
+        }
+      })();
+    });
   };
 
   /** 把一个 Router 挂到一个或多个 URL 前缀；'' 表示宿主根路径。 */
@@ -331,7 +323,7 @@ export class HttpServer extends Router {
   private resolve(rawUrl: string): Resolved {
     const url = new URL(rawUrl, 'http://localhost');
     const pathname = url.pathname;
-    const search = url.search;
+    const query = url.searchParams;
 
     let matched = '';
     for (const base of this.bases) {
@@ -341,25 +333,30 @@ export class HttpServer extends Router {
       }
     }
 
+    const dispatch = (router: Router, restPath: string, restUrl: string, reserved = false): Resolved => ({
+      // 根路径的 shell 路由优先；宿主工作区作为 fallback。
+      routers: matched === '' && this.rootWorkspace && this.rootWorkspace !== router
+        ? [router, this.rootWorkspace]
+        : [router],
+      base: matched,
+      pathname,
+      restPath,
+      restUrl,
+      query,
+      reserved,
+    });
+
     if (matched) {
       const restPath = pathname.slice(matched.length) || '/';
-      return {
-        router: this.mounts.get(matched)!,
-        base: matched,
-        pathname,
-        restPath,
-        restUrl: restPath + search,
-        search,
-        reserved: reservedRest(restPath),
-      };
+      return dispatch(this.mounts.get(matched)!, restPath, restPath + url.search, reservedRest(restPath));
     }
 
     // `/-` 和 `/-/` 是实例列表页；其余未注册的 `/-/...` 仍是保留命名空间。
     if (pathname !== '/-/' && reservedRest(pathname)) {
-      return { router: this, base: '', pathname, restPath: pathname, restUrl: rawUrl, search, reserved: true };
+      return dispatch(this, pathname, rawUrl, true);
     }
 
-    return { router: this, base: '', pathname, restPath: pathname, restUrl: rawUrl, search, reserved: false };
+    return dispatch(this, pathname, rawUrl);
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse) {
@@ -375,15 +372,10 @@ export class HttpServer extends Router {
       }
 
       req.url = resolved.restUrl;
-      const { router, restPath } = resolved;
-      const query = new URL(resolved.restUrl, 'http://localhost').searchParams;
-      // 根路径的 shell 路由（attach/detach/identity）优先；宿主工作区作为 fallback。
-      const candidates = resolved.base === '' && this.rootWorkspace && this.rootWorkspace !== router
-        ? [router, this.rootWorkspace]
-        : [router];
+      const { routers, restPath, query } = resolved;
 
       if (req.method === 'GET' || req.method === 'HEAD') {
-        for (const candidate of candidates) {
+        for (const candidate of routers) {
           const streamHandler = candidate.streamHandler(restPath);
           if (streamHandler) {
             await streamHandler(req, res, query);
@@ -394,7 +386,7 @@ export class HttpServer extends Router {
 
       // SSE 路由：handler 直接拿 res 写流；错误也写在流里。
       if (req.method === 'GET') {
-        for (const candidate of candidates) {
+        for (const candidate of routers) {
           const sseHandler = candidate.sseHandler(restPath);
           if (sseHandler) {
             res.writeHead(200, {
@@ -418,7 +410,7 @@ export class HttpServer extends Router {
 
       let handler: Handler | undefined;
       let handlerRouter: Router | undefined;
-      for (const candidate of candidates) {
+      for (const candidate of routers) {
         handler = candidate.handler(req.method ?? '', restPath);
         if (handler) { handlerRouter = candidate; break; }
       }
@@ -437,15 +429,15 @@ export class HttpServer extends Router {
       const binary = req.method === 'POST' && handlerRouter!.isBinaryPost(restPath);
       const body = await readBody(req, binary);
       const result = await handler(req, body, query);
-      res.json(result ?? { ok: true });
+      sendJson(res, result ?? { ok: true });
     } catch (e: unknown) {
       // 已开始的下载失败或被取消时终止流，不能再追加 JSON 响应。
       if (res.destroyed) return;
       if (res.headersSent) { res.destroy(); return; }
       if (e instanceof HttpError) {
-        res.json({ error: e.message }, e.status);
+        sendJson(res, { error: e.message }, e.status);
       } else {
-        res.json({ error: 'internal error' }, 500);
+        sendJson(res, { error: 'internal error' }, 500);
       }
     }
   }
@@ -498,6 +490,15 @@ export class HttpServer extends Router {
     });
     res.end(headOnly ? undefined : content);
   }
+}
+
+function sendJson(res: ServerResponse, data: unknown, status = 200): void {
+  const body = JSON.stringify(data);
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(body),
+  });
+  res.end(body);
 }
 
 async function readBody(req: IncomingMessage, binary = false): Promise<unknown> {

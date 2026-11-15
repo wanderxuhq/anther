@@ -29,9 +29,5 @@ export function tabName(tab: TabItem): string {
 export function tabTitle(tab: TabItem): string {
   if (tab.kind === 'database') return `${fileTargetLabel(tab)}${tab.object ? ` › ${tabName(tab)}` : ''}`;
   if (tab.kind === 'file' || tab.kind === 'git-diff') return tab.path;
-  if (tab.kind === 'git-history') return t('git.history');
-  if (tab.kind === 'git-branch') return t('git.branch');
-  if (tab.kind === 'git-commit') return tab.commit;
-  if (tab.kind === 'feature') return tab.title;
-  return t('view.git');
+  return tabName(tab);
 }

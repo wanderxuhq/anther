@@ -1,14 +1,14 @@
 import { createStore, reconcile } from 'solid-js/store';
 import { api } from './api.ts';
 import { ArchiveClient } from './archive-client.ts';
-import { archiveKey, type ArchiveEntry } from './archive.ts';
+import { archiveKey, archiveRootOf, type ArchiveEntry } from './archive.ts';
 import { archiveLimits } from './archive-settings.ts';
 import { startDownload } from './download.ts';
 
 type Session = { entry?: string; entries?: ArchiveEntry[]; busy?: 'queued' | 'scanning' | 'extracting'; progress?: number; error?: string; passwordRequired?: boolean; passwordDepth?: number; limit?: 'depth' | 'budget' };
 export const [archiveSessions, setArchiveSession] = createStore<Record<string, Session>>({});
 export const archiveSession = (root: string, chain: string[] = []) => archiveSessions[archiveKey(root, chain)];
-let client: ArchiveClient | undefined, clientRoot = '', loadedKey = '', activeKey = '';
+let client: ArchiveClient | undefined, clientRoot = '', loadedKey = '';
 let queue = Promise.resolve(), heldBytes = 0;
 let idleTimer: ReturnType<typeof setTimeout> | undefined;
 const generations = new Map<string, number>(), passwords = new Map<string, string>();
@@ -20,17 +20,17 @@ function retain(blob: Blob): ArchiveBlob {
 }
 function releaseWorker() { client?.close(); client = undefined; clientRoot = ''; loadedKey = ''; }
 export function cancelArchive(root: string, forgetPasswords = false) {
-  for (const key of Object.keys(archiveSessions)) if (JSON.parse(key)[0] === root) {
+  for (const key of Object.keys(archiveSessions)) if (archiveRootOf(key) === root) {
     generations.set(key, (generations.get(key) ?? 0) + 1);
     setArchiveSession(key, { busy: undefined, progress: undefined, passwordRequired: false, error: undefined, limit: undefined });
   }
   if (clientRoot === root) releaseWorker();
-  if (forgetPasswords) for (const key of passwords.keys()) if (JSON.parse(key)[0] === root) passwords.delete(key);
+  if (forgetPasswords) for (const key of passwords.keys()) if (archiveRootOf(key) === root) passwords.delete(key);
 }
-export const archiveBusy = (root: string) => Object.entries(archiveSessions).some(([key, value]) => JSON.parse(key)[0] === root && !!value.busy);
+export const archiveBusy = (root: string) => Object.entries(archiveSessions).some(([key, value]) => archiveRootOf(key) === root && !!value.busy);
 export function closeArchives() {
   clearTimeout(idleTimer);
-  for (const root of new Set(Object.keys(archiveSessions).map((key) => JSON.parse(key)[0] as string))) cancelArchive(root, true);
+  for (const root of new Set(Object.keys(archiveSessions).map(archiveRootOf))) cancelArchive(root, true);
   releaseWorker();
 }
 function checkDepth(root: string, chain: string[]) {
@@ -39,7 +39,7 @@ function checkDepth(root: string, chain: string[]) {
   setArchiveSession(archiveKey(root, chain), { error: error.message, limit: error.limit, busy: undefined });
   throw error;
 }
-async function run<T>(root: string, chain: string[], stage: 'scanning' | 'extracting', action: (client: ArchiveClient) => Promise<T>, password?: string, entry?: string): Promise<T> {
+async function run<T>(root: string, chain: string[], stage: 'scanning' | 'extracting', action: (client: ArchiveClient, onProgress: (value: number) => void) => Promise<T>, password?: string, entry?: string): Promise<T> {
   checkDepth(root, chain);
   const key = archiveKey(root, chain), generation = generations.get(key) ?? 0;
   if (password !== undefined) {
@@ -53,17 +53,17 @@ async function run<T>(root: string, chain: string[], stage: 'scanning' | 'extrac
     clearTimeout(idleTimer);
     if (!client || clientRoot !== root) {
       releaseWorker(); clientRoot = root;
-      client = new ArchiveClient((progress) => setArchiveSession(activeKey, { progress }));
+      client = new ArchiveClient();
     }
-    activeKey = key;
+    const onProgress = (progress: number) => setArchiveSession(key, { progress });
     setArchiveSession(key, { entry, busy: loadedKey === key ? stage : 'scanning' });
     if (loadedKey !== key) {
       const reply = await client.request({ action: 'open', url: new URL(api.downloadUrl(root), location.href).href, path: root, chain,
-        passwords: Array.from({ length: chain.length + 1 }, (_, depth) => passwords.get(archiveKey(root, chain.slice(0, depth)))), limits: archiveLimits(), heldBytes });
+        passwords: Array.from({ length: chain.length + 1 }, (_, depth) => passwords.get(archiveKey(root, chain.slice(0, depth)))), limits: archiveLimits(), heldBytes }, onProgress);
       setArchiveSession(key, 'entries', reconcile(reply.entries ?? [], { key: 'path' })); loadedKey = key;
     }
     setArchiveSession(key, { busy: stage });
-    return action(client);
+    return action(client, onProgress);
   });
   queue = result.then(() => {}, () => {});
   try { return await result; }
@@ -87,10 +87,10 @@ export async function ensureArchive(root: string, password?: string, refresh = f
   await run(root, chain, 'scanning', async () => {}, password);
 }
 export async function extractArchive(root: string, name: string, password?: string, chain: string[] = []): Promise<ArchiveBlob> {
-  return run(root, chain, 'extracting', async (client) => {
+  return run(root, chain, 'extracting', async (client, onProgress) => {
     const entry = archiveSession(root, chain)?.entries?.find((entry) => entry.path === name && !entry.directory);
     if (!entry) throw new Error('File no longer exists in this archive');
-    const reply = await client.request({ action: 'extract', entry: entry.id, password: passwords.get(archiveKey(root, chain)), limits: archiveLimits(), heldBytes });
+    const reply = await client.request({ action: 'extract', entry: entry.id, password: passwords.get(archiveKey(root, chain)), limits: archiveLimits(), heldBytes }, onProgress);
     return retain(reply.blob!);
   }, password, name);
 }

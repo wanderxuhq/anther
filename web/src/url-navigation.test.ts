@@ -64,6 +64,7 @@ before(async () => {
         import { createSignal, Show } from 'solid-js';
         import { fileTargetKey } from '${path.join(import.meta.dirname, 'file-target.ts')}';
         import * as downloads from '${path.join(import.meta.dirname, 'download.ts')}';
+        import * as save from '${path.join(import.meta.dirname, 'save-retry.ts')}';
         import { registerReaderNavigation, cancelReaderNavigation } from '${path.join(import.meta.dirname, 'readers/navigation.ts')}';
         import { InstancesPage } from '${path.join(import.meta.dirname, 'views/instances.tsx')}';
         import { DocumentReader } from '${path.join(import.meta.dirname, 'components/document-reader.tsx')}';
@@ -81,7 +82,7 @@ before(async () => {
               <Show when={reader()}><div class="reader-feedback"><ArchiveFeedback path="bundle.zip" entry="a.db" priority={30} retry={() => retry('reader')}/></div></Show>
             </>, document.getElementById('root'));
             return { dispose, setReader };
-          }, stores, EditorView, downloads, fileTargetKey, registerReaderNavigation, cancelReaderNavigation, mount: () => render(() => <App />, document.getElementById('root')),
+          }, stores, EditorView, downloads, save, fileTargetKey, registerReaderNavigation, cancelReaderNavigation, mount: () => render(() => <App />, document.getElementById('root')),
           mountReader: (factory, host = document.getElementById('root')) => {
             const [url, setUrl] = createSignal('first-document');
             const dispose = render(() => <DocumentReader url={url()} path="document" createReader={factory}/>, host);
@@ -98,11 +99,23 @@ before(async () => {
 });
 
 const tick = (ms = 10) => new Promise<void>((r) => setTimeout(r, ms));
-async function until(check: () => boolean) {
-  for (let i = 0; i < 200; i++) { if (check()) return; await tick(); }
+/** Wait for pending requestAnimationFrame callbacks (jsdom: pretendToBeVisual). */
+const frame = (w: any) => new Promise<void>((resolve) => w.requestAnimationFrame(() => resolve()));
+async function until(check: () => boolean, nominalMs = 5000) {
+  const maxPolls = Math.max(1, Math.round(nominalMs / 10));
+  for (let poll = 0; poll < maxPolls; poll++) { if (check()) return; await tick(); }
   assert.ok(check(), 'state did not settle');
 }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+/** Shrink autosave debounce/retry windows; restored after the test. */
+function fastSave(w: any, t: { after(fn: () => void): void }): void {
+  w.harness.save.saveTiming.debounceMs = 10;
+  w.harness.save.saveTiming.retryMs = 10;
+  t.after(() => {
+    w.harness.save.saveTiming.debounceMs = 1000;
+    w.harness.save.saveTiming.retryMs = 1000;
+  });
+}
 type Hook = (url: URL, init: RequestInit) => Promise<Response | undefined> | Response | undefined;
 
 async function setup(t: TestContext, url: string, opts: { hook?: Hook; mount?: boolean; narrow?: boolean; start?: boolean; duringStart?: (stores: any, window: any) => Promise<void> } = {}) {
@@ -618,12 +631,12 @@ test('保存失败时不下载旧版本文件', async (t) => {
   const { w, s, editor } = await setup(t, '/a.txt?ro=0&lang=zh', { hook: (u, init) => {
     if (u.pathname === '/api/file' && init.method === 'PUT') return json({ error: 'cannot save' }, 500);
   } });
+  fastSave(w, t);
   await until(() => s.docLoadedPath() === 'a.txt');
   let downloads = 0;
   w.HTMLAnchorElement.prototype.click = () => { downloads++; };
   editor().dispatch({ changes: { from: 0, insert: 'modified' }, userEvent: 'input' });
   w.document.querySelector('.file-download').click();
-  await tick(2200); // 保存链有两次各 1 秒的重试间隔。
   await until(() => !!w.document.querySelector('.toast')?.textContent.includes('下载失败'));
   assert.equal(downloads, 0);
 });
@@ -889,8 +902,10 @@ test('通用阅读器双指缩放只预览画面，松手后提交一次，并�
   await until(() => content.style.transform.includes('scale(1.5)'));
   assert.equal(zooms.length, 0, 'moving fingers must not trigger document layout');
   assert.equal(viewport.style.overflow, 'hidden');
-  // Pausing with fingers down must not trigger expensive redraws either.
-  await tick(180);
+  // Pausing with fingers down must not trigger expensive redraws either:
+  // let any queued preview frames run, then assert no document zoom happened.
+  await frame(w);
+  await frame(w);
   assert.equal(zooms.length, 0);
   touch('touchend', [[1, 80, 220]]);
   assert.equal(zooms.length, 1);
@@ -910,7 +925,7 @@ test('通用阅读器双指缩放只预览画面，松手后提交一次，并�
   touch('touchstart', [[1, 100, 200], [2, 300, 200]]);
   touch('touchmove', [[1, 50, 200], [2, 350, 200]]);
   touch('touchcancel', []);
-  await tick(30);
+  await frame(w);
   assert.equal(zooms.length, 2);
   assert.equal(content.style.transform, '');
   assert.equal(content.style.transformOrigin, '');
@@ -918,13 +933,13 @@ test('通用阅读器双指缩放只预览画面，松手后提交一次，并�
   touch('touchstart', [[1, 100, 200], [2, 300, 200]]);
   touch('touchmove', [[1, 50, 200], [2, 350, 200]]);
   reader.setUrl('second-document');
-  await tick(30);
+  await frame(w);
   assert.equal(zooms.length, 2);
   assert.equal(content.style.willChange, '');
   reader.dispose();
   touch('touchstart', [[1, 100, 200], [2, 300, 200]]);
   touch('touchmove', [[1, 50, 200], [2, 350, 200]]);
-  await tick(30);
+  await frame(w);
   assert.equal(zooms.length, 2);
 });
 
@@ -1248,8 +1263,11 @@ test('目录下载展示压缩与校验进度，状态请求超时后解除等�
       return json({ ...job, phase: 'verifying', progress: { ...job.progress, checkedEntries: 3 } });
     }
   } });
+  // Keep the real polling/timeout semantics but shrink their wall-clock cadence.
+  w.harness.downloads.downloadTiming.pollMs = 10;
+  test.after(() => { w.harness.downloads.downloadTiming.pollMs = 1000; });
   const originalTimeout = w.setTimeout.bind(w);
-  w.setTimeout = ((handler: TimerHandler, delay?: number, ...args: any[]) => originalTimeout(handler, delay === 30_000 ? 100 : delay, ...args)) as any;
+  w.setTimeout = ((handler: TimerHandler, delay?: number, ...args: any[]) => originalTimeout(handler, delay === 30_000 ? 300 : delay, ...args)) as any;
   const downloads: string[] = [];
   w.HTMLAnchorElement.prototype.click = function () { downloads.push(this.href); };
   const result = w.harness.downloads.startDownload('example', true).then(() => null, (error: Error) => error);
@@ -1528,6 +1546,7 @@ test('重命名等待防抖和进行中的保存；等待期间锁定编辑，�
       return json({ ok: true });
     }
   } });
+  fastSave(h.w, t);
   await until(() => h.s.docLoadedPath() === 'folder/a.txt');
   await h.s.openTab('folder/b.txt'); await h.s.openTab('folder/a.txt');
   await until(() => h.s.docLoadedPath() === 'folder/a.txt');
@@ -1555,14 +1574,16 @@ test('删除等待正在保存的内容完成，不在删除后重新创建旧�
     if (url.pathname === '/api/file' && init.method === 'PUT') await gate;
     if (url.pathname === '/api/delete') { deleted = true; h.docs.delete('a.txt'); return json({ ok: true }); }
   } });
+  fastSave(h.w, t);
   await until(() => h.s.docLoadedPath() === 'a.txt');
   h.editor().dispatch({ changes: { from: 0, insert: 'changed ' }, userEvent: 'input' });
   await until(() => h.calls.some(c => c.url.pathname === '/api/file' && c.init.method === 'PUT'));
   fileMenu(h.w, 'a.txt', '删除');
   [...h.w.document.querySelectorAll('.menu-item')].find((el: any) => el.textContent.includes('确认删除'))!.click();
   await tick(); assert.equal(deleted, false); assert.equal(h.editor().state.readOnly, true);
-  release(); await until(() => deleted && h.s.currentFile() === null);
-  await tick(1100); assert.equal(h.docs.has('a.txt'), false);
+  release();
+  await until(() => deleted && h.s.currentFile() === null);
+  await tick(100); assert.equal(h.docs.has('a.txt'), false);
 });
 
 test('侧边栏底部提供实例列表链接 /-', async (t) => {
@@ -1614,10 +1635,12 @@ test('保存失败阻止重命名，并恢复可编辑状态', async (t) => {
     if (url.pathname === '/api/list') return json({ entries: [{ name: 'a.txt', type: 'file' }] });
     if (url.pathname === '/api/file' && init.method === 'PUT') return json({ error: 'disk full' }, 500);
   } });
+  fastSave(h.w, t);
   await until(() => h.s.docLoadedPath() === 'a.txt');
   h.editor().dispatch({ changes: { from: 0, insert: 'changed ' }, userEvent: 'input' });
   fileMenu(h.w, 'a.txt', '重命名'); submitRename(h.w, 'b.txt');
-  await tick(2200);
+  await until(() => h.w.document.body.textContent!.includes('请先成功保存修改后再重命名或删除'), 6000);
+  await until(() => h.editor().state.readOnly === false, 6000);
   assert.equal(h.calls.some(c => c.url.pathname === '/api/rename'), false);
   assert.equal(h.s.currentFile(), 'a.txt'); assert.equal(h.editor().state.readOnly, false);
   assert.match(h.w.document.body.textContent, /请先成功保存修改后再重命名或删除/);

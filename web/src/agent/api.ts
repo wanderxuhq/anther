@@ -1,5 +1,7 @@
 // web/src/agent/api.ts
 // Browser client for the built-in ACP agent bridge.
+import { readJsonResponse } from '../http-json.ts';
+
 export type ConfigOptionChoice = {
   value: string;
   name: string;
@@ -273,39 +275,23 @@ export function createApi(base: string) {
         ? { 'Content-Type': 'application/json', ...(init.headers ?? {}) }
         : init?.headers,
     });
-    const text = await res.text();
-    let data: any;
-    if (text) {
-      try { data = JSON.parse(text); } catch { data = text; }
-    }
-    if (!res.ok) {
-      const message = data && typeof data === 'object' && typeof data.error === 'string'
-        ? data.error
-        : res.statusText;
-      throw new Error(message || `HTTP ${res.status}`);
-    }
-    return data as T;
+    return await readJsonResponse(res, (_status, message) => new Error(message)) as T;
   }
 
-  const post = <T>(path: string, body?: unknown) => request<T>(path, {
-    method: 'POST',
+  const jsonRequest = <T>(method: string, path: string, body?: unknown) => request<T>(path, {
+    method,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  const post = <T>(path: string, body?: unknown) => jsonRequest<T>('POST', path, body);
 
   return {
     status: () => request<Status>('/status'),
     discovery: () => request<AgentDiscovery>('/discovery'),
     selectAgent: (agentID: string) => post<AgentDiscovery>('/select-agent', { agentID }),
     mcp: () => request<{ data: McpServer[] }>('/mcp'),
-    setMcp: (servers: McpServer[]) => request<{ data: McpServer[] }>('/mcp', {
-      method: 'PUT',
-      body: JSON.stringify({ servers }),
-    }),
+    setMcp: (servers: McpServer[]) => jsonRequest<{ data: McpServer[] }>('PUT', '/mcp', { servers }),
     systemPrompt: () => request<{ data: string | null }>('/system-prompt'),
-    setSystemPrompt: (text: string | null) => request<{ data: string | null }>('/system-prompt', {
-      method: 'PUT',
-      body: JSON.stringify({ text }),
-    }),
+    setSystemPrompt: (text: string | null) => jsonRequest<{ data: string | null }>('PUT', '/system-prompt', { text }),
     authenticate: (methodID: string) => post<Status>('/auth', { methodID }),
     logout: () => post<Status>('/logout'),
     models: () => request<ModelList>('/models'),

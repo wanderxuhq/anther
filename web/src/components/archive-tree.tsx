@@ -6,6 +6,7 @@ import { archiveLimits } from '../archive-settings.ts';
 import { t } from '../i18n.ts';
 import { hasDocumentOutline } from '../readers/document-file.ts';
 import { isDatabaseFile } from '../database/source.ts';
+import { sameFileTarget } from '../file-target.ts';
 const DatabaseTree = lazy(() => import('./database-tree.tsx'));
 const DocumentTree = lazy(() => import('./document-tree.tsx'));
 import { ArchiveFeedback } from './archive-feedback.tsx';
@@ -20,7 +21,10 @@ function Branch(props: { archive: string; directory: string; chain: string[] }) 
 }
 
 function Entry(props: { archive: string; entry: ArchiveEntry; chain: string[] }) {
-  const database = () => !props.entry.directory && !props.entry.link && (isDatabaseFile(props.entry.path) || tabs().some((tab) => tab.kind === 'database' && tab.path === props.archive && tab.archive?.entry === props.entry.path && JSON.stringify(tab.archive.chain) === JSON.stringify(props.chain)));
+  const database = () => !props.entry.directory && !props.entry.link && (isDatabaseFile(props.entry.path) || tabs().some((tab) => tab.kind === 'database' && sameFileTarget(tab, {
+    path: props.archive,
+    archive: { entry: props.entry.path, chain: props.chain },
+  })));
   const document = () => !props.entry.directory && !props.entry.link && hasDocumentOutline(props.entry.path);
   const nested = () => !props.entry.directory && !props.entry.link && isArchiveFile(props.entry.path);
   const atChain = () => props.chain.every((name, index) => archiveChain()[index] === name);

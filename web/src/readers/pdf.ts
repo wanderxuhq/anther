@@ -4,7 +4,8 @@ import type { ReaderFactory } from './types.ts';
 import { acquirePdfSource, pdfAssets as assets } from './pdf-source.ts';
 import 'pdfjs-dist/web/pdf_viewer.css';
 import './pdf.css';
-import type { ReadingLocation } from './location.ts';
+import { POSITION_PUBLISH_DEBOUNCE_MS, type ReadingLocation } from './location.ts';
+import { createDebounce } from '../debounce.ts';
 
 /** PDF.js owns continuous page layout, text/links, render scheduling and page eviction. */
 export const createPdfReader: ReaderFactory = ({ url, viewport, content, onState, initialLocation, onLocation }) => {
@@ -24,14 +25,15 @@ export const createPdfReader: ReaderFactory = ({ url, viewport, content, onState
   links.setViewer(viewer);
   onState({ canZoom: true, canFitWidth: true, outlineStatus: 'loading' });
   const update: typeof onState = (state) => { if (!disposed) onState(state); };
-  let restoring = true, positionTimer: ReturnType<typeof setTimeout> | undefined;
+  let restoring = true;
+  const positionDebounce = createDebounce(POSITION_PUBLISH_DEBOUNCE_MS);
   events.on('updateviewarea', ({ location }: { location: { pageNumber: number; left: number; top: number } }) => {
-    clearTimeout(positionTimer);
+    positionDebounce.cancel();
     if (restoring || disposed) return;
-    positionTimer = setTimeout(() => {
+    positionDebounce.schedule(() => {
       if (!disposed && !restoring) onLocation?.({ kind: 'pdf', page: location.pageNumber, x: Math.round(location.left * 100) / 100, y: Math.round(location.top * 100) / 100,
         ...(viewer.currentScaleValue === 'page-width' ? {} : { zoom: viewer.currentScale }) });
-    }, 180);
+    });
   });
   events.on('pagesinit', () => { viewer.currentScaleValue = 'page-width'; resolveReady(); });
   events.on('pagechanging', ({ pageNumber }: { pageNumber: number }) => update({ position: pageNumber }));
@@ -57,7 +59,7 @@ export const createPdfReader: ReaderFactory = ({ url, viewport, content, onState
 
   const restoreLocation = async (location: ReadingLocation | null) => {
     const request = ++navigation;
-    restoring = true; clearTimeout(positionTimer);
+    restoring = true; positionDebounce.cancel();
     await ready;
     if (disposed || request !== navigation) return;
     const target = location?.kind === 'pdf' ? location : null;
@@ -75,7 +77,7 @@ export const createPdfReader: ReaderFactory = ({ url, viewport, content, onState
     },
     async goToOutline(id) {
       const request = ++navigation;
-      restoring = true; clearTimeout(positionTimer);
+      restoring = true; positionDebounce.cancel();
       try {
         const document = await source.document;
         await source.outlineReady;
@@ -119,7 +121,7 @@ export const createPdfReader: ReaderFactory = ({ url, viewport, content, onState
     unlock(password) { update({ password: null, busy: true }); source.unlock(password); },
     destroy() {
       if (disposed) return;
-      disposed = true; clearTimeout(positionTimer); resolveReady(); lifetime.abort(); observer.disconnect(); cancelAnimationFrame(resizeFrame);
+      disposed = true; positionDebounce.cancel(); resolveReady(); lifetime.abort(); observer.disconnect(); cancelAnimationFrame(resizeFrame);
       // PDF.js accepts null to release pages/listeners; its declaration omits this cleanup case.
       // @ts-expect-error Supported by PDFViewer.setDocument at runtime.
       viewer.setDocument(null);

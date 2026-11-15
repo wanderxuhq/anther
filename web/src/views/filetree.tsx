@@ -14,7 +14,8 @@ import { createEffect, createSignal, ErrorBoundary, For, lazy, Show, Suspense, o
 import { createStore } from 'solid-js/store';
 import { api, type DirEntry } from '../api.ts';
 import { archiveChain, archiveEntry, activeArchiveRoot, currentFile, activeTab, openDatabaseTab, relocateFileTabs, openTab, tabs, setActivePanel, setDrawerOpen, pushState } from '../stores.ts';
-import { parentOf } from '../paths.ts';
+import { tabFilePath } from '../tab-model.ts';
+import { parentOf, pathSegments } from '../paths.ts';
 import { NameDialog, type DialogState } from '../components/name-dialog.tsx';
 import { t } from '../i18n.ts';
 import { preparingDownload, downloadProgressText, startDownload } from '../download.ts';
@@ -24,13 +25,17 @@ import { entriesFromDataTransfer, entriesFromFiles, uploadEntries, type UploadEn
 const DocumentTree = lazy(() => import('../components/document-tree.tsx'));
 
 import { isDatabaseFile } from '../database/source.ts';
+import { directoryFailedPatch, directoryLoadedPatch, type DirectoryLoadMode, type DirectoryState } from './filetree-directory.ts';
+import { treeWriteSuccess, uploadWriteResult, type TreeWriteResult } from './filetree-write.ts';
+import { createDeleteConfirm } from './filetree-delete.ts';
+import { browserScheduler, createTransientValue } from '../transient-state.ts';
 import { DatabaseIcon } from '../components/database-icon.tsx';
 import { Icon } from '../components/icons.tsx';
 const DatabaseTree = lazy(() => import('../components/database-tree.tsx'));
 
 const ArchiveTree = lazy(() => import('../components/archive-tree.tsx'));
 
-type DirState = { expanded: boolean; loaded?: DirEntry[]; loading?: boolean };
+type DirState = DirectoryState<DirEntry>;
 
 // path → 目录状态。渲染时 nodes[path] 是响应式读取，setNodes 精确更新。
 const [nodes, setNodes] = createStore<{ [path: string]: DirState }>({});
@@ -41,18 +46,69 @@ const uploading = () => upload() !== null;
 const [dropTarget, setDropTarget] = createSignal<string | null>(null);
 /** 点击「定位当前文件」后短暂高亮的路径（Scroll from Source）。 */
 const [revealPath, setRevealPath] = createSignal<string | null>(null);
-let revealTimer: ReturnType<typeof setTimeout> | undefined;
+const REVEAL_HIGHLIGHT_MS = 1500;
+const revealHighlight = createTransientValue<string>((path) => setRevealPath(path), browserScheduler, REVEAL_HIGHLIGHT_MS);
 
 // ---- 文件管理：菜单 + 命名对话框 + 两击确认删除 ----
 type MenuTarget = { path: string; kind: 'dir' | 'file' | 'root' };
 const [menu, setMenu] = createSignal<MenuTarget | null>(null);
 const [dialog, setDialog] = createSignal<DialogState | null>(null);
 const [confirmDel, setConfirmDel] = createSignal<string | null>(null); // 两击确认删除
-let confirmTimer: ReturnType<typeof setTimeout> | undefined;
+const confirmDelete = createDeleteConfirm((path) => setConfirmDel(path), browserScheduler);
 
 /** 根目录子项不带 './' 前缀：与 URL/currentFile 中的相对路径形式一致，保证高亮可匹配 */
 function childPath(parent: string, name: string): string {
   return parent === '.' ? name : `${parent}/${name}`;
+}
+
+const directoryLoads = new Map<string, Promise<DirEntry[]>>();
+
+/** Load once (or refresh after a mutation), sharing in-flight requests and state updates. */
+async function loadDirectory(path: string, options: { refresh?: boolean; surfaceError?: boolean } = {}): Promise<DirEntry[]> {
+  const mode: DirectoryLoadMode = options.refresh ? 'refresh' : 'load';
+  if (mode === 'load') {
+    const pending = directoryLoads.get(path);
+    if (pending) return pending;
+    const cached = nodes[path]?.loaded;
+    if (cached) return cached;
+  } else {
+    // A mutation refresh must see the post-mutation result; let any older
+    // in-flight list finish first, then replace it with a fresh request.
+    const pending = directoryLoads.get(path);
+    if (pending) await pending.catch(() => {});
+  }
+  if (mode === 'load') setNodes(path, { loading: true });
+  const task = api.list(path).then(({ entries }) => {
+    setNodes(path, directoryLoadedPatch(mode, entries));
+    setError(null);
+    return entries;
+  }, (e) => {
+    const patch = directoryFailedPatch<DirEntry>(mode);
+    if (Object.keys(patch).length > 0) setNodes(path, patch);
+    if (options.surfaceError !== false) setError((e as Error).message);
+    throw e;
+  }).finally(() => {
+    if (directoryLoads.get(path) === task) directoryLoads.delete(path);
+  });
+  directoryLoads.set(path, task);
+  return task;
+}
+
+async function expandDirectory(path: string): Promise<void> {
+  if (nodes[path]?.expanded) return;
+  if (nodes[path]?.loaded) { setNodes(path, 'expanded', true); return; }
+  await loadDirectory(path);
+}
+
+/** 逐级加载并展开目录；已加载的目录只展开、不重拉。 */
+async function expandSegments(parts: string[]): Promise<void> {
+  await ensureRoot();
+  let parent = '.';
+  for (const part of parts) {
+    const child = childPath(parent, part);
+    await expandDirectory(child);
+    parent = child;
+  }
 }
 
 /** 终端里点开目录：切到文件面板并逐级展开到该目录。 */
@@ -60,30 +116,16 @@ export async function revealDirectory(path: string): Promise<void> {
   setActivePanel('files');
   setDrawerOpen(true);
   pushState();
-  await ensureRoot();
-  let parent = '.';
-  for (const part of path.split('/').filter(Boolean)) {
-    const child = childPath(parent, part);
-    if (!nodes[child]?.loaded) {
-      const { entries } = await api.list(child);
-      setNodes(child, { expanded: true, loaded: entries });
-    } else {
-      setNodes(child, 'expanded', true);
-    }
-    parent = child;
-  }
+  await expandSegments(pathSegments(path));
 }
 
 /** 当前标签页对应的磁盘文件（文件 / 数据库 / 差异标签）；终端等无路径标签返回 null。 */
 function activeTabPath(): string | null {
-  const tab = activeTab();
-  return tab && 'path' in tab ? tab.path : null;
+  return tabFilePath(activeTab());
 }
 
 function flashReveal(path: string): void {
-  clearTimeout(revealTimer);
-  setRevealPath(path);
-  revealTimer = setTimeout(() => setRevealPath(null), 1500);
+  revealHighlight.show(path);
 }
 
 /** 文件树定位（参考 JetBrains Scroll from Source）：展开祖先目录并滚动高亮当前文件。 */
@@ -93,22 +135,10 @@ async function revealCurrentFile(): Promise<void> {
   setActivePanel('files');
   setDrawerOpen(true);
   pushState();
-  setMenu(null);
+  closeMenu();
   try {
-    await ensureRoot();
-    const parts = path.split('/');
-    parts.pop(); // 只展开祖先目录；文件本身由 TreeNode 渲染
-    let parent = '.';
-    for (const part of parts) {
-      const child = childPath(parent, part);
-      if (!nodes[child]?.loaded) {
-        const { entries } = await api.list(child);
-        setNodes(child, { expanded: true, loaded: entries });
-      } else {
-        setNodes(child, 'expanded', true);
-      }
-      parent = child;
-    }
+    // 只展开祖先目录；文件本身由 TreeNode 渲染。
+    await expandSegments(pathSegments(path, false));
     setError(null);
     flashReveal(path);
   } catch (e) {
@@ -117,28 +147,30 @@ async function revealCurrentFile(): Promise<void> {
 }
 
 async function ensureRoot(): Promise<void> {
-  if (nodes['.']?.loaded || nodes['.']?.loading) return;
-  setNodes('.', { loading: true });
   try {
-    const { entries } = await api.list('.');
-    setNodes('.', { expanded: true, loaded: entries, loading: false });
-    setError(null);
-  } catch (e) {
-    setNodes('.', { loading: false });
-    setError((e as Error).message);
+    await loadDirectory('.');
+  } catch {
+    // loadDirectory already publishes the error.
   }
 }
 
 // 只读仅控制编辑器内容：文件树写操作不校验 roMode，随时可用
-/** 操作完成后刷新父目录列表（保持 loaded 数组与磁盘一致） */
-async function refreshParent(parent: string) {
-  const { entries } = await api.list(parent);
-  setNodes(parent, { loaded: entries });
+/** Refresh the parent without publishing to the banner; runTreeWrite owns that decision. */
+async function refreshParent(parent: string): Promise<string | null> {
+  try {
+    await loadDirectory(parent, { refresh: true, surfaceError: false });
+    return null;
+  } catch (e) {
+    return (e as Error).message;
+  }
+}
+
+function closeMenu(): void {
+  setMenu(null);
 }
 
 function showMenu(target: MenuTarget) {
-  clearTimeout(confirmTimer);
-  setConfirmDel(null);
+  confirmDelete.reset();
   setMenu(target);
 }
 
@@ -147,12 +179,12 @@ function onDocumentPointerDown(e: PointerEvent): void {
   if (!menu()) return;
   const target = e.target;
   if (target instanceof Element && (target.closest('.row-menu') || target.closest('.menu-trigger'))) return;
-  setMenu(null);
+  closeMenu();
 }
 
 // 新建：目录行 → 建在其内；文件行 → 建在其父目录；根 → 根下
 function beginCreate(kind: 'file' | 'dir', target: MenuTarget) {
-  setMenu(null);
+  closeMenu();
   const base = target.kind === 'dir' ? target.path : parentOf(target.path);
   setDialog({
     title: kind === 'file' ? t('filetree.newFile') : t('filetree.newDir'),
@@ -162,10 +194,44 @@ function beginCreate(kind: 'file' | 'dir', target: MenuTarget) {
   });
 }
 
-async function doCreate(kind: 'file' | 'dir', base: string, name: string) {
-  setDialog(null); setMenu(null);
-  const p = childPath(base, name); // 根级不带头 './'（childPath 约定），保证与 URL/currentFile 匹配
+type TreeWriteOptions<T> = {
+  /** Serialize through withFileMutation and freeze the editor while saves drain. */
+  guard?: boolean;
+  refreshOnError?: boolean;
+  after?: (result: T) => void | Promise<void>;
+};
+
+/** One write pipeline: optional mutation guard, parent refresh, then the typed result's error. */
+async function runTreeWrite<T extends TreeWriteResult>(
+  path: string,
+  parent: string,
+  action: () => Promise<T>,
+  options: TreeWriteOptions<T> = {},
+): Promise<T | undefined> {
   try {
+    let result: T;
+    if (options.guard === false) result = await action();
+    else {
+      let value!: T;
+      await withFileMutation(path, async () => { value = await action(); });
+      result = value;
+    }
+    const refreshError = await refreshParent(parent);
+    await options.after?.(result);
+    setError(result.error ?? refreshError ?? null);
+    return result;
+  } catch (e) {
+    setError((e as Error).message);
+    // Keep the primary error; refresh is best effort on failure.
+    if (options.refreshOnError) await refreshParent(parent);
+    return undefined;
+  }
+}
+
+async function doCreate(kind: 'file' | 'dir', base: string, name: string) {
+  setDialog(null); closeMenu();
+  const p = childPath(base, name); // 根级不带头 './'（childPath 约定），保证与 URL/currentFile 匹配
+  await runTreeWrite(p, base, async () => {
     if (kind === 'file') {
       // 独占创建（POST /api/create，服务端 O_EXCL）：重名 → 409 already exists（服务器文案），
       // 不清空既有文件；不设客户端守卫，服务器是重名裁决的唯一事实源
@@ -173,16 +239,15 @@ async function doCreate(kind: 'file' | 'dir', base: string, name: string) {
     } else {
       await api.mkDir(p); // 服务端 fs.mkdir；重名 → 409 already exists
     }
-    await refreshParent(base);
-    if (kind === 'file') {
-      await openTab(p); // 新建文件直接打开编辑（现有 openTab 含 front + 快照 + pushState）
-    }
-    setError(null);
-  } catch (e) { setError((e as Error).message); }
+    return treeWriteSuccess();
+  }, {
+    guard: false,
+    after: kind === 'file' ? async () => { await openTab(p); } : undefined,
+  });
 }
 
 function beginRename(target: MenuTarget) {
-  setMenu(null);
+  closeMenu();
   setDialog({
     title: t('filetree.rename'),
     initial: target.path.split('/').pop() ?? '',
@@ -201,19 +266,12 @@ async function startUpload(base: string, entries: UploadEntry[]): Promise<void> 
   setError(null);
   setUpload({ done: 0, total: entries.length });
   try {
-    const result = await uploadEntries(base, entries, (done, total) => setUpload({ done, total }));
-    await refreshParent(base);
-    setNodes(base, 'expanded', true);
-    if (result.failed.length > 0) {
-      const first = result.failed[0];
-      const name = first.path.split('/').pop() ?? first.path;
-      setError(result.uploaded === 0 && result.failed.length === 1 && first.status === 409
-        ? t('filetree.uploadExists', { name })
-        : t('filetree.uploadFailed', { uploaded: result.uploaded, failed: result.failed.length, name }));
-    }
-  } catch (e) {
-    setError((e as Error).message);
-    await refreshParent(base).catch(() => { /* 目标目录可能已不存在 */ });
+    await runTreeWrite(base, base, async () =>
+    uploadWriteResult(await uploadEntries(base, entries, (done, total) => setUpload({ done, total }))), {
+      guard: false,
+      refreshOnError: true,
+      after: () => setNodes(base, 'expanded', true),
+    });
   } finally {
     setUpload(null);
   }
@@ -233,12 +291,12 @@ function UploadItem(props: { target: MenuTarget }) {
   let folderInput!: HTMLInputElement;
   const base = () => props.target.kind === 'dir' ? props.target.path : parentOf(props.target.path);
   const pick = (input: HTMLInputElement) => {
-    // 先算目标目录：setMenu(null) 后 props.target 的 getter 重回 menu()，会读到 null。
+    // 先算目标目录：closeMenu() 后 props.target 的 getter 重回 menu()，会读到 null。
     const target = base();
     // 先快照 FileList：部分浏览器在 value='' 后会把 input.files 清空。
     const entries = input.files ? entriesFromFiles(input.files) : [];
     input.value = ''; // 允许连续选择同一批文件
-    setMenu(null);
+    closeMenu();
     if (entries.length > 0) void startUpload(target, entries);
   };
   return (
@@ -260,41 +318,27 @@ function UploadItem(props: { target: MenuTarget }) {
 }
 
 async function doRename(target: MenuTarget, name: string) {
-  setDialog(null); setMenu(null);
+  setDialog(null); closeMenu();
   // 子路径统一 childPath(parentOf(target.path), name)：根级 'a.ts' → childPath('.', 'b.ts') = 'b.ts'
   const to = childPath(parentOf(target.path), name);
   if (to === target.path) return; // 同名重命名 = 取消，静默关闭
-  try {
-    await withFileMutation(target.path, async () => {
-      await api.rename(target.path, to);
-      await relocateFileTabs(target.path, to);
-    });
-    await refreshParent(parentOf(target.path));
-    setError(null);
-  } catch (e) { setError((e as Error).message); }
+  await runTreeWrite(target.path, parentOf(target.path), async () => {
+    await api.rename(target.path, to);
+    await relocateFileTabs(target.path, to);
+    return treeWriteSuccess();
+  });
 }
 
 function onDeleteTap(target: MenuTarget) {
-  if (confirmDel() !== target.path) {
-    setConfirmDel(target.path); // 第一击：按钮变「确认删除？」（红），3s 内第二击生效
-    clearTimeout(confirmTimer);
-    confirmTimer = setTimeout(() => setConfirmDel(null), 3000);
-    return;
-  }
-  setConfirmDel(null); setMenu(null);
-  void (async () => {
-    try {
-      await withFileMutation(target.path, async () => {
-        await api.del(target.path);
-        await relocateFileTabs(target.path);
-      });
-      await refreshParent(parentOf(target.path));
-      setError(null);
-    } catch (e) { setError((e as Error).message); }
-  })();
+  // 第一击：按钮变「确认删除？」（红），3s 内第二击生效。
+  if (confirmDelete.tap(target.path) === 'armed') return;
+  closeMenu();
+  void runTreeWrite(target.path, parentOf(target.path), async () => {
+    await api.del(target.path);
+    await relocateFileTabs(target.path);
+    return treeWriteSuccess();
+  });
 }
-
-onCleanup(() => clearTimeout(confirmTimer));
 
 function TreeNode(props: { path: string; entry: DirEntry }) {
   // props 对当前实例固定不变；所有可变状态都从 store 响应式读取
@@ -311,36 +355,23 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
   const isCurrent = () => currentFile() === props.path && (!archive || (!archiveEntry() && archiveChain().length === 0));
   const expanded = () => state()?.expanded === true;
   const loaded = () => state()?.loaded;
-  const loading = () => state()?.loading === true;
   let rowEl: HTMLDivElement | undefined;
   // 定位后滚动到当前文件；只由匹配的 TreeNode effect 执行。
   createEffect(() => {
     if (revealPath() === props.path && rowEl) rowEl.scrollIntoView({ block: 'nearest' });
   });
 
-  const onToggle = async () => {
+  const onToggle = () => {
     if (state()?.expanded) {
       setNodes(props.path, 'expanded', false); // 收起（不丢弃已加载子列表，再展开时零请求）
       return;
     }
-    if (state()?.loaded) {
-      setNodes(props.path, 'expanded', true);
-      return;
-    }
     if (state()?.loading) return; // 防连点并发加载
-    setNodes(props.path, { loading: true }); // 对象式 set 自动创建缺失 key；嵌套路径 set 对未点击过的目录会抛 TypeError
-    try {
-      const { entries } = await api.list(props.path);
-      setNodes(props.path, { expanded: true, loaded: entries, loading: false });
-      setError(null);
-    } catch (e) {
-      setNodes(props.path, { loading: false });
-      setError((e as Error).message);
-    }
+    void expandDirectory(props.path).catch(() => { /* loadDirectory publishes the error */ });
   };
 
   const onRowClick = () => {
-    setMenu(null); // 点击行任意位置关闭操作菜单（点 ⋯ 按钮会 stopPropagation，不走到这里）
+    closeMenu(); // 点击行任意位置关闭操作菜单（点 ⋯ 按钮会 stopPropagation，不走到这里）
     if (isDir) void onToggle();
     // 文件与 link 条目同待遇：点击走 openTab（服务器对损坏链接会 400）
     else if (database()) { setDatabaseExpanded(true); openDatabaseTab(props.path); }
@@ -394,7 +425,7 @@ function TreeNode(props: { path: string; entry: DirEntry }) {
               <UploadItem target={menu()!} />
               <button class="menu-item" onClick={() => beginCreate('dir', menu()!)}>{t('filetree.newDir')}</button>
               <button class="menu-item" disabled={preparingDownload()} onClick={() => {
-                setMenu(null);
+                closeMenu();
                 setError(null);
                 void startDownload(props.path, props.entry.type !== 'file').catch((e) => setError(t('download.failed', { msg: (e as Error).message })));
               }}>{t('filetree.download')}</button>
@@ -463,7 +494,8 @@ export function FileTreeView() {
   void ensureRoot();
   document.addEventListener('pointerdown', onDocumentPointerDown, true);
   onCleanup(() => document.removeEventListener('pointerdown', onDocumentPointerDown, true));
-  onCleanup(() => clearTimeout(revealTimer));
+  onCleanup(() => revealHighlight.clear());
+  onCleanup(() => confirmDelete.reset());
 
   return (
     <div
@@ -528,7 +560,7 @@ export function FileTreeView() {
         </For>
       </Show>
       <Show when={dialog()}>
-        {(d) => <NameDialog state={d()} onClose={() => { setDialog(null); setMenu(null); }} />}
+        {(d) => <NameDialog state={d()} onClose={() => { setDialog(null); closeMenu(); }} />}
       </Show>
     </div>
   );

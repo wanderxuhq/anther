@@ -40,7 +40,7 @@ export class LspManager {
   private openCount = new Map<string, number>();          // engineId → 全局打开 uri 数
   private lastDiagnostics = new Map<string, Diagnostic[]>();
   private idleDisposeMs: number;
-  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(opts: { workspaceRoot: string; engines?: EngineSpec[]; idleDisposeMs?: number }) {
     this.workspaceRoot = opts.workspaceRoot;
@@ -52,17 +52,10 @@ export class LspManager {
     const spec = this.engines.get(engineId);
     if (!spec) throw new Error(`no language server for engine: ${engineId}`);
     const existing = this.sessions.get(engineId);
-    if (existing) {
-      if (existing.alive) return existing;
-      // 已退出：<=MAX_RESTARTS 次则重建；超限返回死会话（调用方 open/change 会抛 unavailable）
-      if ((this.restartCount.get(engineId) ?? 0) <= MAX_RESTARTS) {
-        const next = this.spawn(spec);
-        this.sessions.set(engineId, next);
-        return next;
-      }
-      return existing;
-    }
-    this.restartCount.set(engineId, 0);
+    if (existing?.alive) return existing;
+    // 已退出：<=MAX_RESTARTS 次则重建；超限返回死会话（调用方 open/change 会抛 unavailable）。
+    if (existing && (this.restartCount.get(engineId) ?? 0) > MAX_RESTARTS) return existing;
+    if (!existing) this.restartCount.set(engineId, 0);
     const next = this.spawn(spec);
     this.sessions.set(engineId, next);
     return next;
@@ -90,35 +83,35 @@ export class LspManager {
     return s;
   }
 
-  markOpen(engineId: string, uri: string): void {
+  markOpen(engineId: string): void {
     this.openCount.set(engineId, (this.openCount.get(engineId) ?? 0) + 1);
-    this.clearIdleTimer();
+    this.clearIdleTimer(engineId);
   }
 
-  markClosed(engineId: string, uri: string): void {
-    const n = (this.openCount.get(engineId) ?? 0) - 1;
-    this.openCount.set(engineId, Math.max(0, n));
-    if (n <= 0 && this.idleDisposeMs > 0) {
-      this.clearIdleTimer();
-      this.idleTimer = setTimeout(() => {
-        if ((this.openCount.get(engineId) ?? 0) === 0) void this.disposeEngine(engineId);
-      }, this.idleDisposeMs);
-    }
+  markClosed(engineId: string): void {
+    // 按 engine 分别计时：一个引擎归零不能取消另一个引擎的回收。
+    const n = Math.max(0, (this.openCount.get(engineId) ?? 0) - 1);
+    this.openCount.set(engineId, n);
+    if (n > 0 || this.idleDisposeMs <= 0) return;
+    this.clearIdleTimer(engineId);
+    this.idleTimers.set(engineId, setTimeout(() => {
+      this.idleTimers.delete(engineId);
+      if ((this.openCount.get(engineId) ?? 0) === 0) void this.disposeEngine(engineId);
+    }, this.idleDisposeMs));
   }
 
   lastDiagnosticsFor(uri: string): Diagnostic[] | null {
     return this.lastDiagnostics.get(uri) ?? null;
   }
 
-  cacheDiagnostics(uri: string, diags: Diagnostic[]): void {
-    this.lastDiagnostics.set(uri, diags);
-  }
-
-  private clearIdleTimer(): void {
-    if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }
+  private clearIdleTimer(engineId: string): void {
+    const timer = this.idleTimers.get(engineId);
+    if (timer) clearTimeout(timer);
+    this.idleTimers.delete(engineId);
   }
 
   async disposeEngine(engineId: string): Promise<void> {
+    this.clearIdleTimer(engineId);
     const s = this.sessions.get(engineId);
     this.sessions.delete(engineId);
     this.openCount.delete(engineId);
@@ -127,7 +120,8 @@ export class LspManager {
   }
 
   async dispose(): Promise<void> {
-    this.clearIdleTimer();
+    for (const timer of this.idleTimers.values()) clearTimeout(timer);
+    this.idleTimers.clear();
     await Promise.all([...this.sessions.keys()].map((id) => this.disposeEngine(id)));
   }
 }

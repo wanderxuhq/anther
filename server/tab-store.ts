@@ -1,10 +1,10 @@
 // server/tab-store.ts
-type UserState = { front: string | null; opened: Set<string>; lastSeen: number };
+type UserState = { front: string | null; lastSeen: number };
 
 /**
  * 内存级共享标签存储。存续规则：
  * 标签从列表移除 ⟺ 没有任何活跃用户把 front 指向它。
- * 不活跃（心跳超时）用户的前台持有被忽略，但其 opened 集合保留。
+ * 不活跃（心跳超时）用户的前台持有被忽略。
  */
 export class TabStore {
   private tabs: string[] = [];
@@ -20,14 +20,12 @@ export class TabStore {
   }
 
   open(userId: string, path: string): void {
-    const u = this.user(userId);
-    u.opened.add(path);
+    this.user(userId); // 刷新心跳
     if (!this.tabs.includes(path)) this.tabs.push(path);
   }
 
   close(userId: string, path: string): void {
     const u = this.user(userId);
-    u.opened.delete(path);
     if (u.front === path) u.front = null;
     if (this.hasActiveFront(path)) return;
     this.tabs = this.tabs.filter((t) => t !== path);
@@ -50,7 +48,7 @@ export class TabStore {
   private user(userId: string): UserState {
     let u = this.users.get(userId);
     if (!u) {
-      u = { front: null, opened: new Set(), lastSeen: this.now() };
+      u = { front: null, lastSeen: this.now() };
       this.users.set(userId, u);
     }
     u.lastSeen = this.now(); // 任何操作顺带更新心跳

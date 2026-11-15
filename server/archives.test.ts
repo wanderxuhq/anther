@@ -10,7 +10,7 @@ import { ZipReader, Uint8ArrayReader, Uint8ArrayWriter } from '@zip.js/zip.js';
 import { HttpServer } from './http.ts';
 import { FileStore } from './files.ts';
 import { registerFsRoutes } from './routes/fs.ts';
-import type { ArchiveOptions, ArchiveStatus } from './archives.ts';
+import type { ArchiveManager, ArchiveOptions, ArchiveStatus } from './archives.ts';
 
 async function setup(t: TestContext, options: ArchiveOptions = {}) {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'anther-archive-test-'));
@@ -32,8 +32,8 @@ async function setup(t: TestContext, options: ArchiveOptions = {}) {
   };
   const ready = async (rel = '目录') => {
     let status = await prepare(rel);
-    const deadline = Date.now() + 15_000;
-    while (status.status === 'preparing' && Date.now() < deadline) {
+    // Bounded by polls, not the wall clock: Date.now() can jump under this host.
+    for (let poll = 0; status.status === 'preparing' && poll < 1_500; poll++) {
       await delay(10);
       status = await (await fetch(`${base}/api/download/status?id=${status.id}`)).json() as ArchiveStatus;
     }
@@ -42,6 +42,27 @@ async function setup(t: TestContext, options: ArchiveOptions = {}) {
   };
   return { root, cache, manager, files, base, prepare, ready };
 }
+
+/** Poll the manager until preparation finishes; bounded so a stuck job fails the test. */
+async function waitArchive(manager: ArchiveManager, id: string, maxPolls = 1_500): Promise<ArchiveStatus> {
+  let status = manager.status(id);
+  for (let poll = 0; status.status === 'preparing' && poll < maxPolls; poll++) {
+    await delay(10);
+    status = manager.status(id);
+  }
+  return status;
+}
+
+/** Wait for the server-side download bookkeeping (active counter) to settle. */
+async function downloadSettled(manager: ArchiveManager, id: string): Promise<void> {
+  const jobs = (manager as unknown as { jobs: Map<string, { active: number }> }).jobs;
+  for (let poll = 0; poll < 2_000; poll++) {
+    if (!jobs.get(id)?.active) return;
+    await delay(1);
+  }
+  assert.fail(`download ${id} did not settle`);
+}
+
 const bytes = async (res: Response) => Buffer.from(await res.arrayBuffer());
 
 async function unzip(buffer: Buffer): Promise<Map<string, { data: Buffer; mode: number }>> {
@@ -84,7 +105,7 @@ test('目录未变复用同一份 ZIP；深层修改、增删和改名产生新�
   assert.equal(cached.id, first.id);
   assert.equal(cached.url, first.url);
   const checking = await f.prepare();
-  while (f.manager.status(checking.id).status === 'preparing') await delay(10);
+  assert.equal((await waitArchive(f.manager, checking.id)).status, 'ready');
   assert.deepEqual(await bytes(await fetch(`${f.base}/api/download/archive?id=${checking.id}`)), original);
   const file = path.join(f.root, '目录', 'binary');
   const oldStat = await fs.stat(file);
@@ -135,15 +156,19 @@ test('HEAD、续传、多区间、八连接分段共用稳定 ETag，拼接后 Z
 });
 
 test('完成后宽限清理；HEAD 和部分下载仅按闲置过期；清理后重新生成', async (t) => {
-  const f = await setup(t, { completeMs: 30, idleMs: 250 });
+  // 过期判定使用注入时钟，避免靠真实 sleep 抢时序。
+  const clock = { value: Date.now() };
+  const f = await setup(t, { completeMs: 30, idleMs: 250, now: () => clock.value });
   let status = await f.ready();
   await fetch(f.base + status.url, { method: 'HEAD' });
   await bytes(await fetch(f.base + status.url, { headers: { Range: 'bytes=0-9' } }));
-  await delay(50);
+  await downloadSettled(f.manager, status.id);
+  clock.value += 50;
   await f.manager.sweep();
   assert.equal(f.manager.status(status.id).status, 'ready');
   await bytes(await fetch(f.base + status.url, { headers: { Range: 'bytes=10-' } }));
-  await delay(50);
+  await downloadSettled(f.manager, status.id);
+  clock.value += 50;
   await f.manager.sweep();
   assert.equal((await fetch(f.base + status.url)).status, 410);
   const cacheDir = path.join(f.cache, (await fs.readdir(f.cache))[0]);
@@ -151,13 +176,14 @@ test('完成后宽限清理；HEAD 和部分下载仅按闲置过期；清理后
   const next = await f.ready();
   assert.notEqual(status.id, next.id);
   status = next;
-  await delay(280);
+  clock.value += 300;
   await f.manager.sweep();
   assert.equal((await fetch(f.base + status.url)).status, 410);
 });
 
 test('活动连接不被清理，取消后可续传', async (t) => {
-  const f = await setup(t, { completeMs: 10, idleMs: 20 });
+  const clock = { value: Date.now() };
+  const f = await setup(t, { completeMs: 10, idleMs: 20, now: () => clock.value });
   await fs.writeFile(path.join(f.root, '目录/large'), randomBytes(12 * 1024 * 1024));
   const status = await f.ready();
   const url = f.base + status.url;
@@ -165,11 +191,11 @@ test('活动连接不被清理，取消后可续传', async (t) => {
   t.after(() => req.destroy());
   const res = await new Promise<import('node:http').IncomingMessage>((resolve) => req.once('response', resolve));
   res.pause();
-  await delay(60);
+  clock.value += 60;
   await f.manager.sweep();
   assert.equal(f.manager.status(status.id).status, 'ready');
   req.destroy();
-  await delay(10);
+  await downloadSettled(f.manager, status.id);
   const resumed = await fetch(url, { headers: { Range: 'bytes=1000-1999', 'If-Range': res.headers.etag! } });
   assert.equal(resumed.status, 206);
   assert.equal((await bytes(resumed)).length, 1000);
@@ -188,8 +214,8 @@ test('工作区根目录、目录链接可归档；ZIP64 可正常解压', async
 
 test('磁盘空间不足准备失败，清理残留，路径越界被拒绝', async (t) => {
   const f = await setup(t, { reserveBytes: Number.MAX_SAFE_INTEGER });
-  let status = await f.prepare();
-  while (status.status === 'preparing') { await delay(10); status = f.manager.status(status.id); }
+  const prepared = await f.prepare();
+  const status = await waitArchive(f.manager, prepared.id);
   assert.equal(status.status, 'failed');
   assert.match(status.error!, /disk space/);
   const cacheDir = path.join(f.cache, (await fs.readdir(f.cache))[0]);
@@ -208,12 +234,8 @@ test('构建期间源文件被修改会失败，删除半成品 ZIP 后可重试
     await fs.writeFile(f.files.resolve(rel), 'changed while packing');
     return opened;
   };
-  let status = await f.prepare();
-  const deadline = Date.now() + 5000;
-  while (status.status === 'preparing' && Date.now() < deadline) {
-    await delay(10);
-    status = f.manager.status(status.id);
-  }
+  const prepared = await f.prepare();
+  const status = await waitArchive(f.manager, prepared.id, 500);
   assert.equal(status.status, 'failed');
   assert.match(status.error!, /changed during preparation/);
   const cacheDir = path.join(f.cache, (await fs.readdir(f.cache))[0]);

@@ -12,9 +12,19 @@ import { fontScale, openPreviewTab, removeTerminalTab, theme } from '../stores.t
 import { t } from '../i18n.ts';
 import { CONTROL_LETTERS, TERMINAL_KEYS, applyTerminalModifiers, controlChar, keySequence, type TerminalKey } from '../terminal-keys.ts';
 import { terminalKeyBarOpen, terminalRenderMode } from '../terminal/settings.ts';
+import { createDebounce } from '../debounce.ts';
+import {
+  expireKeyBarFocus,
+  initialKeyBarFocus,
+  KEY_BAR_FOCUS_FALLBACK_MS,
+  prepareKeyBarFocus as prepareFocusState,
+  restoreKeyBarFocus as restoreFocusState,
+  settleKeyBarFocus,
+  type KeyBarFocusState,
+} from '../terminal/key-bar-focus.ts';
 import { classifyMarkdownRows, joinWrappedRows, type MarkdownBlock } from '../terminal/markdown-blocks.ts';
 import { firstContentCell, joinLogicalCells } from '../terminal/logical.ts';
-import { renderRow, renderRowBackground, rowClass, rowRawText, type CursorInfo } from '../terminal/render.ts';
+import { renderGridRow, renderRow, rowClass, rowRawText, type CursorInfo } from '../terminal/render.ts';
 import { keyToSequence, pasteInput } from '../terminal/input.ts';
 import {
   advanceTouchScroll,
@@ -26,6 +36,8 @@ import { revealDirectory } from './filetree.tsx';
 
 const MAX_SCROLLBACK_ROWS = DEFAULT_SCROLLBACK;
 const FONT_SCALE_TO_PX = 0.14;
+// ResizeObserver fires continuously during keyboard/address-bar animations.
+const RESIZE_DEBOUNCE_MS = 120;
 
 // 两排按键：第二排的第 6 个格子是 Down，第一排第 6 个格子是 Up，保持上下对齐。
 const TOP_KEYS: TerminalKey[] = [TERMINAL_KEYS[2], TERMINAL_KEYS[6], TERMINAL_KEYS[7]];
@@ -44,6 +56,52 @@ function blockKey(block: MarkdownBlock): string {
     default: return block.kind;
   }
 }
+
+/** Input method state: composing must not send partial text; settling skips the
+ * input event that follows compositionend because that text was sent already. */
+type TerminalImeState = 'idle' | 'composing' | 'settling';
+
+/** Cell metrics plus the last PTY size sent to the server. */
+type TerminalMeasurement = {
+  cols: number;
+  rows: number;
+  cellWidth: number;
+  cellHeight: number;
+};
+
+const createTerminalMeasurement = (): TerminalMeasurement => ({
+  cols: 0, rows: 0, cellWidth: 0, cellHeight: 0,
+});
+
+/** Layout state shared by measurement and scrolling decisions. */
+type TerminalLayout = {
+  contentLarge: boolean;
+  availableHeight: number;
+  padY: number;
+  keepBottom: boolean;
+};
+
+const createTerminalLayout = (): TerminalLayout => ({
+  contentLarge: false, availableHeight: 0, padY: 0, keepBottom: false,
+});
+
+/** One object owns the rendered rows and the identity of the last frame. */
+type RenderCache = {
+  rows: HTMLDivElement[];
+  html: string[];
+  keys: string[];
+  text: string[];
+  start: number;
+  first: number;
+  cursor: number;
+  mode: 'html' | 'text';
+  alt: boolean;
+};
+
+const createRenderCache = (): RenderCache => ({
+  rows: [], html: [], keys: [], text: [],
+  start: -1, first: -1, cursor: -1, mode: 'html', alt: false,
+});
 
 /** 把一条逻辑行覆盖的多个终端物理行拼成一份单元格数组。 */
 function joinedCells(screen: RemoteTerminalScreen, start: number, from: number, to: number): ScreenCell[] {
@@ -87,33 +145,15 @@ export function TerminalView(props: { id: string }) {
   let send: ((data: string) => void) | undefined;
   let focusInput: (() => void) | undefined;
   let resizeObserver: ResizeObserver | undefined;
-  let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+  const resizeDebounce = createDebounce(RESIZE_DEBOUNCE_MS);
   let renderFrame: number | undefined;
-  let composing = false;
-  let skipInput = false;
-  let keyBarFocusWasInInput = false;
-  let keyBarSuppressFocusEvents = false;
+  let imeState: TerminalImeState = 'idle';
+  let keyBarFocus: KeyBarFocusState = initialKeyBarFocus();
   let keyBarFocusRestoreTimer: ReturnType<typeof setTimeout> | undefined;
-  let lastCols = 0;
-  let lastRows = 0;
-  let cellWidth = 0;
-  let cellHeight = 0;
-  // 终端逻辑行数按“最大可用高度”算；视觉高度按内容行数收缩，超过上限再滚动。
-  let logicalRows = 0;
-  let lastContentLarge = false;
-  let lastAvailableHeight = 0;
-  let lastPadY = 0;
-  let keepBottom = false;
+  let measurement = createTerminalMeasurement();
+  let layout = createTerminalLayout();
   let lastMeta = '';
-  let lastMode: 'html' | 'text' = 'html';
-  let lastAlt = false;
-  let renderedStart = -1;
-  let rowEls: HTMLDivElement[] = [];
-  let rowHtml: string[] = [];
-  let rowBlockKeys: string[] = [];
-  let textCache: string[] = [];
-  let lastFirst = -1;
-  let lastCursorAbs = -1;
+  let renderCache = createRenderCache();
 
   // 触摸滚动：全屏 TUI（备用屏幕 + 鼠标跟踪，任何应用都适用）里
   // 原生回滚不生效，用手势模拟滚轮事件（SGR 64/65）交给应用自己滚动。
@@ -146,32 +186,38 @@ export function TerminalView(props: { id: string }) {
     send?.(data);
   };
 
+  const clearKeyBarFocusTimer = () => {
+    clearTimeout(keyBarFocusRestoreTimer);
+    keyBarFocusRestoreTimer = undefined;
+  };
+
   /** 按键条点击前记录软键盘状态；某些移动端浏览器会无视 preventDefault 抢焦点。 */
   const prepareKeyBarFocus = () => {
-    if (document.activeElement === inputEl) {
-      keyBarFocusWasInInput = true;
-      keyBarSuppressFocusEvents = true;
-      // 兜底：即使 click 没走到，也不让 focus tracking 永久被抑制。
-      clearTimeout(keyBarFocusRestoreTimer);
-      keyBarFocusRestoreTimer = setTimeout(() => {
-        keyBarFocusWasInInput = false;
-        keyBarSuppressFocusEvents = false;
-      }, 2000);
-    }
+    const step = prepareFocusState(keyBarFocus, document.activeElement === inputEl);
+    keyBarFocus = step.state;
+    if (!step.armFallback) return;
+    // 兜底：即使 click 没走到，也不让 focus tracking 永久被抑制。
+    clearKeyBarFocusTimer();
+    keyBarFocusRestoreTimer = setTimeout(() => {
+      keyBarFocus = expireKeyBarFocus();
+      keyBarFocusRestoreTimer = undefined;
+    }, KEY_BAR_FOCUS_FALLBACK_MS);
   };
 
   /** 按键动作完成后恢复原焦点；只恢复原本就聚焦的输入框，不主动弹出键盘。 */
   const restoreKeyBarFocus = () => {
-    if (keyBarFocusWasInInput) inputEl?.focus({ preventScroll: true });
-    if (keyBarSuppressFocusEvents) {
-      clearTimeout(keyBarFocusRestoreTimer);
-      // 再补一次延迟聚焦：某些浏览器会在 click 的默认动作里才移走焦点。
-      keyBarFocusRestoreTimer = setTimeout(() => {
-        if (keyBarFocusWasInInput) inputEl?.focus({ preventScroll: true });
-        keyBarFocusWasInInput = false;
-        keyBarSuppressFocusEvents = false;
-      }, 0);
-    }
+    const step = restoreFocusState(keyBarFocus);
+    keyBarFocus = step.state;
+    if (step.refocusNow) inputEl?.focus({ preventScroll: true });
+    if (!step.scheduleSettle) return;
+    clearKeyBarFocusTimer();
+    // 再补一次延迟聚焦：某些浏览器会在 click 的默认动作里才移走焦点。
+    keyBarFocusRestoreTimer = setTimeout(() => {
+      keyBarFocusRestoreTimer = undefined;
+      const settled = settleKeyBarFocus(keyBarFocus);
+      keyBarFocus = settled.state;
+      if (settled.refocus) inputEl?.focus({ preventScroll: true });
+    }, 0);
   };
 
   const scheduleRender = () => {
@@ -183,16 +229,17 @@ export function TerminalView(props: { id: string }) {
   };
 
   const resetRendered = () => {
-    renderedStart = -1;
-    rowEls = [];
-    rowHtml = [];
-    rowBlockKeys = [];
-    textCache = [];
-    lastFirst = -1;
-    lastCursorAbs = -1;
+    renderCache.start = -1;
+    renderCache.rows = [];
+    renderCache.html = [];
+    renderCache.keys = [];
+    renderCache.text = [];
+    renderCache.first = -1;
+    renderCache.cursor = -1;
     rowsEl?.replaceChildren();
   };
 
+  /** Measure the pane and request one render; callers must not schedule a second one. */
   const updateSize = () => {
     const pane = paneEl;
     const scroller = scrollEl;
@@ -202,8 +249,8 @@ export function TerminalView(props: { id: string }) {
     const cellW = measure.getBoundingClientRect().width / 50;
     const cellH = measure.getBoundingClientRect().height;
     if (!cellW || !cellH) return;
-    cellWidth = cellW;
-    cellHeight = cellH;
+    measurement.cellWidth = cellW;
+    measurement.cellHeight = cellH;
 
     const style = getComputedStyle(scroller);
     const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
@@ -217,32 +264,24 @@ export function TerminalView(props: { id: string }) {
     // 逻辑行列跟随当前可用高度；内容高度只影响视觉盒高度，不触发 PTY resize。
     const rows = Math.max(5, Math.floor((available - padY) / cellH));
 
-    if (cols !== lastCols || rows !== lastRows) {
-      lastCols = cols;
-      lastRows = rows;
+    if (cols !== measurement.cols || rows !== measurement.rows) {
+      measurement.cols = cols;
+      measurement.rows = rows;
       // 浏览器不再本地 resize：服务端是唯一模拟器，resize 后由服务端 diff 带回新尺寸。
       socket?.resize(cols, rows);
     }
 
-    logicalRows = rows;
-    lastAvailableHeight = available;
-    lastPadY = padY;
+    layout.availableHeight = available;
+    layout.padY = padY;
     const wasAtBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 8;
-    if (wasAtBottom) keepBottom = true;
+    if (wasAtBottom) layout.keepBottom = true;
     scheduleRender();
     sendMeta();
   };
 
   // 软键盘动画/地址栏伸缩会连续触发 ResizeObserver；防抖合并成一次 resize，
   // 避免动画期间反复 stty + SIGWINCH。
-  const scheduleResize = () => {
-    clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => {
-      resizeTimer = undefined;
-      updateSize();
-      scheduleRender();
-    }, 120);
-  };
+  const scheduleResize = () => resizeDebounce.schedule(updateSize);
 
   const sendMeta = () => {
     if (!socket) return;
@@ -254,8 +293,8 @@ export function TerminalView(props: { id: string }) {
       cursor: parseCssColor(root.getPropertyValue('--term-cursor-bg')) ?? undefined,
       pixelWidth: scroller?.clientWidth,
       pixelHeight: scroller?.clientHeight,
-      cellWidth,
-      cellHeight,
+      cellWidth: measurement.cellWidth,
+      cellHeight: measurement.cellHeight,
     };
     const key = JSON.stringify(meta);
     if (key === lastMeta) return;
@@ -286,14 +325,14 @@ export function TerminalView(props: { id: string }) {
     const cursorAbs = screenStart + Math.max(0, Math.min(cursor.row, screenRows - 1));
 
     const dirty = s.takeDirty();
-    const structureChanged = renderedStart !== start || lastMode !== mode || lastAlt !== alt || lastFirst !== first;
+    const structureChanged = renderCache.start !== start || renderCache.mode !== mode || renderCache.alt !== alt || renderCache.first !== first;
     const forceAll = structureChanged || dirty.rows === 'all';
     const dirtyRows = new Set<number>();
     if (!forceAll && dirty.rows !== 'all') for (const row of dirty.rows) dirtyRows.add(row);
-    if (lastCursorAbs >= 0) dirtyRows.add(lastCursorAbs);
+    if (renderCache.cursor >= 0) dirtyRows.add(renderCache.cursor);
     dirtyRows.add(cursorAbs);
-    lastFirst = first;
-    lastCursorAbs = cursorAbs;
+    renderCache.first = first;
+    renderCache.cursor = cursorAbs;
 
     const atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 8;
     const oldScrollTop = scroller.scrollTop;
@@ -301,47 +340,39 @@ export function TerminalView(props: { id: string }) {
 
     if (structureChanged) {
       container.replaceChildren();
-      renderedStart = start;
-      rowEls = [];
-      rowHtml = [];
-      rowBlockKeys = [];
-      textCache = [];
+      renderCache.start = start;
+      renderCache.rows = [];
+      renderCache.html = [];
+      renderCache.keys = [];
+      renderCache.text = [];
     }
-    lastMode = mode;
-    lastAlt = alt;
+    renderCache.mode = mode;
+    renderCache.alt = alt;
 
     const count = end - start;
-    while (rowEls.length > count) {
-      rowEls.pop()!.remove();
-      rowHtml.pop();
-      rowBlockKeys.pop();
+    while (renderCache.rows.length > count) {
+      renderCache.rows.pop()!.remove();
+      renderCache.html.pop();
+      renderCache.keys.pop();
     }
-    while (rowEls.length < count) {
+    while (renderCache.rows.length < count) {
       const el = document.createElement('div');
       container.appendChild(el);
-      rowEls.push(el);
-      rowHtml.push('\u0000');
-      rowBlockKeys.push('\u0000');
+      renderCache.rows.push(el);
+      renderCache.html.push('\u0000');
+      renderCache.keys.push('\u0000');
     }
 
-    // 只物化脏行/新行的单元格；未变化的行复用文本缓存，避免每帧重建整个滚动缓冲区。
-    // 单元格对象只在本次渲染内短暂保留，不长期缓存（否则会和 VT 屏幕网格重复占内存）。
-    const freshCells = new Map<number, ScreenCell[]>();
+    // 只刷新脏行/新行的文本缓存；单元格按需从 VT 屏幕网格读取，不长期缓存。
     for (let index = 0; index < count; index++) {
       const absolute = start + index;
-      if (forceAll) {
-        // 全量重建只缓存文本；单元格在渲染循环里按行读取，避免同时持有整屏对象。
-        textCache[absolute] = rowRawText(s.getRowAbsolute(absolute));
-      } else if (textCache[absolute] === undefined || dirtyRows.has(absolute)) {
-        const line = s.getRowAbsolute(absolute);
-        freshCells.set(absolute, line);
-        textCache[absolute] = rowRawText(line);
+      if (forceAll || renderCache.text[absolute] === undefined || dirtyRows.has(absolute)) {
+        renderCache.text[absolute] = rowRawText(s.getRowAbsolute(absolute));
       }
     }
 
     const texts: string[] = [];
-    for (let absolute = start; absolute < end; absolute++) texts.push(textCache[absolute] ?? '');
-    const blocks = classifyMarkdownRows(texts);
+    for (let absolute = start; absolute < end; absolute++) texts.push(renderCache.text[absolute] ?? '');
 
     // 自动换行会把一条逻辑行拆成多个终端物理行。HTML 模式下按服务端的 wrapped
     // 标记拼回逻辑行：整行只渲染一次、续行隐藏，行内 Markdown/链接就不会在
@@ -421,7 +452,7 @@ export function TerminalView(props: { id: string }) {
     if (!alt && s.getScrollbackLength() === 0) {
       let last = 0;
       for (let index = 0; index < count; index++) {
-        if (rowRawText(s.getRowAbsolute(start + index)).trim() !== '') last = index;
+        if (texts[index].trim() !== '') last = index;
       }
       const lastContent = Math.max(1, last + 1, cursorPhysical + 1);
       if (useLogical) {
@@ -434,17 +465,17 @@ export function TerminalView(props: { id: string }) {
 
     for (let index = 0; index < count; index++) {
       const absolute = start + index;
-      const el = rowEls[index];
+      const el = renderCache.rows[index];
 
       if (index >= contentEnd) {
         const key = 'hidden';
-        if (!forceAll && el.className === hiddenClass && rowBlockKeys[index] === key) continue;
+        if (!forceAll && el.className === hiddenClass && renderCache.keys[index] === key) continue;
         if (el.className !== hiddenClass) el.className = hiddenClass;
-        if (rowHtml[index] !== '') {
+        if (renderCache.html[index] !== '') {
           el.innerHTML = '';
-          rowHtml[index] = '';
+          renderCache.html[index] = '';
         }
-        rowBlockKeys[index] = key;
+        renderCache.keys[index] = key;
         continue;
       }
 
@@ -452,38 +483,39 @@ export function TerminalView(props: { id: string }) {
         // 纯文字/备用屏幕：一行一个物理行，保持经典终端网格。
         const active = alt || absolute >= cursorAbs;
         const markdown = mode === 'html' && !active;
-        const block: MarkdownBlock = markdown ? blocks[index] : { kind: 'normal' };
+        // 纯文字/备用屏幕不走 Markdown 分类；此分支只用普通行背景与样式。
+        const block: MarkdownBlock = { kind: 'normal' };
         const cursorInfo = absolute === cursorAbs && cursorVisible
           ? { col: cursor.col, visible: true, shape: cursorShape, blinking: cursorBlinking }
           : undefined;
         const options = { mode, markdown, linkify: mode === 'html', cursor: cursorInfo, block };
         const className = rowClass(block, options);
         const key = blockKey(block);
-        const needs = forceAll || dirtyRows.has(absolute) || rowHtml[index] === '\u0000' || rowBlockKeys[index] !== key || el.className !== className;
+        const needs = forceAll || dirtyRows.has(absolute) || renderCache.html[index] === '\u0000' || renderCache.keys[index] !== key || el.className !== className;
         if (!needs) continue;
-        const cells = freshCells.get(absolute) ?? s.getRowAbsolute(absolute);
-        const text = renderRow(cells, options);
-        const background = renderRowBackground(cells, options);
-        const html = background ? `${background}<span class="term-row-content">${text}</span>` : text;
+        const cells = s.getRowAbsolute(absolute);
+        const rendered = renderGridRow(cells, options);
+        const html = rendered.background
+          ? `${rendered.background}<span class="term-row-content">${rendered.html}</span>` : rendered.html;
         if (el.className !== className) el.className = className;
-        if (rowHtml[index] !== html) {
+        if (renderCache.html[index] !== html) {
           el.innerHTML = html;
-          rowHtml[index] = html;
+          renderCache.html[index] = html;
         }
-        rowBlockKeys[index] = key;
+        renderCache.keys[index] = key;
         continue;
       }
 
       const tableBlock = tableRowBlocks[index];
       if (tableBlock && tableBlock.kind === 'table' && tableBlock.role === 'body') {
         const key = 'hidden';
-        if (!forceAll && el.className === hiddenClass && rowBlockKeys[index] === key) continue;
+        if (!forceAll && el.className === hiddenClass && renderCache.keys[index] === key) continue;
         if (el.className !== hiddenClass) el.className = hiddenClass;
-        if (rowHtml[index] !== '') {
+        if (renderCache.html[index] !== '') {
           el.innerHTML = '';
-          rowHtml[index] = '';
+          renderCache.html[index] = '';
         }
-        rowBlockKeys[index] = key;
+        renderCache.keys[index] = key;
         continue;
       }
 
@@ -492,15 +524,15 @@ export function TerminalView(props: { id: string }) {
         const className = rowClass(tableBlock, options);
         const key = blockKey(tableBlock);
         const logicalIndex = logicalOfPhysical[index];
-        const needs = forceAll || logicalDirty[logicalIndex] || rowHtml[index] === '\u0000' || rowBlockKeys[index] !== key || el.className !== className;
+        const needs = forceAll || logicalDirty[logicalIndex] || renderCache.html[index] === '\u0000' || renderCache.keys[index] !== key || el.className !== className;
         if (!needs) continue;
         const html = renderRow(s.getRowAbsolute(absolute), options);
         if (el.className !== className) el.className = className;
-        if (rowHtml[index] !== html) {
+        if (renderCache.html[index] !== html) {
           el.innerHTML = html;
-          rowHtml[index] = html;
+          renderCache.html[index] = html;
         }
-        rowBlockKeys[index] = key;
+        renderCache.keys[index] = key;
         continue;
       }
 
@@ -508,13 +540,13 @@ export function TerminalView(props: { id: string }) {
       if (logicalStart[logicalIndex] !== index) {
         // 非表格逻辑行的续行：内容已经在首行渲染，这里隐藏。
         const key = 'hidden';
-        if (!forceAll && el.className === hiddenClass && rowBlockKeys[index] === key) continue;
+        if (!forceAll && el.className === hiddenClass && renderCache.keys[index] === key) continue;
         if (el.className !== hiddenClass) el.className = hiddenClass;
-        if (rowHtml[index] !== '') {
+        if (renderCache.html[index] !== '') {
           el.innerHTML = '';
-          rowHtml[index] = '';
+          renderCache.html[index] = '';
         }
-        rowBlockKeys[index] = key;
+        renderCache.keys[index] = key;
         continue;
       }
 
@@ -541,48 +573,47 @@ export function TerminalView(props: { id: string }) {
       if (block.kind === 'normal') className = 'term-row term-row-html';
       else if (block.kind === 'code') className += ' term-row-logical';
       const key = block.kind === 'normal' ? `n:${logicalTexts[logicalIndex]}` : blockKey(block);
-      const needs = forceAll || logicalDirty[logicalIndex] || rowHtml[index] === '\u0000' || rowBlockKeys[index] !== key || el.className !== className;
+      const needs = forceAll || logicalDirty[logicalIndex] || renderCache.html[index] === '\u0000' || renderCache.keys[index] !== key || el.className !== className;
       if (!needs) continue;
       const cells = joinedCells(s, start, logicalStart[logicalIndex], logicalEnd[logicalIndex]);
       const html = renderRow(cells, options);
       if (el.className !== className) el.className = className;
-      if (rowHtml[index] !== html) {
+      if (renderCache.html[index] !== html) {
         el.innerHTML = html;
-        rowHtml[index] = html;
+        renderCache.html[index] = html;
       }
-      rowBlockKeys[index] = key;
+      renderCache.keys[index] = key;
     }
 
     // 逻辑行由多行拼成，实际高度只能渲染后量；用真实 DOM 高度决定内容框和滚动位置。
     const measuredHeight = container.getBoundingClientRect().height;
-    const contentHeight = measuredHeight + lastPadY;
-    const available = lastAvailableHeight > 0 ? lastAvailableHeight : contentHeight;
+    const contentHeight = measuredHeight + layout.padY;
+    const available = layout.availableHeight > 0 ? layout.availableHeight : contentHeight;
     const contentLarge = contentHeight >= available - 1;
-    const becameLarge = contentLarge && !lastContentLarge;
-    const visualHeight = Math.max(cellHeight + lastPadY, Math.min(contentHeight, available));
+    const becameLarge = contentLarge && !layout.contentLarge;
+    const visualHeight = Math.max(measurement.cellHeight + layout.padY, Math.min(contentHeight, available));
     if (Math.abs(scroller.getBoundingClientRect().height - visualHeight) > 0.5) {
       scroller.style.height = `${visualHeight}px`;
     }
     if (!contentLarge) scroller.scrollTop = 0;
-    else if (atBottom || keepBottom || becameLarge) scroller.scrollTop = scroller.scrollHeight;
+    else if (atBottom || layout.keepBottom || becameLarge) scroller.scrollTop = scroller.scrollHeight;
     else if (structureChanged && oldScrollHeight > 0) scroller.scrollTop = oldScrollTop * (scroller.scrollHeight / oldScrollHeight);
     else scroller.scrollTop = oldScrollTop;
-    keepBottom = false;
-    lastContentLarge = contentLarge;
+    layout.keepBottom = false;
+    layout.contentLarge = contentLarge;
   };
 
   // 每个终端 id 一套 VT 缓冲区 + WS；渲染模式变化不会进入这里。
   createEffect(on(() => props.id, (id) => {
     resetRendered();
     setCtrlArmed(false);
-    lastCols = 0;
-    lastRows = 0;
-    logicalRows = 0;
-    lastContentLarge = false;
-    keepBottom = false;
+    measurement.cols = 0;
+    measurement.rows = 0;
+    layout.contentLarge = false;
+    layout.keepBottom = false;
     lastMeta = '';
-    lastMode = terminalRenderMode();
-    lastAlt = false;
+    renderCache.mode = terminalRenderMode();
+    renderCache.alt = false;
 
     const s = new RemoteTerminalScreen();
     screen = s;
@@ -626,15 +657,13 @@ export function TerminalView(props: { id: string }) {
     const area = paneEl?.parentElement;
     if (area) resizeObserver.observe(area);
     updateSize();
-    scheduleRender();
 
     onCleanup(() => {
       if (renderFrame !== undefined) cancelAnimationFrame(renderFrame);
       renderFrame = undefined;
-      clearTimeout(resizeTimer);
-      resizeTimer = undefined;
-      clearTimeout(keyBarFocusRestoreTimer);
-      keyBarFocusRestoreTimer = undefined;
+      resizeDebounce.cancel();
+      clearKeyBarFocusTimer();
+      keyBarFocus = initialKeyBarFocus();
       resizeObserver?.disconnect();
       resizeObserver = undefined;
       sock.dispose();
@@ -642,15 +671,9 @@ export function TerminalView(props: { id: string }) {
       screen = undefined;
       send = undefined;
       focusInput = undefined;
-      rowEls = [];
-      rowHtml = [];
-      rowBlockKeys = [];
-      textCache = [];
-      lastFirst = -1;
-      lastCursorAbs = -1;
-      logicalRows = 0;
-      lastContentLarge = false;
-      keepBottom = false;
+      resetRendered();
+      layout.contentLarge = false;
+      layout.keepBottom = false;
       lastMeta = '';
     });
   }));
@@ -692,7 +715,6 @@ export function TerminalView(props: { id: string }) {
     const size = Math.round(fontScale() * FONT_SCALE_TO_PX);
     if (scrollEl) scrollEl.style.fontSize = `${size}px`;
     updateSize();
-    scheduleRender();
   });
 
   const barSequence = (id: string): string | null => {
@@ -781,14 +803,14 @@ export function TerminalView(props: { id: string }) {
   };
 
   const handleInput = () => {
-    if (composing || skipInput || !inputEl) return;
+    if (imeState !== 'idle' || !inputEl) return;
     const value = inputEl.value;
     inputEl.value = '';
     if (value) sendText(applyModifiers(value.replace(/\n/g, '\r')));
   };
 
   const handleBeforeInput = (event: InputEvent) => {
-    if (composing) return;
+    if (imeState === 'composing') return;
     if (event.inputType === 'deleteContentBackward') {
       event.preventDefault();
       sendText(applyModifiers('\x7f'));
@@ -811,23 +833,22 @@ export function TerminalView(props: { id: string }) {
   };
 
   const handleCompositionEnd = (event: CompositionEvent) => {
-    composing = false;
+    imeState = 'settling';
     setCtrlArmed(false);
     setShiftArmed(false);
     setAltArmed(false);
     const text = event.data || inputEl?.value || '';
     if (inputEl) inputEl.value = '';
     if (text) sendText(text);
-    skipInput = true;
-    queueMicrotask(() => { skipInput = false; });
+    queueMicrotask(() => { if (imeState === 'settling') imeState = 'idle'; });
   };
 
   const reportMouseAt = (clientX: number, clientY: number, button: number, release = false): boolean => {
     const rows = rowsEl;
-    if (!rows || !cellWidth || !cellHeight) return false;
+    if (!rows || !measurement.cellWidth || !measurement.cellHeight) return false;
     const rect = rows.getBoundingClientRect();
-    const col = Math.max(0, Math.min(lastCols - 1, Math.floor((clientX - rect.left) / cellWidth)));
-    const row = Math.max(0, Math.min(lastRows - 1, Math.floor((clientY - rect.top) / cellHeight)));
+    const col = Math.max(0, Math.min(measurement.cols - 1, Math.floor((clientX - rect.left) / measurement.cellWidth)));
+    const row = Math.max(0, Math.min(measurement.rows - 1, Math.floor((clientY - rect.top) / measurement.cellHeight)));
     if (screen?.getMode('sgrMouse') === true) {
       sendText(`\x1b[<${button};${col + 1};${row + 1}${release ? 'm' : 'M'}`);
     } else {
@@ -845,13 +866,9 @@ export function TerminalView(props: { id: string }) {
   const handlePointerDown = (event: PointerEvent) => {
     if (event.pointerType === 'touch') {
       if (!inTuiMouseMode() || touchActive) return;
+      resetTouchScroll();
       touchPointerId = event.pointerId;
       touchActive = true;
-      touchScrolling = false;
-      touchMoved = false;
-      touchScroll = createTouchScrollState();
-      touchPendingX = 0;
-      touchPendingY = 0;
       touchStartX = event.clientX;
       touchStartY = event.clientY;
       touchLastX = event.clientX;
@@ -905,7 +922,7 @@ export function TerminalView(props: { id: string }) {
       if (switched) return;
     }
 
-    const step = Math.max(32, cellHeight * 2);
+    const step = Math.max(32, measurement.cellHeight * 2);
     const steps = takeTouchSteps(touchScroll, step);
     if (steps === 0) return;
     // 固定用手势起点上报：一次滑动等价于“在该位置连续转动滚轮”。
@@ -1113,13 +1130,13 @@ export function TerminalView(props: { id: string }) {
         onInput={handleInput}
         onBeforeInput={handleBeforeInput}
         onPaste={handlePaste}
-        onCompositionStart={() => { composing = true; }}
+        onCompositionStart={() => { imeState = 'composing'; }}
         onCompositionEnd={handleCompositionEnd}
         onFocus={() => {
-          if (!keyBarSuppressFocusEvents && screen?.getMode('focusTracking') === true) sendText('\x1b[I');
+          if (!keyBarFocus.suppressTracking && screen?.getMode('focusTracking') === true) sendText('\x1b[I');
         }}
         onBlur={() => {
-          if (!keyBarSuppressFocusEvents && screen?.getMode('focusTracking') === true) sendText('\x1b[O');
+          if (!keyBarFocus.suppressTracking && screen?.getMode('focusTracking') === true) sendText('\x1b[O');
         }}
       />
 

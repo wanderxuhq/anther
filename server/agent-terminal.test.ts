@@ -31,6 +31,16 @@ function isNotFound(error: unknown): boolean {
   return error instanceof RequestError && error.code === -32002;
 }
 
+/** Poll a bounded condition instead of sleeping a fixed amount. Bounded by poll
+ * count so a delayed timer or clock jump cannot trip a premature timeout. */
+async function waitFor(check: () => boolean, label: string, maxPolls = 400): Promise<void> {
+  for (let poll = 0; poll < maxPolls; poll++) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`timed out waiting for ${label}`);
+}
+
 test('creates a command, captures output and reports exit', async () => {
   const { terminalId } = await manager.create({
     sessionId: 'sess_1',
@@ -200,9 +210,11 @@ test('kills a running command and releases the terminal', async () => {
   const { terminalId } = await manager.create({
     sessionId: 'sess_1',
     command: process.execPath,
-    args: ['-e', 'setInterval(() => {}, 1000)'],
+    args: ['-e', 'process.stdout.write("ready"); setInterval(() => {}, 1000)'],
   });
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  // Wait until the command has actually produced output, then kill it.
+  await waitFor(() => events.some((event) => event.terminalID === terminalId && event.output.includes('ready')),
+    'terminal ready output');
   await manager.kill('sess_1', terminalId);
   const exit = await manager.waitForExit('sess_1', terminalId);
   assert.equal(exit.exitCode, null);
@@ -220,7 +232,8 @@ test('emits live and final output snapshots', async () => {
     ],
   });
   await manager.waitForExit('sess_1', terminalId);
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  await waitFor(() => events.some((event) => event.terminalID === terminalId && event.exitStatus),
+    'final terminal snapshot');
 
   assert.ok(events.length > 0);
   const final = events.filter((event) => event.terminalID === terminalId).at(-1);

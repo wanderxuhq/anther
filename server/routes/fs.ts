@@ -1,5 +1,5 @@
 // server/routes/fs.ts
-import type { Router, Handler } from '../http.ts';
+import type { Router } from '../http.ts';
 import type { FileStore } from '../files.ts';
 import { HttpError } from '../http-error.ts';
 import { sendDownload } from '../download.ts';
@@ -49,26 +49,22 @@ export function registerFsRoutes(http: Router, files: FileStore, archiveOptions?
   http.put('/api/file', async (_req, body, q) => {
     const p = q.get('path');
     if (!p) throw new HttpError(400, 'missing path');
-    if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
-    const { content } = body as { content?: string };
+    const content = (body as { content?: unknown } | undefined)?.content;
     if (typeof content !== 'string') throw new HttpError(400, 'missing content');
     await files.write(p, content);
   });
 
   // 写操作不校验只读：只读仅由前端编辑器控制，服务端始终放行。
-  // body 守卫同 PUT /api/file：空 body 时 readBody 返回 undefined，直接解构抛
-  // TypeError → 500；先判对象形态再解构 → 400。
+  // 空 body / 非对象 body 用可选链取不到字段，自然落到 400，不抛 TypeError → 500。
   http.post('/api/mkdir', async (_req, body, q) => {
-    if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
-    const { path: p, recursive } = body as { path?: string; recursive?: unknown };
-    if (!p) throw new HttpError(400, 'missing path');
-    await files.mkdir(p, recursive === true);
+    const input = body as { path?: string; recursive?: unknown } | undefined;
+    if (!input?.path) throw new HttpError(400, 'missing path');
+    await files.mkdir(input.path, input.recursive === true);
   });
 
   // 独占建文件（O_EXCL）：重名 → 409 already exists，不清空既有文件（与 mkdir 同裁决）
   http.post('/api/create', async (_req, body, q) => {
-    if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
-    const { path: p } = body as { path?: string };
+    const p = (body as { path?: string } | undefined)?.path;
     if (!p) throw new HttpError(400, 'missing path');
     await files.create(p);
   });
@@ -82,15 +78,13 @@ export function registerFsRoutes(http: Router, files: FileStore, archiveOptions?
   });
 
   http.post('/api/rename', async (_req, body, q) => {
-    if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
-    const { path: p, to } = body as { path?: string; to?: string };
+    const { path: p, to } = (body ?? {}) as { path?: string; to?: string };
     if (!p || !to) throw new HttpError(400, 'missing path/to');
     await files.rename(p, to);
   });
 
   http.post('/api/delete', async (_req, body, q) => {
-    if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
-    const { path: p } = body as { path?: string };
+    const p = (body as { path?: string } | undefined)?.path;
     if (!p) throw new HttpError(400, 'missing path');
     await files.del(p);
   });

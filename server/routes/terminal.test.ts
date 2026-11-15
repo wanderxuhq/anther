@@ -37,9 +37,9 @@ afterEach(async () => {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function waitFor(fn: () => boolean | Promise<boolean>, timeout = 4000): Promise<void> {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
+async function waitFor(fn: () => boolean | Promise<boolean>, nominalMs = 4000): Promise<void> {
+  const maxPolls = Math.max(1, Math.round(nominalMs / 50));
+  for (let poll = 0; poll < maxPolls; poll++) {
     if (await fn()) return;
     await sleep(50);
   }

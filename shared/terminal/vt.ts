@@ -33,8 +33,19 @@ export type ScreenCell = {
 };
 
 export type Cursor = { col: number; row: number };
-export type DirtyRegion = { rows: Set<number> | 'all'; cursor: boolean; scrolled: number };
+export type DirtyRegion = { rows: Set<number> | 'all'; cursor: boolean };
 export type CursorShape = 'block' | 'underline' | 'bar';
+
+/** Browser-reported theme/size data used to answer OSC/CSI queries locally. */
+export type TerminalQueryMeta = {
+  fg?: RGB;
+  bg?: RGB;
+  cursor?: RGB;
+  pixelWidth?: number;
+  pixelHeight?: number;
+  cellWidth?: number;
+  cellHeight?: number;
+};
 
 export type TerminalScreenOptions = {
   cols?: number;
@@ -42,6 +53,8 @@ export type TerminalScreenOptions = {
   scrollbackLimit?: number;
   /** DA/DSR/DECRQM 等查询的回应，写回 PTY。 */
   onResponse?: (data: string) => void;
+  /** 颜色/像素尺寸来源；没有时使用字符网格估算。 */
+  meta?: () => TerminalQueryMeta;
 };
 
 type Pen = {
@@ -279,16 +292,17 @@ export class TerminalScreen {
   private wrappedRows = new WeakSet<ScreenCell[]>();
   private dirtyRows: Set<number> | 'all' = 'all';
   private dirtyCursor = true;
-  private scrolled = 0;
   private emptyRow: ScreenCell[];
   private palette: RGB[] = buildPalette256();
   private readonly onResponse?: (data: string) => void;
+  private readonly meta?: () => TerminalQueryMeta;
 
   constructor(options: TerminalScreenOptions = {}) {
     this.cols = Math.max(2, options.cols ?? 80);
     const rows = Math.max(1, options.rows ?? 24);
     this.scrollbackLimit = Math.max(0, options.scrollbackLimit ?? DEFAULT_SCROLLBACK);
     this.onResponse = options.onResponse;
+    this.meta = options.meta;
     this.emptyRow = this.makeBlankRow();
     this.mainBuffer = this.makeRows(rows);
     this.altBuffer = this.makeRows(rows);
@@ -374,10 +388,9 @@ export class TerminalScreen {
   }
 
   takeDirty(): DirtyRegion {
-    const result: DirtyRegion = { rows: this.dirtyRows, cursor: this.dirtyCursor, scrolled: this.scrolled };
+    const result: DirtyRegion = { rows: this.dirtyRows, cursor: this.dirtyCursor };
     this.dirtyRows = new Set<number>();
     this.dirtyCursor = false;
-    this.scrolled = 0;
     return result;
   }
 
@@ -775,6 +788,13 @@ export class TerminalScreen {
       }
       case '4': this.applyPalette(rest); break;
       case '104': this.resetPalette(rest); break;
+      case '10': case '11': case '12': {
+        if (rest.trim() !== '?') break;
+        const meta = this.meta?.();
+        const color = code === '10' ? meta?.fg : code === '11' ? meta?.bg : meta?.cursor;
+        if (color) this.respond(`\x1b]${code};${oscColor(color)}\x1b\\`);
+        break;
+      }
       default: break;
     }
   }
@@ -826,22 +846,19 @@ export class TerminalScreen {
     }
     if (intermediates.includes('"') && final === 'q') return;
 
+    const isDaQuery = paramText === '' || paramText === '0';
     if (prefix === '?') {
       if (final === 'h' || final === 'l') this.setPrivateModes(params, final === 'h');
       else if (final === 'n') this.reportStatus(params, true);
-      else if (final === 'c') this.respond('\x1b[?62;22c');
       else if (final === 'J') this.eraseInDisplay(p(0, 0));
       else if (final === 'K') this.eraseInLine(p(0, 0));
       return;
     }
     if (prefix === '>') {
-      if (final === 'c') this.respond('\x1b[>0;1;0c');
+      if (final === 'c' && isDaQuery) this.respond('\x1b[>0;1;0c');
       return;
     }
-    if (prefix === '=') {
-      if (final === 'c') this.respond('\x1b[>0;1;0c');
-      return;
-    }
+    if (prefix === '=') return;
 
     switch (final) {
       case '@': this.insertChars(p(0, 1)); break;
@@ -869,7 +886,7 @@ export class TerminalScreen {
       case 'Z': this.moveTabs(-p(0, 1)); break;
       case 'a': this.moveCursor(0, p(0, 1)); break;
       case 'b': this.repeatLast(p(0, 1)); break;
-      case 'c': this.respond('\x1b[?62;22c'); break;
+      case 'c': if (isDaQuery) this.respond('\x1b[?62;22c'); break;
       case 'd': this.setCursor(p(0, 1) - 1, this.cursor.col); break;
       case 'e': this.moveCursor(p(0, 1), 0); break;
       case 'g': this.clearTab(p(0, 0)); break;
@@ -963,7 +980,7 @@ export class TerminalScreen {
 
   private reportStatus(params: string[], privateMode: boolean): void {
     const code = Number(params[0] ?? '0');
-    if (code === 5) this.respond('\x1b[0n');
+    if (code === 5 && !privateMode) this.respond('\x1b[0n');
     else if (code === 6) {
       const row = this.cursor.row + 1;
       const col = this.cursor.col + 1;
@@ -1002,8 +1019,17 @@ export class TerminalScreen {
 
   private windowOp(params: string[]): void {
     const code = Number(params[0] ?? '0');
-    if (code === 18) this.respond(`\x1b[8;${this.buffer.length};${this.cols}t`);
-    else if (code === 14) this.respond(`\x1b[4;${this.buffer.length * 16};${this.cols * 8}t`);
+    const meta = this.meta?.() ?? {};
+    const rows = this.buffer.length;
+    if (code === 18) this.respond(`\x1b[8;${rows};${this.cols}t`);
+    else if (code === 19) this.respond(`\x1b[9;${rows};${this.cols}t`);
+    else if (code === 14) {
+      const pixelWidth = meta.pixelWidth ?? this.cols * (meta.cellWidth ?? 8);
+      const pixelHeight = meta.pixelHeight ?? rows * (meta.cellHeight ?? 16);
+      this.respond(`\x1b[4;${pixelHeight};${pixelWidth}t`);
+    } else if (code === 16) {
+      this.respond(`\x1b[6;${meta.cellHeight ?? 16};${meta.cellWidth ?? 8}t`);
+    }
   }
 
   // ---- 屏幕操作 ----
@@ -1189,7 +1215,6 @@ export class TerminalScreen {
         this.pushScrollback(removed);
       }
       for (let i = Math.max(0, this.buffer.length - count); i < this.buffer.length; i++) this.markRow(i);
-      this.scrolled += count;
     } else {
       for (let i = 0; i < count; i++) {
         this.buffer.splice(top, 1);
@@ -1570,6 +1595,11 @@ export class TerminalScreen {
   private respond(data: string): void {
     this.onResponse?.(data);
   }
+}
+
+function oscColor(color: RGB): string {
+  const hex4 = (value: number) => Math.round((Math.max(0, Math.min(255, value)) / 255) * 65535).toString(16).padStart(4, '0');
+  return `rgb:${hex4(color.r)}/${hex4(color.g)}/${hex4(color.b)}`;
 }
 
 function underlineFrom(value: number): UnderlineStyle {

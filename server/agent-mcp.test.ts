@@ -144,10 +144,10 @@ async function readState(): Promise<FakeState> {
 async function waitFor<T>(
   read: () => Promise<T | undefined>,
   label: string,
-  timeout = 4000,
+  nominalMs = 4000,
 ): Promise<T> {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
+  const maxPolls = Math.max(1, Math.round(nominalMs / 20));
+  for (let poll = 0; poll < maxPolls; poll++) {
     const value = await read();
     if (value !== undefined) return value;
     await new Promise((resolve) => setTimeout(resolve, 20));

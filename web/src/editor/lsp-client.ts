@@ -4,6 +4,8 @@
 import type { Completion } from '@codemirror/autocomplete';
 import type { Diagnostic as CmDiagnostic } from '@codemirror/lint';
 import { withBase } from '../base.ts';
+import { parseWsJson } from '../../../shared/ws-json.ts';
+import { connectReconnecting } from '../ws-reconnect.ts';
 
 export type Position = { line: number; character: number };
 export type LspDiagnostic = {
@@ -26,7 +28,7 @@ export type LspSocket = {
   open(path: string, text: string): void;
   change(path: string, text: string): void;
   close(path: string): void;
-  completion(path: string, line: number, character: number, text: string): Promise<LspCompletionItem[]>;
+  completion(path: string, line: number, character: number): Promise<LspCompletionItem[]>;
   dispose(): void;
 };
 
@@ -98,28 +100,15 @@ export function diagnosticToCm(d: LspDiagnostic, text: string): CmDiagnostic {
 // ---- WS 传输（每文档一条连接；模式对齐 connectTerminal：指数退避重连 + onOpen 恢复） ----
 
 export function connectLsp(handlers: LspHandlers): LspSocket {
-  let ws: WebSocket | null = null;
-  let disposed = false;
-  let attempt = 0;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   let nextId = 1;
   const pending = new Map<number, { resolve: (v: LspCompletionItem[]) => void; reject: (e: Error) => void }>();
 
-  const sendRaw = (obj: unknown) => {
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
-  };
-  const respond = (obj: Record<string, unknown>) => {
-    sendRaw(obj);
-    return obj;
-  };
-
-  const open = () => {
-    if (disposed) return;
-    ws = new WebSocket(withBase('/api/lsp'));
-    ws.onopen = () => { attempt = 0; handlers.onOpen(); };
-    ws.onmessage = (e) => {
-      let msg: Record<string, unknown>;
-      try { msg = JSON.parse(String(e.data)); } catch { return; }
+  const conn = connectReconnecting({
+    url: () => withBase('/api/lsp'),
+    onOpen: () => handlers.onOpen(),
+    onMessage: (_socket, event) => {
+      const msg = parseWsJson(event.data);
+      if (!msg) return;
       if (typeof msg.id === 'number') {
         const p = pending.get(msg.id);
         if (p) {
@@ -136,37 +125,29 @@ export function connectLsp(handlers: LspHandlers): LspSocket {
       } else if (msg.type === 'unavailable') {
         handlers.onUnavailable(typeof msg.reason === 'string' ? msg.reason : 'language server unavailable');
       }
-    };
-    ws.onclose = () => {
-      ws = null;
+    },
+    onDisconnect: () => {
       for (const p of pending.values()) p.reject(new Error('lsp connection closed'));
       pending.clear();
-      if (disposed) return;
-      const delay = Math.min(500 * 2 ** attempt, 8000);
-      attempt += 1;
-      timer = setTimeout(open, delay);
-    };
-    ws.onerror = () => { /* onclose 接管重连 */ };
-  };
-  open();
+    },
+  });
 
   return {
-    open: (path, text) => sendRaw({ method: 'open', params: { path, text } }),
-    change: (path, text) => sendRaw({ method: 'change', params: { path, text } }),
-    close: (path) => sendRaw({ method: 'close', params: { path } }),
-    completion: (path, line, character, text) => {
+    open: (path, text) => conn.send(JSON.stringify({ method: 'open', params: { path, text } })),
+    change: (path, text) => conn.send(JSON.stringify({ method: 'change', params: { path, text } })),
+    close: (path) => conn.send(JSON.stringify({ method: 'close', params: { path } })),
+    completion: (path, line, character) => {
       const id = nextId++;
+      const ws = conn.current();
       if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.resolve([]);
       return new Promise<LspCompletionItem[]>((resolve, reject) => {
         pending.set(id, { resolve, reject });
-        ws!.send(JSON.stringify({ id, method: 'completion', params: { path, line, character, text } }));
+        ws.send(JSON.stringify({ id, method: 'completion', params: { path, line, character } }));
       });
     },
     dispose: () => {
-      disposed = true;
-      clearTimeout(timer);
       pending.clear();
-      ws?.close();
+      conn.dispose();
     },
   };
 }

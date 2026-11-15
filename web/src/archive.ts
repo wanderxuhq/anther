@@ -1,7 +1,30 @@
 export type ArchiveEntry = { id: number; path: string; sourcePath?: string; directory: boolean; size: number; encrypted: boolean; link: boolean };
 export type ArchiveLimits = { maxDepth: number; maxBufferedBytes: number };
 export const DEFAULT_ARCHIVE_LIMITS: ArchiveLimits = { maxDepth: 3, maxBufferedBytes: 128 * 1024 * 1024 };
-export const archiveKey = (root: string, chain: string[] = []) => JSON.stringify([root, ...chain]);
+// NUL is rejected by archivePath, so it is a safe separator for the root and
+// every chain element. No JSON parsing is needed for archive identities.
+const ARCHIVE_KEY_SEPARATOR = '\0';
+export function archiveChainKey(chain: readonly string[]): string {
+  return chain.join(ARCHIVE_KEY_SEPARATOR);
+}
+export function archiveChainFromKey(key: string): string[] {
+  return key === '' ? [] : key.split(ARCHIVE_KEY_SEPARATOR);
+}
+export const archiveKey = (root: string, chain: string[] = []) => `${root}${ARCHIVE_KEY_SEPARATOR}${archiveChainKey(chain)}`;
+export function archiveRootOf(key: string): string {
+  const separator = key.indexOf(ARCHIVE_KEY_SEPARATOR);
+  return separator < 0 ? key : key.slice(0, separator);
+}
+/** UI grouping key: same archive/chain, with budget failures grouped per archive root. */
+export function archiveFeedbackKey(root: string, chain: string[] = [], limit?: 'depth' | 'budget'): string {
+  return limit === 'budget' ? `${archiveKey(root)}\0budget` : archiveKey(root, chain);
+}
+
+export function archiveChainOf(key: string): string[] {
+  const separator = key.indexOf(ARCHIVE_KEY_SEPARATOR);
+  if (separator < 0) return [];
+  return archiveChainFromKey(key.slice(separator + 1)).filter(Boolean);
+}
 export type ArchiveRequest = { id: number; action: 'open' | 'extract'; url?: string; path?: string; entry?: number; password?: string; chain?: string[]; passwords?: (string | undefined)[]; limits?: ArchiveLimits; heldBytes?: number };
 export type ArchiveReply = { id: number; entries?: ArchiveEntry[]; blob?: Blob; error?: string; passwordRequired?: boolean; passwordDepth?: number; limit?: 'depth' | 'budget'; progress?: number };
 

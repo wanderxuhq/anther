@@ -72,15 +72,14 @@ export function registerGitRoutes(http: Router, git: Git): void {
     const b = (typeof body === 'object' && body !== null ? body : {}) as { name?: unknown };
     if (typeof b.name !== 'string') throw new HttpError(400, 'invalid name');
     await git.checkout(b.name);
-    const { current } = await git.branches();
-    return { current };
+    // name 已通过本地分支白名单；checkout 成功即 HEAD 指向它，无需再列一次分支。
+    return { current: b.name };
   });
 
   http.post('/api/git/create-branch', async (_req, body) => {
     const b = (typeof body === 'object' && body !== null ? body : {}) as { name?: unknown };
     if (typeof b.name !== 'string') throw new HttpError(400, 'invalid name');
     await git.createBranch(b.name);
-    const { current } = await git.branches();
-    return { current };
+    return { current: b.name };
   });
 }

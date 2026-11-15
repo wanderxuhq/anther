@@ -48,7 +48,6 @@ function readRows(db: QueryDatabase, input: Extract<DatabaseRequest, { action: '
   const table = db.prepare('SELECT wr,type FROM pragma_table_list WHERE schema=\'main\' AND name=?').get(input.object.name);
   const rowid = table?.type === 'table' && !table.wr ? ['_rowid_', 'rowid', 'oid'].find((name) => !schema.columns.some((c) => c.name.toLowerCase() === name)) : undefined;
   const seek = rowid && !input.sort ? quote(rowid) : undefined;
-  if (!seek && offset > MAX_OFFSET) throw new Error('Page limit reached; narrow the filter');
   const where: string[] = [], args: SQLInputValue[] = [];
   if (input.filter && input.filter.value !== '') {
     where.push(`instr(CAST(${quote(input.filter.column)} AS TEXT), ?) > 0`);

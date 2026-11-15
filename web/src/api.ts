@@ -2,6 +2,9 @@
 import type { ScreenDiff, ScreenSnapshot } from '../../shared/terminal/serialize.ts';
 import type { MountInfo } from './mount-list.ts';
 import { basePath, withBase } from './base.ts';
+import { parseWsJson } from '../../shared/ws-json.ts';
+import { readJsonResponse } from './http-json.ts';
+import { connectReconnecting } from './ws-reconnect.ts';
 
 const USER_KEY = 'anther:userId';
 const TABS_KEY = 'anther:tabsSnapshot';
@@ -64,12 +67,7 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
     },
     body: binary ? body : body === undefined ? undefined : JSON.stringify(body),
   });
-  if (!res.ok) {
-    let msg = res.statusText;
-    try { msg = ((await res.json()) as { error?: string }).error ?? msg; } catch { /* ignore */ }
-    throw new ApiError(res.status, msg);
-  }
-  return (await res.json()) as T;
+  return await readJsonResponse(res, (status, message) => new ApiError(status, message)) as T;
 }
 
 export type GitChange = {
@@ -305,37 +303,21 @@ export type TerminalSocket = {
  */
 export function connectTerminal(id: string, handlers: TerminalHandlers, urlOverride?: string): TerminalSocket {
   const user = getUserId();
-  let ws: WebSocket | null = null;
   let pending: string[] = [];
-  let disposed = false;
   let dead = false;
-  let attempt = 0;
-  let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const send = (obj: { type: 'input'; data: string } | { type: 'resize'; cols: number; rows: number } | ({ type: 'meta' } & TerminalMeta)) => {
-    const frame = JSON.stringify(obj);
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(frame);
-    else if (ws && ws.readyState === WebSocket.CONNECTING) pending.push(frame);
-    // CLOSED/null → 丢弃：重连后服务端快照覆盖
-  };
-
-  const open = () => {
-    if (disposed || dead) return;
-    const socket = new WebSocket(urlOverride ?? withBase(`/api/terminal?term=${encodeURIComponent(id)}&user=${encodeURIComponent(user)}`));
-    ws = socket;
-    // 重连后旧 socket 仍可能投递已排队的消息；只认当前 socket，避免把服务端
-    // 快照/diff 处理两次（表现为本地多出一行重复提示符）。
-    socket.onopen = () => {
-      if (socket !== ws) return;
-      attempt = 0;
-      const q = pending; pending = [];   // 先 flush 排队的 resize/input
-      for (const f of q) socket.send(f);
-      handlers.onOpen();                 // 再清屏等服务端快照
-    };
-    socket.onmessage = (e) => {
-      if (socket !== ws) return;
-      let msg: { type?: string; code?: number };
-      try { msg = JSON.parse(String(e.data)); } catch { return; }
+  const conn = connectReconnecting({
+    url: urlOverride ?? withBase(`/api/terminal?term=${encodeURIComponent(id)}&user=${encodeURIComponent(user)}`),
+    onOpen: (socket) => {
+      // 重连后先 flush 排队的 resize/input，再由 onOpen 清屏等服务端快照。
+      const queued = pending;
+      pending = [];
+      for (const frame of queued) socket.send(frame);
+      handlers.onOpen();
+    },
+    onMessage: (_socket, event) => {
+      const msg = parseWsJson<{ type?: string; code?: number }>(event.data);
+      if (!msg) return;
       if (msg.type === 'screen') {
         handlers.onScreen(msg as unknown as ScreenSnapshot);
       } else if (msg.type === 'screen-diff') {
@@ -344,24 +326,27 @@ export function connectTerminal(id: string, handlers: TerminalHandlers, urlOverr
         dead = true;
         handlers.onExit(typeof msg.code === 'number' ? msg.code : 0);
       }
-    };
-    socket.onclose = (e) => {
-      if (socket !== ws) return;
-      ws = null;
-      if (disposed || dead) return;
-      if (e.code === 4404) { dead = true; handlers.onExit(1); return; } // 终端已不存在/被删
-      const delay = Math.min(500 * 2 ** attempt, 8000);
-      attempt += 1;
-      timer = setTimeout(open, delay);
-    };
-    socket.onerror = () => { /* 由 onclose 接管重连 */ };
+    },
+    shouldStop: (event) => {
+      if (dead) return true;
+      if (event.code !== 4404) return false;
+      dead = true;
+      handlers.onExit(1); // 终端已不存在/被删
+      return true;
+    },
+  });
+
+  const send = (obj: { type: 'input'; data: string } | { type: 'resize'; cols: number; rows: number } | ({ type: 'meta' } & TerminalMeta)) => {
+    const frame = JSON.stringify(obj);
+    if (conn.send(frame)) return;
+    if (conn.connecting()) pending.push(frame);
+    // CLOSED/null → 丢弃：重连后服务端快照覆盖
   };
-  open();
 
   return {
     input: (data) => send({ type: 'input', data }),
     resize: (cols, rows) => send({ type: 'resize', cols, rows }),
     meta: (meta) => send({ type: 'meta', ...meta }),
-    dispose: () => { disposed = true; clearTimeout(timer); pending = []; ws?.close(); },
+    dispose: () => { pending = []; conn.dispose(); },
   };
 }

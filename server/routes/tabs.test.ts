@@ -37,7 +37,7 @@ test('open/front/list 全流程', async () => {
 test('close：他人前台持有则保留', async () => {
   await call('PUT', '/api/tabs/open', { path: 'a.ts' }, 'u1');
   await call('PUT', '/api/tabs/front', { path: 'a.ts' }, 'u1');
-  const { status, body } = await call('PUT', '/api/tabs/close', { path: 'a.ts' }, 'u2');
+  const { status } = await call('PUT', '/api/tabs/close', { path: 'a.ts' }, 'u2');
   assert.equal(status, 200);
   const list = await call('GET', '/api/tabs');
   assert.deepEqual(list.body.tabs, ['a.ts']);

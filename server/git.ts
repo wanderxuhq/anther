@@ -3,8 +3,8 @@
 // execFile 数组参数不走 shell，从根上防注入；所有命令在项目根目录下执行。
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import path from 'node:path';
 import { HttpError } from './http-error.ts';
+import { resolveWithinRoot } from './path-safety.ts';
 
 const execFileP = promisify(execFile);
 
@@ -89,14 +89,9 @@ export class Git {
     this.root = root;
   }
 
-  /** 规范化 + 根目录边界校验（与 FileStore.resolve 同款写法）。越界抛 400。 */
+  /** 规范化 + 根目录边界校验（与 FileStore.resolve 共用同一实现）。越界抛 400。 */
   private resolveInRoot(relPath: string): string {
-    if (typeof relPath !== 'string' || relPath === '') throw new HttpError(400, 'invalid path');
-    const abs = path.resolve(this.root, relPath);
-    const rootAbs = path.resolve(this.root);
-    const prefix = rootAbs.endsWith(path.sep) ? rootAbs : rootAbs + path.sep;
-    if (abs !== rootAbs && !abs.startsWith(prefix)) throw new HttpError(400, 'path escapes root');
-    return abs;
+    return resolveWithinRoot(this.root, relPath);
   }
 
   /**

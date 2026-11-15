@@ -230,9 +230,10 @@ export function inlineMarkdown(text: string, linkify: boolean): string {
   return restorePlaceholders(html, placeholders);
 }
 
-function gridRow(cells: readonly ScreenCell[], options: RenderOptions): string {
+/** One grid row's HTML plus its ANSI background layer, sharing a single buildRuns pass. */
+export function renderGridRow(cells: readonly ScreenCell[], options: RenderOptions): { html: string; background: string } {
   const runs = buildRuns(cells, options.cursor);
-  return runs.map((run) => {
+  const html = runs.map((run) => {
     let inner: string;
     if (run.url) {
       inner = `<a class="term-url term-osc-url" href="${escapeAttr(run.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(run.text)}</a>`;
@@ -253,6 +254,22 @@ function gridRow(cells: readonly ScreenCell[], options: RenderOptions): string {
     if (run.style.underlineColor) style.push(`text-decoration-color:${run.style.underlineColor}`);
     return `<span class="${run.style.classes.join(' ')}"${style.length ? ` style="${style.join(';')}"` : ''}>${inner}</span>`;
   }).join('');
+  return { html, background: runsToBackground(runs) };
+}
+
+function gridRow(cells: readonly ScreenCell[], options: RenderOptions): string {
+  return renderGridRow(cells, options).html;
+}
+
+function runsToBackground(runs: readonly Run[]): string {
+  const blocks = runs.map((run) => {
+    const background = run.style.background
+      ?? (run.style.classes.includes('term-inverse') ? 'var(--term-fg)' : null);
+    if (!background) return '';
+    const width = Math.max(1, run.end - run.start);
+    return `<span class="term-bg-run" style="left:${run.start}ch;width:${width}ch;background-color:${background}"></span>`;
+  }).join('');
+  return blocks ? `<span class="term-row-bg" aria-hidden="true">${blocks}</span>` : '';
 }
 
 function markdownRow(block: MarkdownBlock, options: RenderOptions): string {
@@ -297,15 +314,7 @@ export function renderRow(cells: readonly ScreenCell[], options: RenderOptions):
  */
 export function renderRowBackground(cells: readonly ScreenCell[], options: RenderOptions): string {
   if (options.mode === 'html' && options.markdown) return '';
-  const runs = buildRuns(cells);
-  const blocks = runs.map((run) => {
-    const background = run.style.background
-      ?? (run.style.classes.includes('term-inverse') ? 'var(--term-fg)' : null);
-    if (!background) return '';
-    const width = Math.max(1, run.end - run.start);
-    return `<span class="term-bg-run" style="left:${run.start}ch;width:${width}ch;background-color:${background}"></span>`;
-  }).join('');
-  return blocks ? `<span class="term-row-bg" aria-hidden="true">${blocks}</span>` : '';
+  return runsToBackground(buildRuns(cells));
 }
 
 /** 行容器的 class：决定 pre / pre-wrap、Markdown 块样式。 */

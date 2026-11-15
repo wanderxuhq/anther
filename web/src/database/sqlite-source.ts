@@ -115,32 +115,47 @@ class Session {
   }
 }
 
+/** Link one caller signal to the source lifetime; always clean the listeners up. */
+function linkSignal(lifetime: AbortSignal, signal?: AbortSignal): { signal: AbortSignal; dispose(): void } {
+  if (!signal) return { signal: lifetime, dispose() {} };
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (lifetime.aborted || signal.aborted) controller.abort();
+  else {
+    signal.addEventListener('abort', abort, { once: true });
+    lifetime.addEventListener('abort', abort, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    dispose() {
+      signal.removeEventListener('abort', abort);
+      lifetime.removeEventListener('abort', abort);
+    },
+  };
+}
+
 export function createSqliteSource(path: string | SqliteInput): DatabaseSource {
   const input: SqliteInput = typeof path === 'string'
     ? { key: path, url: new URL(api.downloadUrl(path), globalThis.location.href).href, headers: { 'x-user-id': getUserId() } } : path;
   let session = sessions.get(input.key);
   if (!session) { session = new Session(input); sessions.set(input.key, session); }
   session.references++;
-  const pending = new Set<AbortController>();
-  let disposed = false;
+  const lifetime = new AbortController();
   async function request<T>(body: DatabaseRequest, signal?: AbortSignal): Promise<T> {
-    if (disposed || signal?.aborted) throw abortError();
-    const controller = new AbortController();
-    const cancel = () => controller.abort();
-    signal?.addEventListener('abort', cancel, { once: true }); pending.add(controller);
-    try { return await session!.request(body, controller.signal) as T; }
-    finally { pending.delete(controller); signal?.removeEventListener('abort', cancel); }
+    if (lifetime.signal.aborted || signal?.aborted) throw abortError();
+    const linked = linkSignal(lifetime.signal, signal);
+    try { return await session!.request(body, linked.signal) as T; }
+    finally { linked.dispose(); }
   }
   return {
     listObjects: (signal) => request({ action: 'objects' }, signal),
     describe: (object, signal) => request({ action: 'describe', object }, signal),
     readRows: (input, signal) => request({ action: 'rows', request: input }, signal),
-    refresh() { if (!disposed) session!.reset(); },
+    refresh() { if (!lifetime.signal.aborted) session!.reset(); },
     dispose() {
-      if (disposed) return;
-      disposed = true;
-      for (const controller of pending) controller.abort();
-      pending.clear(); session!.release();
+      if (lifetime.signal.aborted) return;
+      lifetime.abort();
+      session!.release();
     },
   };
 }

@@ -2,6 +2,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { HttpError } from './http-error.ts';
+import { resolveWithinRoot } from './path-safety.ts';
 import { createHash } from 'node:crypto';
 
 export type DirEntry = {
@@ -34,19 +35,9 @@ export class FileStore {
     this.root = root;
   }
 
-  /** 规范化 + 根目录边界校验（同步、无 IO）。越界抛 400。 */
+  /** 规范化 + 根目录边界校验（同步、无 IO）；与 Git 共用 path-safety 规则。越界抛 400。 */
   resolve(relPath: string): string {
-    if (typeof relPath !== 'string' || relPath === '') {
-      throw new HttpError(400, 'invalid path');
-    }
-    const abs = path.resolve(this.root, relPath);
-    const rootAbs = path.resolve(this.root);
-    // 根为 "/" 时 rootAbs + path.sep 是 "//"，任何路径都不匹配 → 先归一化再判前缀（与 resolveSafe 同款写法）
-    const prefix = rootAbs.endsWith(path.sep) ? rootAbs : rootAbs + path.sep;
-    if (abs !== rootAbs && !abs.startsWith(prefix)) {
-      throw new HttpError(400, 'path escapes root');
-    }
-    return abs;
+    return resolveWithinRoot(this.root, relPath);
   }
 
   /**
@@ -56,6 +47,11 @@ export class FileStore {
    * 越界抛 400。
    */
   async resolveSafe(relPath: string): Promise<string> {
+    return (await this.resolveSafeWithRoot(relPath)).abs;
+  }
+
+  /** 同 resolveSafe，但同时返回根的真实路径，供调用方复用、避免再次 realpath(root)。 */
+  private async resolveSafeWithRoot(relPath: string): Promise<{ abs: string; rootReal: string }> {
     const abs = this.resolve(relPath); // 同步词法校验，语义与 resolve() 一致
     let rootReal: string;
     try {
@@ -97,7 +93,7 @@ export class FileStore {
       if (real !== rootReal && !real.startsWith(rootPrefix)) {
         throw new HttpError(400, 'path escapes root');
       }
-      return suffix.length === 0 ? real : path.join(real, ...suffix);
+      return { abs: suffix.length === 0 ? real : path.join(real, ...suffix), rootReal };
     }
   }
 
@@ -135,14 +131,13 @@ export class FileStore {
 
   /** 工作区相对路径 → 规范化相对路径 + 类型（跟随根内符号链接，越界拒绝）。 */
   async locate(relPath: string): Promise<LocatedPath> {
-    const abs = await this.resolveSafe(relPath);
+    const { abs, rootReal } = await this.resolveSafeWithRoot(relPath);
     let stat;
     try {
       stat = await fs.stat(abs);
     } catch (e: unknown) {
       throw this.mapFsError(e);
     }
-    const rootReal = await fs.realpath(this.root);
     let rel = path.relative(rootReal, abs).split(path.sep).join('/');
     if (rel === '') rel = '.';
     return { path: rel, kind: stat.isDirectory() ? 'dir' : 'file' };
@@ -208,8 +203,9 @@ export class FileStore {
     } catch (e: unknown) {
       throw this.mapFsError(e);
     }
-    const utf8 = !this.hasInvalidUtf8(buf);
-    return { content: utf8 ? buf.toString('utf8') : buf.toString('latin1'), utf8 };
+    const text = buf.toString('utf8');
+    const utf8 = !text.includes('\uFFFD');
+    return { content: utf8 ? text : buf.toString('latin1'), utf8 };
   }
 
   /**
@@ -259,8 +255,8 @@ export class FileStore {
           } catch {
             continue;
           }
-          if (this.hasInvalidUtf8(buf)) continue;
           const text = buf.toString('utf8');
+          if (text.includes('\uFFFD')) continue;
           const matches: SearchMatch[] = [];
           const lines = text.split('\n');
           for (let i = 0; i < lines.length && result.matchCount < maxMatches; i++) {
@@ -349,8 +345,8 @@ export class FileStore {
    * 符号链接）——必须在此拒绝，且发生在任何 fs 操作之前。
    */
   private async resolveSafeNotRoot(relPath: string): Promise<string> {
-    const abs = await this.resolveSafe(relPath);
-    if (abs === await fs.realpath(this.root)) {
+    const { abs, rootReal } = await this.resolveSafeWithRoot(relPath);
+    if (abs === rootReal) {
       throw new HttpError(400, 'invalid path');
     }
     return abs;
@@ -370,11 +366,6 @@ export class FileStore {
   private fileUrlPath(value: string): string {
     if (!value.startsWith('file://')) return value;
     try { return decodeURIComponent(new URL(value).pathname); } catch { return value; }
-  }
-
-  private hasInvalidUtf8(buf: Buffer): boolean {
-    // UTF-8 解码出现替换符（U+FFFD）即视为非 UTF-8
-    return buf.toString('utf8').includes('�');
   }
 
   private mapFsError(e: unknown): HttpError {

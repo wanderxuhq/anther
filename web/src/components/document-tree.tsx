@@ -6,7 +6,7 @@ import { currentFile, openTab, openArchiveEntry, archiveEntry, archiveChain } fr
 import { documentPreviewUrl, documentOutlineSource } from '../readers/document-file.ts';
 import { createMarkdownOutlineSource } from '../readers/markdown-source.ts';
 import { loadArchiveFile, releaseArchiveFile, type ArchiveDocument } from '../archive-file.ts';
-import { fileTargetKey, fileTargetName, type ArchiveLocation } from '../file-target.ts';
+import { fileTargetKey, fileTargetName, sameArchiveChain, type ArchiveLocation } from '../file-target.ts';
 import { parseMarkdownDocument, isMarkdownFile } from '../markdown.ts';
 import type { OutlineSource, OutlineSourceFactory, OutlineState } from '../readers/outline-source.ts';
 import { navigateReaderOutline } from '../readers/navigation.ts';
@@ -15,7 +15,7 @@ import { DocumentOutlineTree } from './document-outline-tree.tsx';
 /** Application connector; future reader formats can supply the same outline-source contract. */
 export default function DocumentTree(props: { path: string; archive?: ArchiveLocation; reload?: number; source?: OutlineSourceFactory }) {
   const selectedFile = () => currentFile() === props.path && (props.archive
-    ? archiveEntry() === props.archive.entry && JSON.stringify(archiveChain()) === JSON.stringify(props.archive.chain)
+    ? archiveEntry() === props.archive.entry && sameArchiveChain(archiveChain(), props.archive.chain)
     : !archiveEntry() && !archiveChain().length);
   const [state, setState] = createSignal<OutlineState>({ outline: [], outlineStatus: 'loading', password: null });
   const [revision, setRevision] = createSignal(0), [error, setError] = createSignal(false);

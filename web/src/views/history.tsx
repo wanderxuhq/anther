@@ -2,11 +2,11 @@
 // 历史视图（图）：分支选择器 + 提交图（泳道岔线/合并菱形）+ 分支徽标。
 // 图取代扁平列表：log 一次拉 1000 条 topo 序 → layoutGraph 逐行渲染。
 // 每行整条是点击区 → openGitCommit(hash)；超 1000 截断提示。
-import { createEffect, createSignal, Show, For, onCleanup } from 'solid-js';
+import { createEffect, createMemo, createSignal, on, Show, For, onCleanup, untrack } from 'solid-js';
 import { api, type GitBranches, type GitCommit } from '../api.ts';
 import { gitRefreshTick, openGitCommit, historyBranch, selectHistoryBranch } from '../stores.ts';
 import { commitTimeLabel } from './history-model.ts';
-import { layoutGraph, parseDecorations, type GraphRow } from './graph-model.ts';
+import { layoutGraph, parseDecorations } from './graph-model.ts';
 import { t } from '../i18n.ts';
 
 const LIMIT = 1000;  // 图一次拉全（lane 不可跨页）
@@ -17,49 +17,43 @@ export function HistoryView() {
   const [branches, setBranches] = createSignal<GitBranches | null>(null);
   const branch = () => historyBranch() ?? branches()?.current ?? null;
   const [commits, setCommits] = createSignal<GitCommit[]>([]);
-  const [rows, setRows] = createSignal<GraphRow[]>([]);
+  const rows = createMemo(() => layoutGraph(commits()));
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);
 
-  // 分支列表 + 默认选中当前分支（gitRefreshTick 变化 → 刷新）
-  createEffect(() => {
-    gitRefreshTick();
-    void (async () => {
-      try {
-        const b = await api.git.branches();
-        setBranches(b);
-      } catch { /* 静默，错误条由 log effect 承担 */ }
-    })();
-  });
-
-  // 首屏 / 切分支 / 刷新：拉 1000 条 → layoutGraph（cancelled 竞态守卫沿用）
-  createEffect(() => {
-    const b = branch();
-    gitRefreshTick();
+  // 首屏 / 切分支 / 刷新：分支列表只在首屏或刷新时拉取，切分支只重拉提交。
+  // 这样既避免首屏按 HEAD 先拉一次、随后又按当前分支重拉，也不会在切分支时重建 <select> 选项。
+  createEffect(on([gitRefreshTick, historyBranch], ([tick, requested], previous) => {
+    const currentBranches = untrack(branches);
+    const refreshBranches = !currentBranches || !previous || previous[0] !== tick;
     setLoading(true);
     setCommits([]);
-    setRows([]);
     let cancelled = false;
     void (async () => {
       try {
-        if (branches()?.isRepo === false) {
+        const info = refreshBranches ? await api.git.branches() : currentBranches!;
+        if (cancelled) return;
+        if (refreshBranches) setBranches(info);
+        if (!info.isRepo) {
           setError(null);
           return;
         }
-        const res = await api.git.log({ branch: b ?? undefined, limit: LIMIT, skip: 0 });
+        const res = await api.git.log({
+          branch: (requested ?? info.current) ?? undefined,
+          limit: LIMIT,
+          skip: 0,
+        });
         if (cancelled) return;
         setCommits(res.commits);
-        setRows(layoutGraph(res.commits));
         setError(null);
       } catch (e) {
-        if (cancelled) return;
-        setError((e as Error).message);
+        if (!cancelled) setError((e as Error).message);
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
     onCleanup(() => { cancelled = true; });
-  });
+  }));
 
   return (
     <div class="history-view">

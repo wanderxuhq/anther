@@ -5,7 +5,8 @@ import type { EpubBook, EpubLink } from './epub-data.ts';
 import { bindReaderGestures } from '../components/reader-gestures.ts';
 import { t } from '../i18n.ts';
 import './epub.css';
-import { compactLBP, locationLBP, type ReadingLocation } from './location.ts';
+import { compactLBP, locationLBP, POSITION_PUBLISH_DEBOUNCE_MS, type ReadingLocation } from './location.ts';
+import { createDebounce } from '../debounce.ts';
 import { captureEpubPosition, epubPositionTop } from './epub-position.ts';
 
 type ChapterView = { node: HTMLElement; generation: number; cancel?: AbortController; pending?: Promise<void>; frame?: HTMLIFrameElement; cleanup?: () => void; measure?: () => void };
@@ -15,7 +16,7 @@ export const createEpubReader: ReaderFactory = ({ url, viewport, content, onStat
   const source = acquireEpubSource(url), views: ChapterView[] = [];
   let visible: number[] = [];
   let book: EpubBook | undefined, disposed = false, scrollFrame = 0, navigation = 0, navigating = true;
-  let positionTimer: ReturnType<typeof setTimeout> | undefined;
+  const positionDebounce = createDebounce(POSITION_PUBLISH_DEBOUNCE_MS);
   let lastLocation: ReadingLocation | null = initialLocation ?? null;
   let state = initialReaderState();
   const update: typeof onState = (patch) => { if (!disposed) { state = { ...state, ...patch }; onState(patch); } };
@@ -49,7 +50,7 @@ export const createEpubReader: ReaderFactory = ({ url, viewport, content, onStat
     lastLocation = { kind: 'epub', lbp, ...(state.scale === 1 ? {} : { zoom: state.scale }) };
     onLocation?.(lastLocation);
   };
-  const schedulePosition = () => { clearTimeout(positionTimer); positionTimer = setTimeout(publish, 180); };
+  const schedulePosition = () => positionDebounce.schedule(publish);
   const unload = (view: ChapterView) => { view.generation++; view.cancel?.abort(); view.cancel = undefined; view.cleanup?.(); view.cleanup = undefined; view.frame = undefined; view.measure = undefined; view.pending = undefined; view.node.replaceChildren(); };
   const load = (index: number): Promise<void> => {
     const view = views[index];
@@ -145,9 +146,19 @@ export const createEpubReader: ReaderFactory = ({ url, viewport, content, onStat
     if (!disposed) update({ busy: false });
   });
   void ready.catch(fail);
+  const applyScale = (scale: number): number => {
+    const value = Math.max(.1, Math.min(5, scale));
+    update({ scale: value, fitWidth: value === 1 });
+    for (const view of views) {
+      if (!view.frame?.contentDocument) continue;
+      view.frame.contentDocument.documentElement.style.zoom = String(value);
+      view.measure?.();
+    }
+    return value;
+  };
   const restoreLocation = async (location: ReadingLocation | null) => {
     const request = ++navigation;
-    navigating = true; clearTimeout(positionTimer);
+    navigating = true; positionDebounce.cancel();
     try {
       await ready;
       if (disposed || request !== navigation) return;
@@ -155,9 +166,7 @@ export const createEpubReader: ReaderFactory = ({ url, viewport, content, onStat
       const position = locationLBP(value?.lbp ?? `${firstChapter()}@#0`)!;
       const index = Math.min(book!.spine.length - 1, position.start.spineIndex);
       reveal(index);
-      const scale = value?.zoom ?? 1;
-      update({ scale, fitWidth: scale === 1 });
-      for (const view of views) if (view.frame?.contentDocument) { view.frame.contentDocument.documentElement.style.zoom = String(scale); view.measure?.(); }
+      applyScale(value?.zoom ?? 1);
       await load(index);
       if (disposed || request !== navigation) return;
       const view = views[index], root = view.frame?.contentDocument?.body;
@@ -220,19 +229,18 @@ export const createEpubReader: ReaderFactory = ({ url, viewport, content, onStat
       const before = anchor?.getBoundingClientRect();
       const fraction = before?.height ? Math.max(0, Math.min(1, (localY - before.top) / before.height)) : 0;
       const offset = viewport.scrollTop - top(index), oldScale = state.scale;
-      update({ scale: Math.max(.1, Math.min(5, scale)), fitWidth: scale === 1 });
-      for (const item of views) if (item.frame?.contentDocument) { item.frame.contentDocument.documentElement.style.zoom = String(state.scale); item.measure?.(); }
+      const nextScale = applyScale(scale);
       const after = anchor?.getBoundingClientRect();
       if (frame && frameBefore && before && after) {
         viewport.scrollTop += frame.getBoundingClientRect().top + after.top + fraction * after.height - (frameBefore.top + before.top + fraction * before.height) - (options?.pan?.y ?? 0);
-      } else viewport.scrollTop = top(index) + offset * state.scale / oldScale - (options?.pan?.y ?? 0);
+      } else viewport.scrollTop = top(index) + offset * nextScale / oldScale - (options?.pan?.y ?? 0);
       refreshVisible();
     },
     fitWidth() { controller.zoomTo(1); },
     unlock() {},
     destroy() {
       if (disposed) return; disposed = true; navigation++;
-      clearTimeout(positionTimer); resize.disconnect(); cancelAnimationFrame(scrollFrame); viewport.removeEventListener('scroll', scroll);
+      positionDebounce.cancel(); resize.disconnect(); cancelAnimationFrame(scrollFrame); viewport.removeEventListener('scroll', scroll);
       views.forEach(unload); content.replaceChildren(); content.classList.remove('epub-stage'); unsubscribe(); source.release();
     },
   };

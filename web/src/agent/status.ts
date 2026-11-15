@@ -52,7 +52,6 @@ export function applyCompactionUpdate<T extends TimelineEntry>(
   items: readonly T[],
   update: unknown,
   now: number,
-  _fallbackId: string,
 ): Array<T | StatusItem> {
   if (!update || typeof update !== 'object' || Array.isArray(update)) return [...items];
   const value = update as Record<string, unknown>;
@@ -118,7 +117,6 @@ export function applyCompactionChunk<T extends TimelineEntry>(
   items: readonly T[],
   update: unknown,
   now: number,
-  _fallbackId: string,
 ): Array<T | StatusItem> {
   if (!update || typeof update !== 'object' || Array.isArray(update)) return [...items];
   const value = update as Record<string, unknown>;

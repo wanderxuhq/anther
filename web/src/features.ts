@@ -53,9 +53,8 @@ const BUILTIN_PANELS: FeaturePanel[] = [{
   ui: '',
   builtin: 'agent',
 }];
-const [features, setFeatures] = createSignal<FeatureFlags>({});
 const [featurePanels, setFeaturePanels] = createSignal<FeaturePanel[]>(BUILTIN_PANELS);
-export { features, featurePanels };
+export { featurePanels };
 
 const uiLoads = new Map<string, Promise<FeatureUiModule>>();
 
@@ -79,7 +78,6 @@ export async function loadFeatures(): Promise<void> {
         });
       }
     }
-    setFeatures(flags);
     setFeaturePanels([...BUILTIN_PANELS, ...panels]);
   } catch {
     // 功能表不可用：保持空表，anther 其余功能不受影响。

@@ -49,6 +49,12 @@ export function currentFilePath(tabs: TabItem[], currentId: string | null): stri
   return t?.kind === 'file' ? t.path : null;
 }
 
+/** 标签背后的工作区路径；feature 子路径不是文件，必须排除。 */
+export function tabFilePath(tab: TabItem | null | undefined): string | null {
+  if (!tab) return null;
+  return tab.kind === 'file' || tab.kind === 'database' || tab.kind === 'git-diff' ? tab.path : null;
+}
+
 /** 关闭当前标签后的回退：文件优先，否则任意剩余标签，无则 null（回文件或空） */
 export function nextActiveTabId(tabs: TabItem[], closedId: string): string | null {
   const rest = tabs.filter((t) => t.id !== closedId);

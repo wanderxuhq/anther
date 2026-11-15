@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  addFileTab, removeTabById, fileTabPaths, currentFilePath, nextActiveTabId, terminalExists,
+  addFileTab, removeTabById, fileTabPaths, currentFilePath, tabFilePath, nextActiveTabId, terminalExists,
   GIT_TAB_ID, gitDiffTabId, addGitTab, addGitDiffTab,
   GIT_HISTORY_TAB_ID, GIT_BRANCH_TAB_ID, gitCommitTabId, addGitHistoryTab, addGitBranchTab, addGitCommitTab,
   addFeatureTab, syncFeatureTabs,
@@ -31,6 +31,16 @@ test('currentFilePath：文件→path，终端/无→null', () => {
   assert.equal(currentFilePath([fileA, term1], fileA.id), 'a.ts');
   assert.equal(currentFilePath([fileA, term1], term1.id), null);
   assert.equal(currentFilePath([fileA, term1], null), null);
+});
+
+test('tabFilePath：文件/数据库/diff 有路径，feature/terminal/git 没有', () => {
+  assert.equal(tabFilePath(fileA), 'a.ts');
+  assert.equal(tabFilePath({ kind: 'database', id: 'db', path: 'app.db', object: null, mode: 'data' }), 'app.db');
+  assert.equal(tabFilePath({ kind: 'git-diff', id: 'diff', path: 'a.ts' }), 'a.ts');
+  assert.equal(tabFilePath({ kind: 'feature', id: '/_/f', featureID: 'f', panelID: 'f', route: '/_/f', title: 'F', icon: 'x', path: '/session' }), null);
+  assert.equal(tabFilePath({ kind: 'terminal', id: 't_1', name: 'Terminal' }), null);
+  assert.equal(tabFilePath({ kind: 'git', id: GIT_TAB_ID }), null);
+  assert.equal(tabFilePath(null), null);
 });
 
 test('nextActiveTabId：关当前后回退（文件优先，否则任意剩余，无则 null）', () => {

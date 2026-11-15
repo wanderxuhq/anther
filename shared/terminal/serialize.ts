@@ -270,16 +270,13 @@ export function serializeScreen(screen: TerminalScreen): ScreenSnapshot {
   return { ...metaOf(screen), lines, styles };
 }
 
-/** 只发送脏行 + 因滚动新进入回滚区的行。 */
+/** 只发送脏行；滚入回滚区的行绝对行号不变，之前作为屏幕行已经发送过。 */
 export function serializeDiff(
   screen: TerminalScreen,
-  dirty: { rows: Set<number> | 'all'; scrolled: number },
+  dirty: { rows: Set<number> | 'all' },
 ): ScreenDiff {
   const rows = new Set<number>();
   if (dirty.rows !== 'all') for (const row of dirty.rows) rows.add(row);
-  // 全屏滚动时新行进入回滚区，它们不在 dirty 集合里，需要补上。
-  const scrollback = screen.getScrollbackLength();
-  for (let i = Math.max(0, scrollback - dirty.scrolled); i < scrollback; i++) rows.add(i);
   const { styles, lines } = serializeRows(screen, rows);
   return { ...metaOf(screen), styles, lines };
 }

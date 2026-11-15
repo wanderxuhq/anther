@@ -6,6 +6,16 @@ import { LspSession } from './lsp-session.ts';
 
 const stub = path.join(import.meta.dirname, 'fixtures', 'lsp-stub.js');
 
+/** Poll a bounded condition instead of sleeping a fixed amount. Bounded by poll
+ * count so a delayed timer or clock jump cannot trip a premature timeout. */
+async function waitFor(check: () => boolean, label: string, maxPolls = 400): Promise<void> {
+  for (let poll = 0; poll < maxPolls; poll++) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`timed out waiting for ${label}`);
+}
+
 function makeSession(env: Record<string, string> = {}, opts: Partial<ConstructorParameters<typeof LspSession>[0]> = {}) {
   // cmd/args/cwd 恒指向 stub，不被 opts 覆盖：先放默认、允许 opts 覆盖其余键，最后再强制回写。
   const forced = { cmd: process.execPath, args: [stub], cwd: process.cwd() };
@@ -45,7 +55,7 @@ test('LSP_STUB_DIAGS=1：open 后收到 publishDiagnostics', async () => {
   const s = makeSession({ LSP_STUB_DIAGS: '1' }, { onDiagnostics: (uri, diags) => { got = { uri, diags }; } });
   await s.start();
   await s.open('file:///tmp/a.ts', 'x', 'typescript');
-  await new Promise((r) => setTimeout(r, 300));
+  await waitFor(() => got !== null, 'publishDiagnostics');
   assert.ok(got, '应收到诊断');
   assert.equal((got as { diags: Array<{ message: string }> }).diags[0].message, 'stub diag');
   await s.dispose();
@@ -82,7 +92,7 @@ test('运行中崩溃：ready 后进程退出 → onExit 触发 → alive=false'
   // 直接杀底层进程模拟崩溃
   const proc = (s as unknown as { proc: { kill(): void } }).proc;
   proc.kill();
-  await new Promise((r) => setTimeout(r, 300));
+  await waitFor(() => code !== undefined, 'exit callback');
   assert.equal(s.alive, false);
   assert.notEqual(code, undefined);
 });

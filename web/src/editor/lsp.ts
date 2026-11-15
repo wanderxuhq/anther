@@ -4,11 +4,11 @@
 // onDiagnostics 经 setDiagnostics 推入。过期补全由请求 id 匹配丢弃（lsp-client 层）。
 import { ViewPlugin, EditorView } from '@codemirror/view';
 import { autocompletion, type CompletionSource } from '@codemirror/autocomplete';
-import { linter, setDiagnostics, type Diagnostic as CmDiagnostic } from '@codemirror/lint';
+import { setDiagnostics, type Diagnostic as CmDiagnostic } from '@codemirror/lint';
 import type { Extension } from '@codemirror/state';
 import { t } from '../i18n.ts';
 import {
-  connectLsp, completionItemToCm, diagnosticToCm, offsetToPosition,
+  connectLsp, completionItemToCm, diagnosticToCm,
   type LspSocket,
 } from './lsp-client.ts';
 
@@ -65,20 +65,12 @@ export function lspExtension(
     },
   );
 
-  // 光标前单词起点（补全替换范围）；identifier 字符：字母/数字/_/$
-  const tokenStart = (text: string, pos: number): number => {
-    let i = pos;
-    while (i > 0 && /[A-Za-z0-9_$]/.test(text[i - 1])) i--;
-    return i;
-  };
-
   const completionSource: CompletionSource = async (ctx) => {
     if (!socket) return null;
-    const text = ctx.state.doc.toString();
-    const pos = offsetToPosition(text, ctx.pos);
-    const items = await socket.completion(path, pos.line, pos.character, text);
+    const line = ctx.state.doc.lineAt(ctx.pos);
+    const items = await socket.completion(path, line.number - 1, ctx.pos - line.from);
     if (items.length === 0) return null;
-    return { from: tokenStart(text, ctx.pos), to: ctx.pos, options: items.map(completionItemToCm) };
+    return { from: ctx.matchBefore(/[A-Za-z0-9_$]+/)?.from ?? ctx.pos, to: ctx.pos, options: items.map(completionItemToCm) };
   };
 
   return {

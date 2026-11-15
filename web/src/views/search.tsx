@@ -39,25 +39,18 @@ export function SearchView() {
     cancelCurrent?.();
     setFiles([]);
     setStatus(null);
+    setTruncated(false);
     setError(null);
     setSearching(false);
     scheduleSearch();
   }));
 
   function runSearch() {
-    clearTimeout(debounceTimer); // 防抖挂起期被直接触发（大小写切换/取消）时清掉挂起 timer，防双重触发
+    clearTimeout(debounceTimer);
     const q = query().trim();
     const mySeq = ++seq;
     cancelCurrent?.(); // 取消旧流：服务端收到断开即停
-    setError(null);
-    setTruncated(false);
-    setStatus(null);
-    if (!q) {
-      setFiles([]);
-      setSearching(false);
-      return;
-    }
-    setFiles([]);
+    if (!q) return;
     setSearching(true);
     cancelCurrent = searchStream(
       { q, caseSensitive: caseSensitive(), exclude: exclude() },

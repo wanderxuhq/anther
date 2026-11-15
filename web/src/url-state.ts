@@ -1,5 +1,7 @@
 import { parseFragment, serializeFragment } from './url-fragment.ts';
 import type { DatabaseTarget } from './tab-model.ts';
+import { isArchiveEntryPath } from './file-target.ts';
+import { isArchiveFile } from './archive.ts';
 import { parseReadingLocation, writeReadingLocation, type ReadingLocation } from './readers/location.ts';
 import { parseTablePosition, writeTablePosition, finiteNumber } from './preview-state.ts';
 import type { FeatureRoute } from './feature-types.ts';
@@ -46,15 +48,14 @@ const COMMIT_RE = /^[0-9a-f]{4,64}$/i;
 const GIT_ROUTE = '_/git';
 const FILE_ROUTE = '_/file/';
 const DATABASE_ROUTE = '_/database/';
-const ARCHIVE_EXT = /\.(?:zip|jar|war|apk|xpi|cbz|7z|rar|tar|gz|tgz|bz2|tbz|tbz2|xz|txz)$/i;
 
-function isValidArchiveEntry(entry: string): boolean {
-  return entry.length > 0
-    && !/[\u0000-\u001f\u007f-\u009f]/.test(entry)
-    && !entry.startsWith('/')
-    && !entry.startsWith('\\')
-    && !/^[a-z]:/i.test(entry)
-    && !entry.split(/[\\/]/).includes('..');
+/** Validate the two archive query fields together; `entry` stays valid even if `inside` is not. */
+function normalizeArchive(path: string | null, inside: string[], entry: string | null): { inside: string[]; entry: string | null } {
+  if (!path || !isArchiveFile(path)) return { inside: [], entry: null };
+  const validChain = inside.length > 0
+    && inside.every((item) => isArchiveFile(item) && isArchiveEntryPath(item))
+    ? inside : [];
+  return { inside: validChain, entry: isArchiveEntryPath(entry) ? entry : null };
 }
 
 function encodePath(p: string): string {
@@ -174,13 +175,10 @@ export function parseUrl(href: string, base = '', featureRoutes: readonly Featur
     s.path = null;
   }
   if (s.view !== 'database' || !s.path) { s.database = null; if (s.view === 'database') s.view = 'file'; }
-  if ((s.view === 'file' || s.view === 'database') && s.path && ARCHIVE_EXT.test(s.path)) {
-    const inside = q.getAll('inside');
-    if (inside.length && inside.every((item) => ARCHIVE_EXT.test(item) && isValidArchiveEntry(item))) {
-      s.inside = inside;
-    }
-    const entry = q.get('entry');
-    if (entry && isValidArchiveEntry(entry)) s.entry = entry;
+  if (s.view === 'file' || s.view === 'database') {
+    const archive = normalizeArchive(s.path, q.getAll('inside'), q.get('entry'));
+    s.inside = archive.inside;
+    s.entry = archive.entry;
   }
   if (s.database && s.entry) s.database.archive = { entry: s.entry, chain: s.inside };
   if (s.view === 'file' && s.path) s.reader = parseReadingLocation(s.entry ?? (s.inside.length ? '' : s.path), position);
@@ -215,16 +213,14 @@ export function serializeUrl(state: UrlState, base = ''): string {
   if (state.lang) params.set('lang', state.lang);
   const path = !state.term && (view === 'file' || view === 'diff' || view === 'database') ? state.path : null;
   const inside = view === 'database' ? state.database?.archive?.chain ?? [] : state.inside;
-  const archiveEntry = view === 'database' ? state.database?.archive?.entry : state.entry;
-  const validInside = (view === 'file' || view === 'database') && path && ARCHIVE_EXT.test(path)
-    && inside.length > 0
-    && inside.every((item) => ARCHIVE_EXT.test(item) && isValidArchiveEntry(item));
-  if (validInside) for (const item of inside) params.append('inside', item);
-  const entry = (view === 'file' || view === 'database') && path && ARCHIVE_EXT.test(path) && archiveEntry && isValidArchiveEntry(archiveEntry)
-    ? archiveEntry : null;
-  if (entry) params.set('entry', entry);
-  if (view === 'file' && path) writeReadingLocation(position, entry ?? (validInside ? '' : path), state.reader);
-  if (view === 'file' && path && !position.size && (entry || !validInside) && state.line) {
+  const archiveEntry = view === 'database' ? state.database?.archive?.entry ?? null : state.entry;
+  const archive = view === 'file' || view === 'database'
+    ? normalizeArchive(path, inside, archiveEntry)
+    : { inside: [] as string[], entry: null };
+  for (const item of archive.inside) params.append('inside', item);
+  if (archive.entry) params.set('entry', archive.entry);
+  if (view === 'file' && path) writeReadingLocation(position, archive.entry ?? (archive.inside.length > 0 ? '' : path), state.reader);
+  if (view === 'file' && path && !position.size && (archive.entry || archive.inside.length === 0) && state.line) {
     const { start, end } = state.line;
     position.set('line', start === end ? String(start) : `${start}-${end}`);
   }

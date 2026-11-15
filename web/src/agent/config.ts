@@ -1,6 +1,23 @@
 // web/src/agent/config.ts
 // Pure helpers for ACP session config options.
-import type { AgentModeState, ConfigOption, ConfigOptionChoice, ConfigOptionGroup } from './api.ts';
+import type { AgentModeState, ConfigOption, ConfigOptionChoice, ConfigOptionGroup, Model } from './api.ts';
+
+/** Resolve the session's current model option to an available model. */
+export function modelFromConfig(
+  options: readonly ConfigOption[] | null | undefined,
+  models: readonly Model[],
+): Model | null {
+  const option = modelConfigOption(options);
+  if (!option || typeof option.currentValue !== 'string') return null;
+  const [providerID, ...rest] = option.currentValue.split('/');
+  return models.find((model) => model.providerID === providerID && model.id === rest.join('/')) ?? null;
+}
+
+/** The ACP config option that represents the session model, regardless of its id. */
+export function modelConfigOption(options: readonly ConfigOption[] | null | undefined): ConfigOption | undefined {
+  return options?.find((option) => option.type === 'select'
+    && (option.id === 'model' || option.category === 'model'));
+}
 
 /** Options that belong in the generic session-settings menu. */
 export function secondaryConfigOptions(options: readonly ConfigOption[] | null | undefined): ConfigOption[] {

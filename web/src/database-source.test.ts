@@ -46,6 +46,16 @@ test('tree and table share a worker, serialize queries and release it after the 
   b.dispose(); await tick(); assert.equal(worker.terminated, true);
 });
 
+test('source lifetime aborts requests without a caller signal', async () => {
+  const source = createSqliteSource('lifetime.db');
+  const pending = source.listObjects();
+  const rejected = assert.rejects(pending, { name: 'AbortError' });
+  source.dispose();
+  await rejected;
+  await tick();
+  assert.equal(FakeWorker.instances[0].terminated, true);
+});
+
 test('cancelling a running query terminates WASM and queued queries restart safely', async (t) => {
   const source = createSqliteSource('cancel.db'); t.after(() => source.dispose());
   const cancel = new AbortController();

@@ -19,6 +19,15 @@ const store = new Map<string, string>();
 
 let fetchCalls: { url: string; init: RequestInit }[] = [];
 
+async function until(check: () => boolean, nominalMs = 5000): Promise<void> {
+  const maxPolls = Math.max(1, Math.round(nominalMs / 10));
+  for (let poll = 0; poll < maxPolls; poll++) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(check(), 'condition not met before timeout');
+}
+
 function mockFetch(status: number, body: unknown) {
   (globalThis as Record<string, unknown>).fetch = async (
     url: string,
@@ -170,8 +179,9 @@ test('searchStream cancel 触发 abort（静默，不触发 onError）', async (
   let err = '';
   const { cancel } = searchStream({ q: 'x' }, { onFile: () => {}, onDone: () => {}, onError: (m) => { err = m; } });
   cancel();
-  await new Promise((r) => setTimeout(r, 20));
+  // abort 是同步的；让中止后的读循环有机会结算，确认没有被误报为 onError。
   assert.equal(signal?.aborted, true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(err, '');
 });
 
@@ -184,24 +194,24 @@ test('connectTerminal：CONNECTING 期间 input/resize 不抛，open 后帧送�
   await new Promise<void>((r) => server.listen(0, r));
   const { port } = server.address() as { port: number };
 
+  let sock: ReturnType<typeof connectTerminal> | undefined;
   try {
-    const sock = connectTerminal(
+    sock = connectTerminal(
       't1',
       { onOpen: () => {}, onScreen: () => {}, onScreenDiff: () => {}, onExit: () => {} },
       `ws://127.0.0.1:${port}/api/terminal?term=t1&user=u`, // URL 覆盖（node 不能建相对 URL）
     );
-    // 同步立即发：当前代码 readyState=0 → 抛 DOMException → doesNotThrow 红
-    assert.doesNotThrow(() => { sock.input('a'); sock.resize(120, 40); });
+    assert.doesNotThrow(() => { sock!.input('a'); sock!.resize(120, 40); });
 
-    await new Promise<void>((r) => setTimeout(r, 150)); // 等 open + flush
+    await until(() => received.length >= 2);
     const frames = received.map((f) => JSON.parse(f));
     assert.equal(frames[0]?.type, 'input');
     assert.equal(frames[0]?.data, 'a');
     assert.equal(frames[1]?.type, 'resize');
     assert.equal(frames[1]?.cols, 120);
     assert.equal(frames[1]?.rows, 40);
-    sock.dispose();
   } finally {
+    sock?.dispose();
     wss.close();
     await new Promise<void>((r) => server.close(() => r()));
   }
@@ -217,10 +227,11 @@ test('connectTerminal：screen / screen-diff 帧分发给对应 handler', async 
   await new Promise<void>((r) => server.listen(0, r));
   const { port } = server.address() as { port: number };
 
+  let sock: ReturnType<typeof connectTerminal> | undefined;
   try {
     const screens: Array<{ cols: number }> = [];
     const diffs: Array<{ cols: number }> = [];
-    const sock = connectTerminal(
+    sock = connectTerminal(
       't1',
       {
         onOpen: () => {},
@@ -230,11 +241,11 @@ test('connectTerminal：screen / screen-diff 帧分发给对应 handler', async 
       },
       `ws://127.0.0.1:${port}/api/terminal?term=t1&user=u`,
     );
-    await new Promise<void>((r) => setTimeout(r, 150));
+    await until(() => screens.length > 0 && diffs.length > 0);
     assert.equal(screens[0]?.cols, 80);
     assert.equal(diffs[0]?.cols, 90);
-    sock.dispose();
   } finally {
+    sock?.dispose();
     wss.close();
     await new Promise<void>((r) => server.close(() => r()));
   }

@@ -7,8 +7,9 @@ import type { Router } from '../http.ts';
 import { HttpError } from '../http-error.ts';
 import type { TerminalManager, TerminalScreenMessage } from '../terminal.ts';
 import type { FileStore } from '../files.ts';
-import type { RGB, TerminalQueryMeta } from '../terminal-queries.ts';
-import { WebSocket } from 'ws';
+import type { RGB, TerminalQueryMeta } from '../../shared/terminal/vt.ts';
+import { parseWsJson } from '../../shared/ws-json.ts';
+import { sendWsJson } from '../ws-send.ts';
 
 const userId = (req: import('node:http').IncomingMessage): string => {
   const h = req.headers['x-user-id'];
@@ -67,17 +68,14 @@ export function registerTerminalRoutes(http: Router, terminals: TerminalManager,
 
     // 方案 B：服务端是唯一模拟器。连接时先发完整屏幕快照（含回滚区），
     // 之后只发脏行 diff；浏览器不再解析 ANSI，也不会有两份光标状态。
-    ws.send(JSON.stringify(term.snapshotMessage()));
+    sendWsJson(ws, term.snapshotMessage());
     const onScreen = (message: TerminalScreenMessage) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+      sendWsJson(ws, message);
     };
     term.on('screen', onScreen);
 
     const onExit = (code: number) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'exit', code }));
-        ws.close();
-      }
+      if (sendWsJson(ws, { type: 'exit', code })) ws.close();
     };
     term.on('exit', onExit);
 
@@ -87,12 +85,12 @@ export function registerTerminalRoutes(http: Router, terminals: TerminalManager,
     });
 
     ws.on('message', (raw) => {
-      let msg: {
+      const msg = parseWsJson<{
         type?: string; data?: unknown; cols?: unknown; rows?: unknown;
         fg?: unknown; bg?: unknown; cursor?: unknown;
         pixelWidth?: unknown; pixelHeight?: unknown; cellWidth?: unknown; cellHeight?: unknown;
-      };
-      try { msg = JSON.parse(raw.toString()); } catch { return; }
+      }>(raw);
+      if (!msg) return;
       if (msg.type === 'input' && typeof msg.data === 'string') {
         term.write(msg.data);
       } else if (
@@ -112,7 +110,7 @@ export function registerTerminalRoutes(http: Router, terminals: TerminalManager,
         if (isPositive(msg.cellHeight)) meta.cellHeight = msg.cellHeight;
         term.setMeta(meta);
       } else if (msg.type === 'ping') {
-        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'pong' }));
+        sendWsJson(ws, { type: 'pong' });
       }
     });
   });

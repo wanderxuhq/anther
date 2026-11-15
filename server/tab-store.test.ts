@@ -10,7 +10,7 @@ function makeClock() {
 }
 
 test('open 追加标签并记录持有；close 移除前台持有者后标签消失', () => {
-  const { now, advance } = makeClock();
+  const { now } = makeClock();
   const s = new TabStore(90_000, now);
 
   s.open('u1', 'a.ts');

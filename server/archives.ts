@@ -18,6 +18,8 @@ export type ArchiveOptions = {
   sweepMs?: number;
   reserveBytes?: number;
   forceZip64?: boolean;
+  /** Test seam for expiry; defaults to the wall clock. */
+  now?: () => number;
 };
 export type ArchiveStatus = {
   kind: 'archive'; id: string; status: 'preparing' | 'ready' | 'failed';
@@ -52,6 +54,7 @@ export class ArchiveManager {
   private readonly completeMs: number;
   private readonly sweepMs: number;
   private readonly reserveBytes: number;
+  private readonly now: () => number;
 
   constructor(private files: FileStore, private options: ArchiveOptions = {}) {
     this.tempDir = options.tempDir ?? os.tmpdir();
@@ -59,6 +62,7 @@ export class ArchiveManager {
     this.completeMs = options.completeMs ?? 60_000;
     this.sweepMs = options.sweepMs ?? 30_000;
     this.reserveBytes = options.reserveBytes ?? 64 * 1024 * 1024;
+    this.now = options.now ?? Date.now;
   }
 
   private startCleanup() {
@@ -94,7 +98,7 @@ export class ArchiveManager {
       id: randomBytes(16).toString('hex'), rel, key,
       filename: `${path.basename(this.files.resolve(rel)) || 'workspace'}.zip`,
       state: 'preparing', phase: 'queued', controller: new AbortController(),
-      active: 0, touched: Date.now(), sent: [],
+      active: 0, touched: this.now(), sent: [],
       progress: { entries: 0, totalBytes: 0, readBytes: 0, writtenBytes: 0, checkedEntries: 0 },
     };
     this.jobs.set(job.id, job);
@@ -135,7 +139,7 @@ export class ArchiveManager {
           await fs.rm(p, { force: true }).then(() => this.garbage.delete(p), () => {});
         }
       }).finally(() => {
-        job.touched = Date.now();
+        job.touched = this.now();
         for (const [key, value] of this.pending) if (value === job) this.pending.delete(key);
         this.running--;
         this.pump();
@@ -209,7 +213,7 @@ export class ArchiveManager {
         const old = prior.get(entry.name);
         return old && version(old.stat) === version(entry.stat) && old.link === entry.link;
       }) && await fs.stat(previous.path!).then((st) => st.size === previous.size, () => false)) {
-        previous.touched = Date.now();
+        previous.touched = this.now();
         previous.completeAt = undefined;
         previous.sent = [];
         job.path = undefined;
@@ -300,7 +304,7 @@ export class ArchiveManager {
     const job = this.get(id);
     if (job.state !== 'ready') throw new HttpError(409, job.error ?? 'archive is not ready');
     job.active++;
-    job.touched = Date.now();
+    job.touched = this.now();
     try {
       const file = await fs.open(job.path!, 'r');
       const stat = await file.stat().catch(async (e) => { await file.close(); throw e; });
@@ -313,18 +317,18 @@ export class ArchiveManager {
           if (last && range.start <= last.end + 1) last.end = Math.max(last.end, range.end);
           else job.sent.push({ ...range });
         }
-        if (job.sent.length === 1 && job.sent[0].start === 0 && job.sent[0].end >= job.size! - 1) job.completeAt ??= Date.now();
+        if (job.sent.length === 1 && job.sent[0].start === 0 && job.sent[0].end >= job.size! - 1) job.completeAt ??= this.now();
       }
     } finally {
       job.active--;
-      job.touched = Date.now();
+      job.touched = this.now();
     }
   }
 
   sweep(): Promise<void> {
     if (this.sweeping) return this.sweeping;
     this.sweeping = (async () => {
-      const now = Date.now();
+      const now = this.now();
       for (const [id, job] of this.jobs) {
         if (job.active || job.state === 'preparing') continue;
         if (now - job.touched < this.idleMs && (!job.completeAt || now - Math.max(job.completeAt, job.touched) < this.completeMs)) continue;
@@ -347,7 +351,7 @@ export class ArchiveManager {
       const dir = path.join(this.tempDir, name);
       try {
         const st = await fs.lstat(dir);
-        if (!st.isDirectory() || Date.now() - st.mtimeMs < this.idleMs) continue;
+        if (!st.isDirectory() || this.now() - st.mtimeMs < this.idleMs) continue;
         const owner = JSON.parse(await fs.readFile(path.join(dir, 'owner.json'), 'utf8'));
         if (owner.app !== 'anther-archives' || owner.pid !== Number(match[1])) continue;
         try { process.kill(owner.pid, 0); continue; }

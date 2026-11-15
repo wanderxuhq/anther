@@ -1,6 +1,43 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { archiveChildren, archivePath, isArchiveFile, parseSevenZipListing } from './archive.ts';
+import { archiveChainFromKey, archiveChainKey, archiveChainOf, archiveChildren, archiveFeedbackKey, archiveKey, archivePath, archiveRootOf, isArchiveFile, parseSevenZipListing } from './archive.ts';
+
+test('archiveKey round-trips the root and nested chain', () => {
+  for (const [root, chain] of [
+    ['bundle.zip', []],
+    ['bundle #1.zip', ['inner.zip']],
+    ['-/a/../bundle.zip', ['docs/deep.7z', 'leaf.tar']],
+  ] as const) {
+    const key = archiveKey(root, [...chain]);
+    assert.equal(archiveRootOf(key), root);
+    assert.deepEqual(archiveChainOf(key), chain);
+  }
+});
+
+test('archiveChainKey / archiveChainFromKey / archiveChainOf round-trip without JSON', () => {
+  assert.equal(archiveChainKey([]), '');
+  assert.equal(archiveChainKey(['a.zip']), 'a.zip');
+  assert.equal(archiveChainKey(['a.zip', 'b.7z']), 'a.zip\0b.7z');
+  assert.deepEqual(archiveChainFromKey(''), []);
+  assert.deepEqual(archiveChainFromKey(archiveChainKey(['a.zip', 'b.7z'])), ['a.zip', 'b.7z']);
+  assert.deepEqual(archiveChainOf(`root\0${archiveChainKey(['a.zip', 'b.7z'])}`), ['a.zip', 'b.7z']);
+  assert.deepEqual(archiveChainOf('root\0'), []);
+  assert.equal(archiveRootOf('plain'), 'plain');
+  assert.deepEqual(archiveChainOf('plain'), []);
+});
+
+test('archiveFeedbackKey groups by archive identity and separates budget failures', () => {
+  const key = archiveFeedbackKey('bundle.zip', ['inner.zip']);
+  assert.equal(key, archiveFeedbackKey('bundle.zip', ['inner.zip']));
+  assert.equal(key, archiveFeedbackKey('bundle.zip', ['inner.zip'], 'depth'));
+  assert.notEqual(key, archiveFeedbackKey('bundle.zip', ['other.zip']));
+  assert.notEqual(key, archiveFeedbackKey('other.zip', ['inner.zip']));
+  const budget = archiveFeedbackKey('bundle.zip', ['inner.zip'], 'budget');
+  assert.equal(budget, archiveFeedbackKey('bundle.zip', [], 'budget'));
+  assert.equal(budget, archiveFeedbackKey('bundle.zip', ['other.zip'], 'budget'));
+  assert.notEqual(budget, archiveFeedbackKey('other.zip', [], 'budget'));
+  assert.equal(archiveFeedbackKey('bundle.zip'), archiveFeedbackKey('bundle.zip', []));
+});
 
 test('archivePath 规范化分隔符并拒绝绝对路径、越界段和控制字符', () => {
   assert.equal(archivePath('docs\\./guide//start.md'), 'docs/guide/start.md');

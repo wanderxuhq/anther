@@ -2,11 +2,25 @@
 // TerminalManager 单测：创建/列表（每用户隔离）/所有权/关闭杀进程/退出自动移除/屏幕快照与 diff。
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { Terminal, TerminalManager } from './terminal.ts';
+import { Terminal, TerminalManager, type TerminalScreenMessage } from './terminal.ts';
 import { PtySession } from './pty.ts';
 
 const cwd = process.cwd();
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Await the next serialized screen update instead of sleeping for the flush timer. */
+function nextScreen(term: Terminal, timeoutMs = 2_000): Promise<TerminalScreenMessage> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      term.off('screen', onScreen);
+      reject(new Error('terminal screen update timed out'));
+    }, timeoutMs);
+    const onScreen = (message: TerminalScreenMessage) => {
+      clearTimeout(timer);
+      resolve(message);
+    };
+    term.once('screen', onScreen);
+  });
+}
 
 let m: TerminalManager;
 beforeEach(() => { m = new TerminalManager(cwd); });
@@ -42,19 +56,18 @@ test('bash 退出 → 自动移除 + exit 事件', async () => {
   const exited = new Promise<number>((r) => term.once('exit', r));
   term.write('exit\n');
   assert.equal(await exited, 0);
-  await sleep(100); // manager 移除在 pty exit 同步链内，sleep 兜底
+  // manager 先删列表再 emit exit，await 返回时已经移除。
   assert.equal(m.get('u1', a.id), null);
 });
 
 test('screen：40ms 批处理把连续 data 合并成一次屏幕更新', async () => {
   const a = await m.create('u1', 'T');
   const term = m.get('u1', a.id)!;
-  const got: string[] = [];
-  term.on('screen', (message) => got.push(JSON.stringify(message)));
+  const update = nextScreen(term);
   term.pty.emit('data', 'ab');
   term.pty.emit('data', 'cd');
-  await sleep(80);
-  assert.ok(got.some((batch) => batch.includes('abcd')), `未找到合并批：${JSON.stringify(got)}`);
+  const message = await update;
+  assert.ok(JSON.stringify(message).includes('abcd'), `未找到合并批：${JSON.stringify(message)}`);
 });
 
 test('snapshot：包含屏幕/光标/尺寸，供连接时重建画面', async () => {
@@ -78,7 +91,7 @@ test('snapshot：包含屏幕/光标/尺寸，供连接时重建画面', async (
   await term.close();
 });
 
-test('diff：只发送脏行，包含新进入回滚区的行', async () => {
+test('diff：只发送脏行', async () => {
   const handlers: Array<(chunk: string) => void> = [];
   const fake = {
     on: (event: string, handler: (chunk: string) => void) => { if (event === 'data') handlers.push(handler); },
@@ -87,14 +100,13 @@ test('diff：只发送脏行，包含新进入回滚区的行', async () => {
     kill: async () => {},
   } as unknown as PtySession;
   const term = new Terminal('t_diff', 'T', fake);
+  // 先消费 resize 触发的全量画面，清掉 dirty 后再喂数据。
+  const resized = nextScreen(term);
   await term.resize(20, 4);
-  await sleep(60); // 先让 resize 的全量 dirty 在无订阅时被清掉
-  const messages: Array<{ type: string; lines?: Array<{ row: number }> }> = [];
-  term.on('screen', (message) => messages.push(message));
+  await resized;
   const feed = (data: string) => { for (const handler of handlers) handler(data); };
   feed('\x1b[1;1Hone\r\ntwo\r\nthree\r\nfour\r\nfive');
-  await sleep(80);
-  const last = messages.at(-1)!;
+  const last = await nextScreen(term);
   assert.equal(last.type, 'screen-diff');
   assert.ok(last.lines && last.lines.length > 0);
   await term.close();

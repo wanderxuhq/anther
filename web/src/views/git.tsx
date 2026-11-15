@@ -1,7 +1,7 @@
 // web/src/views/git.tsx
 // Git 面板（主区域独立标签，单例）：同步栏（fetch/pull/push + ahead/behind）、
 // 提交区（含 amend）、已暂存/工作区分组。行主体打开 diff，行尾是暂存切换与丢弃。
-import { createEffect, createSignal, For, Show, onCleanup } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, Show, onCleanup } from 'solid-js';
 import { api, type GitChange, type GitStatus } from '../api.ts';
 import { openGitDiff, gitRefreshTick } from '../stores.ts';
 import { t } from '../i18n.ts';
@@ -10,6 +10,15 @@ import { canCommit, changeBadge, stagedChanges, statusClass, unstagedChanges } f
 
 type SyncAction = 'fetch' | 'pull' | 'push';
 type BusyAction = SyncAction | 'stage' | 'unstage' | 'discard' | 'commit';
+type GitGroup = {
+  label: string;
+  changes: GitChange[];
+  action: 'stage' | 'unstage';
+  rowLabel: string;
+  allLabel: string;
+  rowIcon: 'minus' | 'plus';
+  staged: boolean;
+};
 
 export function GitView() {
   const [status, setStatus] = createSignal<GitStatus | null>(null);
@@ -120,6 +129,15 @@ export function GitView() {
   }
 
   const canSync = () => !!status()?.isRepo && !busy();
+  const groups = createMemo<GitGroup[]>(() => {
+    const value = status();
+    return [
+      { label: t('git.staged'), changes: stagedChanges(value), action: 'unstage',
+        rowLabel: t('git.unstage'), allLabel: t('git.unstageAll'), rowIcon: 'minus', staged: true },
+      { label: t('git.changes'), changes: unstagedChanges(value), action: 'stage',
+        rowLabel: t('git.stage'), allLabel: t('git.stageAll'), rowIcon: 'plus', staged: false },
+    ];
+  });
 
   return (
     <div class="git-view">
@@ -187,65 +205,39 @@ export function GitView() {
       </Show>
 
       <div class="git-scroll">
-        <Show when={stagedChanges(status()).length > 0}>
-          <div class="git-group-head">
-            <span>{t('git.staged')}</span>
-            <span class="git-group-count">{stagedChanges(status()).length}</span>
-            <button class="link-btn git-group-action" disabled={!!busy()}
-              onClick={() => void mutate('unstage', stagedChanges(status()).map((c) => c.path))}>
-              {t('git.unstageAll')}
-            </button>
-          </div>
-          <ul class="git-list">
-            <For each={stagedChanges(status())}>
-              {(change) => (
-                <li class="git-row">
-                  <button class="git-row-main" onClick={() => void openGitDiff(change.path)} title={t('git.viewDiff')}>
-                    <span class="git-path">{change.path}</span>
-                    <span class={`git-status git-status-${statusClass(changeBadge(change, true))}`}>{changeBadge(change, true)}</span>
-                  </button>
-                  <button class="git-row-btn" title={t('git.unstage')} aria-label={`${t('git.unstage')} ${change.path}`}
-                    disabled={!!busy()} onClick={() => void mutate('unstage', [change.path])}><Icon name="minus" size={18} /></button>
-                  <button class={`git-row-btn ${discardPath() === change.path ? 'danger' : ''}`}
-                    title={discardPath() === change.path ? t('git.confirmDiscard') : t('git.discard')}
-                    aria-label={t('git.discard')} disabled={!!busy()} onClick={() => onDiscard(change)}>
-                    <Icon name={discardPath() === change.path ? 'alert' : 'undo'} size={18} />
-                  </button>
-                </li>
-              )}
-            </For>
-          </ul>
-        </Show>
-
-        <Show when={unstagedChanges(status()).length > 0}>
-          <div class="git-group-head">
-            <span>{t('git.changes')}</span>
-            <span class="git-group-count">{unstagedChanges(status()).length}</span>
-            <button class="link-btn git-group-action" disabled={!!busy()}
-              onClick={() => void mutate('stage', unstagedChanges(status()).map((c) => c.path))}>
-              {t('git.stageAll')}
-            </button>
-          </div>
-          <ul class="git-list">
-            <For each={unstagedChanges(status())}>
-              {(change) => (
-                <li class="git-row">
-                  <button class="git-row-main" onClick={() => void openGitDiff(change.path)} title={t('git.viewDiff')}>
-                    <span class="git-path">{change.path}</span>
-                    <span class={`git-status git-status-${statusClass(changeBadge(change, false))}`}>{changeBadge(change, false)}</span>
-                  </button>
-                  <button class="git-row-btn" title={t('git.stage')} aria-label={`${t('git.stage')} ${change.path}`}
-                    disabled={!!busy()} onClick={() => void mutate('stage', [change.path])}><Icon name="plus" size={18} /></button>
-                  <button class={`git-row-btn ${discardPath() === change.path ? 'danger' : ''}`}
-                    title={discardPath() === change.path ? t('git.confirmDiscard') : t('git.discard')}
-                    aria-label={t('git.discard')} disabled={!!busy()} onClick={() => onDiscard(change)}>
-                    <Icon name={discardPath() === change.path ? 'alert' : 'undo'} size={18} />
-                  </button>
-                </li>
-              )}
-            </For>
-          </ul>
-        </Show>
+        <For each={groups()}>
+          {(group) => (
+            <Show when={group.changes.length > 0}>
+              <div class="git-group-head">
+                <span>{group.label}</span>
+                <span class="git-group-count">{group.changes.length}</span>
+                <button class="link-btn git-group-action" disabled={!!busy()}
+                  onClick={() => void mutate(group.action, group.changes.map((change) => change.path))}>
+                  {group.allLabel}
+                </button>
+              </div>
+              <ul class="git-list">
+                <For each={group.changes}>
+                  {(change) => (
+                    <li class="git-row">
+                      <button class="git-row-main" onClick={() => void openGitDiff(change.path)} title={t('git.viewDiff')}>
+                        <span class="git-path">{change.path}</span>
+                        <span class={`git-status git-status-${statusClass(changeBadge(change, group.staged))}`}>{changeBadge(change, group.staged)}</span>
+                      </button>
+                      <button class="git-row-btn" title={group.rowLabel} aria-label={`${group.rowLabel} ${change.path}`}
+                        disabled={!!busy()} onClick={() => void mutate(group.action, [change.path])}><Icon name={group.rowIcon} size={18} /></button>
+                      <button class={`git-row-btn ${discardPath() === change.path ? 'danger' : ''}`}
+                        title={discardPath() === change.path ? t('git.confirmDiscard') : t('git.discard')}
+                        aria-label={t('git.discard')} disabled={!!busy()} onClick={() => onDiscard(change)}>
+                        <Icon name={discardPath() === change.path ? 'alert' : 'undo'} size={18} />
+                      </button>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </Show>
+          )}
+        </For>
       </div>
     </div>
   );

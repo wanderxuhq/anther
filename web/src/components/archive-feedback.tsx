@@ -1,34 +1,37 @@
-import { createEffect, createMemo, createSignal, onCleanup, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from 'solid-js';
 import { archiveSession, cancelArchive, ensureArchive } from '../archive-sessions.ts';
 import { archiveLimits } from '../archive-settings.ts';
+import { visibleFeedbackHostId, type FeedbackHost } from './archive-feedback-model.ts';
 import { t } from '../i18n.ts';
 import { Icon } from './icons.tsx';
 import './archive.css';
 
-type FeedbackHost = { id: number; path: string; chain: string[]; entry?: string; priority: number };
 const [hosts, setHosts] = createSignal<FeedbackHost[]>([]);
 let nextHost = 0;
 const session = (host: FeedbackHost) => archiveSession(host.path, host.chain);
-const group = (host: FeedbackHost) => session(host)?.limit === 'budget'
-  ? JSON.stringify([host.path, 'budget']) : JSON.stringify([host.path, host.chain]);
 
 /** Multiple surfaces may observe a session, but only one owns its feedback/retry UI. */
 export function ArchiveFeedback(props: { path: string; chain?: string[]; entry?: string | null; priority?: number; retry?: (password?: string) => void }) {
   const id = ++nextHost;
   const state = () => archiveSession(props.path, props.chain);
-  createEffect(() => {
-    const host: FeedbackHost = { id, path: props.path, chain: props.chain ?? [], entry: props.entry ?? undefined, priority: props.priority ?? 0 };
-    setHosts((items) => [...items, host]);
+  const snapshot = (): FeedbackHost => ({
+    id,
+    path: props.path,
+    chain: props.chain ?? [],
+    entry: props.entry ?? undefined,
+    priority: props.priority ?? 0,
+  });
+  onMount(() => {
+    setHosts((items) => [...items, snapshot()]);
     onCleanup(() => setHosts((items) => items.filter((item) => item.id !== id)));
   });
-  const visible = createMemo(() => {
-    const own = hosts().find((host) => host.id === id);
-    if (!own) return false;
-    const candidates = hosts().filter((host) => group(host) === group(own));
-    const score = (host: FeedbackHost) => host.priority + (session(host)?.entry && session(host)?.entry === host.entry ? 100 : 0);
-    candidates.sort((a, b) => score(b) - score(a) || b.id - a.id);
-    return candidates[0]?.id === id;
-  });
+  // Props can change without remounting this component (for example when the
+  // active archive/entry changes), so refresh the existing host, never re-add it.
+  createEffect(on(() => [props.path, props.chain, props.entry, props.priority], () => {
+    const host = snapshot();
+    setHosts((items) => items.map((item) => item.id === id ? host : item));
+  }, { defer: true }));
+  const visible = createMemo(() => visibleFeedbackHostId(hosts(), id, session) === id);
   const [password, setPassword] = createSignal('');
   const retry = (password?: string) => props.retry ? props.retry(password) : void ensureArchive(props.path, password, true, props.chain).catch(() => {});
   return <Show when={visible()}><div class="archive-feedback">
