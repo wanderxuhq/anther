@@ -82,9 +82,12 @@ Open `http://localhost:3000` by default. The server listens only on the local ma
 | `--host <addr>` | Listen on a specific address |
 | `--no-attach` | Do not attach to an anther already serving the port |
 | `--detach` | Detach the current directory from the running server and exit |
+| `--update` | Update to the latest published version and exit |
 | `--feature <spec>` | Load an optional first-party feature package (repeatable; also `ANTHER_FEATURES`) |
 
 If the port is already served by anther, running `anther` in another directory attaches that directory to the existing server. Each attached workspace gets its own URL prefix (`/-/<name>/`), and `/-` lists all mounted instances with options to open or detach them. Use `--no-attach` to disable attaching, and `anther --detach` to detach from the command line.
+
+On startup anther checks npm for a newer published version in the background. The check never delays startup, prints only when a newer version exists, and is disabled with `ANTHER_NO_UPDATE_CHECK=1`. `anther --update` upgrades a normal installation; npx runs and source checkouts print the matching command instead.
 
 Terminals require POSIX `script`, `stty`, and `bash` (use WSL on Windows). Git features require `git` on the server.
 

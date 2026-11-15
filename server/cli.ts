@@ -13,8 +13,17 @@ import type { AppIdentity } from './app-info.ts';
 import type { AttachInfo, MountWire } from './mount-types.ts';
 import { isLoopbackHost, isValidHost, isWildcardHost } from './host.ts';
 import { FeatureRegistry } from './features.ts';
+import { reportUpdateAvailable, runUpdate } from './update.ts';
 
-export type CliArgs = { dir: string; port: number; host: string; attach: boolean; detach: boolean; features: string[] };
+export type CliArgs = {
+  dir: string;
+  port: number;
+  host: string;
+  attach: boolean;
+  detach: boolean;
+  update: boolean;
+  features: string[];
+};
 
 /**
  * 静态目录解析：源码形态（server/cli.ts）→ <root>/web；编译产物（dist/server/cli.js）
@@ -31,6 +40,7 @@ export function parseArgs(argv: string[]): CliArgs {
   let host = '127.0.0.1';
   let attach = true;
   let detach = false;
+  let update = false;
   const features = (process.env.ANTHER_FEATURES ?? '').split(',').map((item) => item.trim()).filter(Boolean);
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -51,6 +61,7 @@ export function parseArgs(argv: string[]): CliArgs {
     if (a === '--no-attach') { attach = false; continue; }
     if (a === '--attach') { attach = true; continue; }
     if (a === '--detach') { detach = true; continue; }
+    if (a === '--update') { update = true; continue; }
     if (a === '--feature') {
       const raw = argv[++i];
       if (!raw) throw new Error('invalid --feature');
@@ -62,7 +73,7 @@ export function parseArgs(argv: string[]): CliArgs {
   }
   if (positional.length > 1) throw new Error('too many arguments');
   if (positional.length === 1) dir = path.resolve(positional[0]);
-  return { dir, port, host, attach, detach, features };
+  return { dir, port, host, attach, detach, update, features };
 }
 
 /** 第一个 IPv4 局域网地址；取不到（无网络接口 / 沙箱受限）返回 null。供启动日志打印手机访问地址。 */
@@ -225,6 +236,10 @@ async function detachFromHost(args: CliArgs, dir: string): Promise<number> {
 export async function main(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
   const dir = args.dir;
+  if (args.update) {
+    process.exitCode = await runUpdate();
+    return;
+  }
   if (args.detach) {
     process.exitCode = await detachFromHost(args, dir);
     return;
@@ -282,6 +297,8 @@ export async function main(argv: string[]): Promise<void> {
   const hostMount = registry.listWire().find((mount) => mount.legacyRoot);
   if (hostMount) printMount(actualPort, hostMount, 'Mount', args.host);
   console.log(`Attach: ${attachState.available ? 'enabled' : 'disabled'}`);
+  // 启动输出完成后才发起后台检查；不 await，绝不拖慢启动
+  void reportUpdateAvailable();
 }
 
 // 直接运行时（node server/cli.ts）启动服务器；被 import（如测试）时不执行

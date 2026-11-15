@@ -82,9 +82,12 @@ anther /path/to/project
 | `--host <地址>` | 监听指定地址 |
 | `--no-attach` | 不附加到已经占用该端口的 anther |
 | `--detach` | 从运行中的服务器卸载当前目录并退出 |
+| `--update` | 更新到最新发布版本并退出 |
 | `--feature <spec>` | 加载可选的第一方功能包（可重复；也支持 `ANTHER_FEATURES`） |
 
 如果端口已经由 anther 提供服务，在另一个目录运行 `anther` 会把该目录附加到现有服务器。每个附加的工作区都有自己的 URL 前缀（`/-/<名称>/`），`/-` 页面会列出所有实例，可直接打开或卸载。用 `--no-attach` 关闭附加，用 `anther --detach` 从命令行卸载。
+
+启动时 anther 会在后台向 npm 检查是否有更新的发布版本。检查不会拖慢启动，仅在存在新版本时输出提示，可用 `ANTHER_NO_UPDATE_CHECK=1` 关闭。`anther --update` 会升级正常安装的版本；通过 npx 运行或源码目录则只打印对应的升级命令。
 
 终端需要 POSIX 的 `script`、`stty` 和 `bash`（Windows 请用 WSL）。Git 功能需要服务器上安装 `git`。
 

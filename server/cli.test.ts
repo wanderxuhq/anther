@@ -54,6 +54,11 @@ test('--detach：只卸载当前目录，不启动服务器', () => {
   assert.equal(a.detach, true);
 });
 
+test('--update：只执行更新，不启动服务器', () => {
+  assert.equal(parseArgs(['--update']).update, true);
+  assert.equal(parseArgs([]).update, false);
+});
+
 test('未知选项报错', () => {
   assert.throws(() => parseArgs(['--unknown']), /unknown option/);
 });
