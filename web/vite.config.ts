@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import solid from 'vite-plugin-solid';
 import path from 'node:path';
 import os from 'node:os';
@@ -15,9 +15,33 @@ try {
   });
 }
 
+// Vite 以 web/ 为 root：工作区里的 tsconfig.json、src/... 等路径在浏览器刷新时
+// 会命中 web/ 下的真实文件，直接返回静态内容而不启动 SPA。导航请求统一交给
+// index.html，让 URL 恢复（包括 #line:）始终走前端路由；API/功能 bundle 仍走代理。
+function spaNavigationFallback(): Plugin {
+  const proxiedFeature = /^\/_\/[^/]+\/(?:ui\.js|api(?:\/|$))/;
+  return {
+    name: 'anther:spa-navigation-fallback',
+    apply: 'serve',
+    configureServer(server) {
+      server.middlewares.use((req, _res, next) => {
+        if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+        const pathname = (req.url ?? '/').split('?')[0];
+        const accept = req.headers.accept ?? '';
+        const mode = req.headers['sec-fetch-mode'];
+        if (!String(accept).includes('text/html') || (mode && mode !== 'navigate')) return next();
+        if (pathname.startsWith('/@') || pathname === '/api' || pathname.startsWith('/api/')
+          || proxiedFeature.test(pathname)) return next();
+        req.url = '/index.html';
+        next();
+      });
+    },
+  };
+}
+
 export default defineConfig({
   root: path.resolve(import.meta.dirname),
-  plugins: [solid(), pdfAssets()],
+  plugins: [spaNavigationFallback(), solid(), pdfAssets()],
   worker: { format: 'es' },
   optimizeDeps: { exclude: ['@sqlite.org/sqlite-wasm'], include: ['@zip.js/zip.js', 'pdfjs-dist', 'pdfjs-dist/web/pdf_viewer.mjs'] },
   server: {
