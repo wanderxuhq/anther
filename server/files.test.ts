@@ -41,6 +41,17 @@ test('read/write 往返', async () => {
   assert.equal((await store.read('sub/b.txt')).content, '你好');
 });
 
+test('hasObsidianVault 只认根目录的 .obsidian 目录', async () => {
+  assert.equal(await store.hasObsidianVault(), false);
+  await mkdir(path.join(root, 'sub', '.obsidian'));
+  assert.equal(await store.hasObsidianVault(), false);
+  await mkdir(path.join(root, '.obsidian'));
+  assert.equal(await store.hasObsidianVault(), true);
+  await rm(path.join(root, '.obsidian'), { recursive: true });
+  await writeFile(path.join(root, '.obsidian'), 'not a directory');
+  assert.equal(await store.hasObsidianVault(), false);
+});
+
 test('read 不存在的文件抛 404', async () => {
   await assert.rejects(store.read('nope.txt'), (e: HttpError) => e.status === 404);
 });

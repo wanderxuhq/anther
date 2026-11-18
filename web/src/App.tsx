@@ -14,17 +14,17 @@ import { FeatureView } from './views/feature.tsx';
 import { featurePanels } from './features.ts';
 import { tabFilePath, type FeatureTab } from './tab-model.ts';
 import type { FeaturePanel, FeatureToolbarAction } from './feature-types.ts';
-import { api } from './api.ts';
+import { api, type ObsidianLinkTarget } from './api.ts';
 import {
-  activeTab, currentTabId, setCurrentTabId, openTerminal, closeAnyTab,
+  activeTab, currentTabId, setCurrentTabId, openTerminal, closeAnyTab, openTab,
   readingLocationFor, readerRestoreRequest, updateReadingLocation,
   openGit, openDatabaseTab, closeTab,
   openFeature, openFeatureAt, closeFeatureAt, updateFeatureTab, applyFeatureTabs,
   archiveChain, archiveEntry, openArchiveEntry, activeArchiveRoot,
-  currentFile, roMode, setRoMode, pushState, fontScale,
+  currentFile, roMode, setRoMode, pushState, fontScale, obsidianVault, setReadingLocationFor,
   pendingGoto, setPendingGoto, docLoadedPath, setDocLoadedPath,
   editorHandle, setEditorHandle,
-  activePanel, selectPanel, drawerOpen, setDrawerOpen, updateFilePosition,
+  activePanel, selectPanel, drawerOpen, setDrawerOpen, updateFilePosition, updateSearch,
   openGitHistory, openGitBranch, createBranch, currentBranch, setCurrentBranch, setGitRefreshTick,
   theme, setTheme, applyTheme,
   tabs,
@@ -34,7 +34,7 @@ import { describeLanguage, loadLanguage } from './editor/language.ts';
 import { t } from './i18n.ts';
 import { setTerminalKeyBarOpen, setTerminalRenderMode, terminalKeyBarOpen, terminalRenderMode } from './terminal/settings.ts';
 import { isMarkdownFile, parseMarkdownDocument } from './markdown.ts';
-import { MarkdownPreview } from './components/markdown-preview.tsx';
+import { MarkdownPreview, queueObsidianBlockNavigation } from './components/markdown-preview.tsx';
 import { Icon, type IconName } from './components/icons.tsx';
 import { preparingDownload, startDownload, setBeforeDownload } from './download.ts';
 import { isImageFile, isBinaryImage } from './image.ts';
@@ -50,6 +50,7 @@ import { DatabaseIcon } from './components/database-icon.tsx';
 import type { DatabaseController } from './database/controller.ts';
 import { ArchiveOptions } from './components/archive-options.tsx';
 import { SystemInfoDialog } from './components/system-info.tsx';
+import type { ReaderOutlineItem } from './readers/types.ts';
 
 const NARROW_QUERY = '(max-width: 599px)';
 
@@ -81,6 +82,15 @@ async function writeWithRetry(write: () => Promise<void>, timing: SaveTiming = s
       await new Promise((resolve) => setTimeout(resolve, timing.retryMs));
     }
   }
+}
+
+function headingCandidates(heading: string): Set<string> {
+  const parts = heading.split('#').map((part) => part.trim()).filter(Boolean);
+  return new Set([parts.join('#'), parts.at(-1) ?? '']);
+}
+
+function flattenOutline(items: ReaderOutlineItem[]): ReaderOutlineItem[] {
+  return items.flatMap((item) => [item, ...flattenOutline(item.children)]);
 }
 
 export function App() {
@@ -192,6 +202,69 @@ export function App() {
     try { navigateMarkdown?.(location?.kind === 'markdown' ? location.heading : ''); }
     catch { navigateMarkdown?.(''); }
   };
+  const scrollToMarkdownHeading = (heading: string): boolean => {
+    if (!navigateMarkdown) return false;
+    const candidates = headingCandidates(heading);
+    const nodes = [...document.querySelectorAll<HTMLElement>('.markdown-preview [data-md-heading]')];
+    const match = nodes.find((node) => candidates.has((node.textContent ?? '').trim()));
+    if (!match) return false;
+    navigateMarkdown(match.dataset.mdHeading!);
+    return true;
+  };
+  const scrollToMarkdownBlock = (block: string): boolean => {
+    const element = document.querySelector<HTMLElement>(`.markdown-preview [id="^${block}"]`);
+    if (!element) return false;
+    element.scrollIntoView?.({ block: 'center' });
+    return true;
+  };
+  const headingIdFor = async (path: string, heading: string): Promise<string | null> => {
+    try {
+      const { content, utf8 } = await api.readFile(path);
+      if (!utf8) return null;
+      const parsed = parseMarkdownDocument(content, path, undefined, true, obsidianVault());
+      const candidates = headingCandidates(heading);
+      return flattenOutline(parsed.outline).find((item) => candidates.has(item.title.trim()))?.id ?? null;
+    } catch { return null; }
+  };
+  const searchObsidianTag = (tag: string): void => {
+    // Search without '#' so both inline #tags and frontmatter tag values match.
+    selectPanel('search');
+    updateSearch({ query: tag });
+  };
+  const openObsidianLink = async (target: string, source?: string): Promise<void> => {
+    const current = currentFile();
+    const from = source || current;
+    if (!from) return;
+    let resolved: ObsidianLinkTarget;
+    try {
+      resolved = await api.obsidianResolve(target, from);
+    } catch {
+      showToast(t('obsidian.unresolved', { target }), 'error');
+      return;
+    }
+    if (!resolved.path) {
+      showToast(t('obsidian.unresolved', { target }), 'error');
+      return;
+    }
+    if (resolved.path === current) {
+      if (resolved.heading) scrollToMarkdownHeading(resolved.heading);
+      else if (resolved.block) scrollToMarkdownBlock(resolved.block);
+      return;
+    }
+    if (resolved.heading && isMarkdownFile(resolved.path)) {
+      const key = fileTargetKey({ path: resolved.path });
+      const id = await headingIdFor(resolved.path, resolved.heading);
+      setReadingLocationFor(key, id === null ? null : { kind: 'markdown', heading: id });
+    } else if (resolved.block && isMarkdownFile(resolved.path)) {
+      queueObsidianBlockNavigation(resolved.path, resolved.block);
+    }
+    try {
+      await openTab(resolved.path);
+    } catch (e) {
+      queueObsidianBlockNavigation('', '');
+      showToast(t('toast.openFail', { msg: (e as Error).message }), 'error');
+    }
+  };
   createEffect(on(readerRestoreRequest, (request) => {
     if (request?.key === documentKey()) restoreMarkdown();
   }));
@@ -207,7 +280,7 @@ export function App() {
         if (!navigateMarkdown) throw new Error('Markdown preview unavailable');
         navigateMarkdown(id);
       } else {
-        const line = parseMarkdownDocument(document.content).lines.get(id);
+        const line = parseMarkdownDocument(document.content, undefined, undefined, true, obsidianVault()).lines.get(id);
         if (line === undefined) throw new Error('Heading unavailable');
         editor?.gotoLine(line);
       }
@@ -835,6 +908,9 @@ export function App() {
           <Show when={loadedDoc()?.path === currentFile()} fallback={<div class="view-placeholder" role="status">{t('loading')}</div>}>
             <Show when={documentPath()} keyed>
               {(path) => <MarkdownPreview content={loadedDoc()?.content ?? ''} path={path} allowRelativeLinks={!browsingArchive()}
+                obsidian={obsidianVault()}
+                onObsidianLink={browsingArchive() ? undefined : (target, from) => void openObsidianLink(target, from)}
+                onObsidianTag={browsingArchive() ? undefined : searchObsidianTag}
                 onHeading={(heading) => updateReadingLocation(documentKey(), { kind: 'markdown', heading })}
                 onNavigator={(navigate) => { navigateMarkdown = navigate; if (navigate) restoreMarkdown(); }} />}
             </Show>

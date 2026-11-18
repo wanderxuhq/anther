@@ -6,13 +6,28 @@ import { sendDownload } from '../download.ts';
 import { sendImage } from '../images.ts';
 import { inspectFile, sendPreview } from '../preview.ts';
 import { ArchiveManager, type ArchiveOptions } from '../archives.ts';
+import { ObsidianIndex } from '../obsidian.ts';
 
 export function registerFsRoutes(http: Router, files: FileStore, archiveOptions?: ArchiveOptions): ArchiveManager {
   const archives = new ArchiveManager(files, archiveOptions);
+  const obsidian = new ObsidianIndex(files);
   http.onClose(() => archives.dispose());
 
   http.get('/api/list', async (_req, _body, q) => {
     return { entries: await files.list(q.get('path') ?? '.') };
+  });
+
+  // 工作区根目录的 Obsidian 标记：默认配置目录 `.obsidian`。
+  // 仅用于前端选择 Markdown 渲染方言，不读取或暴露配置内容。
+  http.get('/api/obsidian', async () => ({ vault: await files.hasObsidianVault() }));
+
+  // `[[Note]]` / `[[Note#Heading]]` 的 vault 级解析；索引按需构建并短时缓存。
+  http.get('/api/obsidian/resolve', async (_req, _body, q) => {
+    const target = q.get('target') ?? '';
+    if (!target) throw new HttpError(400, 'missing target');
+    if (target.length > 4096) throw new HttpError(400, 'target too long');
+    if (!(await files.hasObsidianVault())) return { path: null };
+    return (await obsidian.resolve(target, q.get('from') ?? '')) ?? { path: null };
   });
 
   http.get('/api/file', async (_req, _body, q) => {

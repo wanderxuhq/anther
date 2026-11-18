@@ -40,6 +40,14 @@ test('read 返回内容', async () => {
   assert.equal(((await res.json()) as { content: string }).content, 'hello');
 });
 
+test('GET /api/obsidian：根目录 .obsidian 目录决定 vault 标记', async () => {
+  const before = await (await fetch(`${base}/api/obsidian`)).json() as { vault: boolean };
+  assert.deepEqual(before, { vault: false });
+  await mkdir(path.join(root, '.obsidian'));
+  const after = await (await fetch(`${base}/api/obsidian`)).json() as { vault: boolean };
+  assert.deepEqual(after, { vault: true });
+});
+
 // 只读仅由前端编辑器控制：服务端不校验 ro，写请求始终放行
 test('write 不带 ro 参数始终放行', async () => {
   const ok = await fetch(`${base}/api/file?path=a.txt`, {

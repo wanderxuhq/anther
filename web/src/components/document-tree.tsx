@@ -2,7 +2,7 @@ import { archiveLimits } from '../archive-settings.ts';
 import { archiveSession } from '../archive-sessions.ts';
 import { createEffect, createSignal, onCleanup, Show } from 'solid-js';
 import { api } from '../api.ts';
-import { currentFile, openTab, openArchiveEntry, archiveEntry, archiveChain } from '../stores.ts';
+import { currentFile, openTab, openArchiveEntry, archiveEntry, archiveChain, obsidianVault } from '../stores.ts';
 import { documentPreviewUrl, documentOutlineSource } from '../readers/document-file.ts';
 import { createMarkdownOutlineSource } from '../readers/markdown-source.ts';
 import { loadArchiveFile, releaseArchiveFile, type ArchiveDocument } from '../archive-file.ts';
@@ -27,6 +27,7 @@ export default function DocumentTree(props: { path: string; archive?: ArchiveLoc
     if (props.archive) archiveLimits();
     revision(); props.reload;
     const path = props.path, location = props.archive, customSource = props.source;
+    const obsidian = obsidianVault();
     let document: ArchiveDocument | undefined;
     let disposed = false, source: OutlineSource | undefined, unsubscribe: (() => void) | undefined;
     const release = () => { unsubscribe?.(); unsubscribe = undefined; source?.release(); source = undefined; if (document) releaseArchiveFile(document); document = undefined; };
@@ -36,14 +37,14 @@ export default function DocumentTree(props: { path: string; archive?: ArchiveLoc
         document = await loadArchiveFile(path, location.chain, location.entry);
         if (disposed) { release(); return; }
         if (isMarkdownFile(fileTargetName(props))) {
-          setState({ outline: parseMarkdownDocument(document.content ?? '').outline, outlineStatus: 'ready', password: null });
+          setState({ outline: parseMarkdownDocument(document.content ?? '', undefined, undefined, true, obsidian).outline, outlineStatus: 'ready', password: null });
           release(); return;
         }
         const acquire = customSource ?? (await documentOutlineSource(fileTargetName(props)));
         if (disposed) { release(); return; }
         source = acquire(document.url);
       } else if (isMarkdownFile(path) && !customSource) {
-        source = createMarkdownOutlineSource(path);
+        source = createMarkdownOutlineSource(path, obsidian);
       } else {
         const info = await api.fileInfo(path);
         const acquire = customSource ?? (await documentOutlineSource(fileTargetName(props)));

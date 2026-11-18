@@ -25,6 +25,8 @@ import { t, applyLanguage } from './i18n.ts';
 export const [tabs, setTabs] = createSignal<TabItem[]>([]);
 export const [currentTabId, setCurrentTabId] = createSignal<string | null>(null);
 export const [roMode, setRoMode] = createSignal(true);
+/** 工作区根目录有 `.obsidian` 时启用 Obsidian Markdown 扩展；否则保持现有 GFM 行为。 */
+export const [obsidianVault, setObsidianVault] = createSignal(false);
 export const [theme, setTheme] = createSignal<'auto' | 'light' | 'dark'>('auto');
 export const [fontScale, setFontScale] = createSignal(100);
 /** Last feature document tab per panel; used when reopening a feature from the drawer. */
@@ -43,6 +45,10 @@ const EMPTY_ARCHIVE_CHAIN: string[] = [];
 const readingLocations = new Map<string, ReadingLocation>();
 export const [readerRestoreRequest, setReaderRestoreRequest] = createSignal<{ key: string; location: ReadingLocation | null } | null>(null);
 export const readingLocationFor = (key: string) => readingLocations.get(key) ?? null;
+/** Set/clear a background document's reading target before activating it. */
+export function setReadingLocationFor(key: string, location: ReadingLocation | null): void {
+  if (location) readingLocations.set(key, location); else readingLocations.delete(key);
+}
 export function currentReadingKey(): string | null {
   const path = currentFile();
   return path ? fileTargetKey({ path, ...(archiveEntry() ? { archive: { entry: archiveEntry()!, chain: archiveChain() } } : {}) }) : null;
@@ -320,6 +326,14 @@ export async function startSync(): Promise<void> {
   started = true;
 
   restoreDatabaseTabs();
+
+  // Vault marker gates the Markdown dialect, not the workspace. Keep the probe
+  // off the startup path: restoring the URL must stay synchronous so late UI
+  // actions are not overwritten, and a slow probe must not delay tabs/terminals.
+  void api.obsidian()
+    .then(({ vault }) => setObsidianVault(vault))
+    .catch(() => setObsidianVault(false));
+
   // Feature packages are optional and load in parallel. Only URLs that could be
   // a feature route wait for the feature table; normal file/terminal/Git URLs
   // restore immediately, preserving the existing startup ordering.

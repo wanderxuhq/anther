@@ -20,7 +20,7 @@
 
 **预览**
 
-- Markdown 预览（内容清洗、相对路径图片）与源码切换；图片缩放/适应窗口；音频、视频播放并记住进度；CSV/TSV 表格预览。
+- Markdown 预览（内容清洗、相对路径图片）与源码切换；工作区根目录存在 `.obsidian` 时，预览额外处理 Obsidian 的 frontmatter 属性面板、可点击并通过 vault 索引解析的 wikilink 与 Markdown 内部链接（含 alias、标题和块目标）、笔记内嵌、callout、高亮、注释、tag 搜索、脚注、MathJax 数学公式（含 mhchem 化学式）和 Mermaid 图表。图片缩放/适应窗口；音频、视频播放并记住进度；CSV/TSV 表格预览。
 - PDF 阅读器支持翻页、缩放、目录和密码；EPUB 阅读器支持章节跳转和内嵌目录。
 - 在浏览器内浏览 ZIP/JAR/WAR/APK/XPI/CBZ 以及 7z/RAR/TAR/GZ/BZ2/XZ 压缩包，支持嵌套压缩包、密码、只读条目和单文件下载。
 - SQLite/SQLite3/DB 查看器：`sqlite-wasm` 在 Web Worker 中运行，可查看表/视图、结构、索引和外键，支持分页、排序和按列过滤。

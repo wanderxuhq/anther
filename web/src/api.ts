@@ -122,6 +122,7 @@ export type SystemInfo = {
   disk: { total: number; free: number } | null;
 };
 export type FileInfo = { kind: 'text' | 'binary' | 'audio' | 'video' | 'pdf' | 'epub' | 'sqlite'; size: number; modified: string; mime: string };
+export type ObsidianLinkTarget = { path: string | null; heading?: string; block?: string };
 export type ArchiveDownload = {
   kind: 'archive'; id: string; status: 'preparing' | 'ready' | 'failed';
   phase: 'queued' | 'scanning' | 'packing' | 'verifying'; filename: string; size?: number; url?: string; error?: string;
@@ -130,6 +131,9 @@ export type ArchiveDownload = {
 
 export const api = {
   list: (path: string) => request<{ entries: DirEntry[] }>('GET', `/api/list?path=${encodeURIComponent(path)}`),
+  obsidian: () => request<{ vault: boolean }>('GET', '/api/obsidian'),
+  obsidianResolve: (target: string, from: string) =>
+    request<ObsidianLinkTarget>('GET', `/api/obsidian/resolve?target=${encodeURIComponent(target)}&from=${encodeURIComponent(from)}`),
   readFile: (path: string, signal?: AbortSignal) => request<{ content: string; utf8: boolean }>('GET', `/api/file?path=${encodeURIComponent(path)}`, undefined, signal),
   downloadUrl: (path: string) => withBase(`/api/download?path=${encodeURIComponent(path)}`),
   imageUrl: (path: string) => withBase(`/api/image?path=${encodeURIComponent(path)}`),

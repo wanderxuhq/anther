@@ -172,6 +172,20 @@ export class FileStore {
     });
   }
 
+  /**
+   * 根目录是否存在 Obsidian 的默认配置目录 `.obsidian`。
+   * 这是工作区级别的能力探测，不读取配置内容；自定义配置目录（Override config folder）
+   * 不会命中，按产品约定保持普通 Markdown 行为。
+   */
+  async hasObsidianVault(): Promise<boolean> {
+    try {
+      const abs = await this.resolveSafe('.obsidian');
+      return (await fs.lstat(abs)).isDirectory();
+    } catch {
+      return false;
+    }
+  }
+
   /** 下载使用原始文件句柄，避免文本转码和整文件缓冲。调用方负责关闭。 */
   async openDownload(relPath: string) {
     const abs = await this.resolveSafe(relPath);

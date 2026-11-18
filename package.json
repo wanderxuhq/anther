@@ -41,6 +41,8 @@
     "codemirror": "^6.0.2",
     "dompurify": "^3.4.16",
     "marked": "^18.0.14",
+    "mathjax-full": "^3.2.1",
+    "mermaid": "^12.3.0",
     "pdfjs-dist": "^6.3.289",
     "skills": "^1.8.1",
     "solid-js": "^1.9.14",

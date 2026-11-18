@@ -13,6 +13,7 @@ before(async () => {
   const entry = path.join(root, 'src/__url_test_entry.tsx');
   const result = await build({
     configFile: false, root, logLevel: 'silent',
+    define: { PACKAGE_VERSION: JSON.stringify('3.2.1') },
     // PDF rendering and workers require a real browser; this suite checks App routing only.
     plugins: [{ name: 'pdf-test-stub', enforce: 'pre',
       load: (id) => {
@@ -55,6 +56,17 @@ before(async () => {
         }`;
         return /\/pdf-preview\.tsx$/.test(id) ? `export default function PreviewStub(props) { const el = document.createElement('div'); el.className = '${id.endsWith('/pdf-preview.tsx') ? 'pdf-preview' : 'archive-tree'}'; el.dataset.url = props.url; return el; }` : null;
       },
+    }, { name: 'mermaid-test-stub', enforce: 'pre',
+      resolveId: (id) => id === 'mermaid' ? '\0mermaid-test-stub' : null,
+      load: (id) => id === '\0mermaid-test-stub' ? `
+        export default {
+          initialize() {},
+          async render(id, source) {
+            const escape = (value) => String(value).replace(/[&<>]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[char]));
+            return { svg: '<svg xmlns="http://www.w3.org/2000/svg" data-mermaid-id="' + escape(id) + '"><text>' + escape(source) + '</text></svg>' };
+          },
+        };
+      ` : null,
     }, { name: 'url-test-entry', resolveId: (id) => id === entry ? entry : null,
       load: (id) => id === entry ? `
         import { render } from 'solid-js/web';
@@ -125,6 +137,7 @@ async function setup(t: TestContext, url: string, opts: { hook?: Hook; mount?: b
   w.matchMedia = (q: string) => ({ matches: !!opts.narrow && q.includes('599px'), addEventListener() {}, removeEventListener() {} });
   w.Blob = Blob;
   w.TextDecoder = TextDecoder;
+  w.structuredClone = globalThis.structuredClone;
   w.URL.createObjectURL = () => 'blob:http://localhost/test';
   w.URL.revokeObjectURL = () => {};
   w.HTMLCanvasElement.prototype.getContext = () => null;
@@ -146,6 +159,8 @@ async function setup(t: TestContext, url: string, opts: { hook?: Hook; mount?: b
       return docs.has(file) ? json({ content: docs.get(file), utf8: true }) : json({ error: 'not found' }, 404);
     }
     if (u.pathname === '/api/list') return json({ entries: [] });
+    if (u.pathname === '/api/obsidian') return json({ vault: false });
+    if (u.pathname === '/api/obsidian/resolve') return json({ path: null });
     if (u.pathname === '/api/tabs') return json({ tabs: [] });
     if (u.pathname === '/api/tabs/restore') return json({ restored: true });
     if (u.pathname === '/api/terminals') return json({ terminals: [] });
@@ -652,6 +667,262 @@ test('语言在历史恢复时重新应用，Markdown 源码/预览切换不写�
   assert.equal(w.document.documentElement.lang, 'en');
   await history('back');
   assert.equal(w.document.documentElement.lang, 'zh-CN');
+});
+
+test('工作区根目录有 .obsidian 时 Markdown 预览启用 Obsidian 语法', async (t) => {
+  const content = '---\ntitle: x\n---\n\n# Title\n\n[[Note|Alias]] ==hi== #tag\n\n> [!warning] Careful\n> body';
+  const { w, s } = await setup(t, '/README.md?ro=1&lang=zh', { hook: (url) => {
+    if (url.pathname === '/api/obsidian') return json({ vault: true });
+    if (url.pathname === '/api/file' && url.searchParams.get('path') === 'README.md') return json({ content, utf8: true });
+  } });
+  await until(() => s.docLoadedPath() === 'README.md');
+  await until(() => !!w.document.querySelector('.markdown-preview .obsidian-wikilink'));
+  assert.equal(w.document.querySelector('.obsidian-wikilink').textContent, 'Alias');
+  assert.ok(w.document.querySelector('mark'));
+  assert.ok(w.document.querySelector('.obsidian-callout-warning'));
+  assert.ok(w.document.querySelector('.markdown-preview .obsidian-properties'));
+  assert.match(w.document.querySelector('.markdown-preview').textContent, /title/);
+});
+
+test('Obsidian wikilink 点击通过 vault 索引解析并打开目标笔记', async (t) => {
+  const content = '# Home\n\n[[Note|Alias]]';
+  const { w, s, calls } = await setup(t, '/README.md?ro=1&lang=zh', { hook: (url) => {
+    if (url.pathname === '/api/obsidian') return json({ vault: true });
+    if (url.pathname === '/api/obsidian/resolve') {
+      return url.searchParams.get('target') === 'Note'
+        ? json({ path: 'Note.md' })
+        : json({ path: null });
+    }
+    if (url.pathname === '/api/file') {
+      const path = url.searchParams.get('path');
+      if (path === 'README.md') return json({ content, utf8: true });
+      if (path === 'Note.md') return json({ content: '# Note\n\nBody', utf8: true });
+    }
+  } });
+  await until(() => s.docLoadedPath() === 'README.md');
+  await until(() => !!w.document.querySelector('.markdown-preview .obsidian-wikilink'));
+  w.document.querySelector('.obsidian-wikilink').click();
+  await until(() => s.docLoadedPath() === 'Note.md');
+  assert.equal(s.currentFile(), 'Note.md');
+  await until(() => (w.document.querySelector('.markdown-preview')?.textContent ?? '').includes('Body'));
+  assert.equal(new URL(w.location.href).pathname, '/Note.md');
+  assert.ok(calls.some((call) => call.url.pathname === '/api/obsidian/resolve'
+    && call.url.searchParams.get('target') === 'Note'
+    && call.url.searchParams.get('from') === 'README.md'));
+});
+
+test('Obsidian 模式拦截 Markdown 内部链接并走 vault 索引', async (t) => {
+  const content = '# Home\n\n[Note](Note%20A.md#Section)';
+  const { w, s, calls } = await setup(t, '/README.md?ro=1&lang=zh', { hook: (url) => {
+    if (url.pathname === '/api/obsidian') return json({ vault: true });
+    if (url.pathname === '/api/obsidian/resolve') return json({ path: 'Note A.md', heading: 'Section' });
+    if (url.pathname === '/api/file') {
+      const path = url.searchParams.get('path');
+      if (path === 'README.md') return json({ content, utf8: true });
+      if (path === 'Note A.md') return json({ content: '# Note\n\n## Section\n\nBody', utf8: true });
+    }
+  } });
+  await until(() => s.docLoadedPath() === 'README.md');
+  await until(() => !!w.document.querySelector('.markdown-preview a[href="Note%20A.md#Section"]'));
+  (w.document.querySelector('.markdown-preview a[href="Note%20A.md#Section"]') as HTMLElement).click();
+  await until(() => s.docLoadedPath() === 'Note A.md');
+  await until(() => new URL(w.location.href).hash === '#heading:1');
+  assert.ok(calls.some((call) => call.url.pathname === '/api/obsidian/resolve'
+    && call.url.searchParams.get('target') === 'Note A.md#Section'));
+});
+
+test('Obsidian 跨文档 heading 链接打开目标并恢复标题位置', async (t) => {
+  const content = '# Home\n\n[[Note#Section]]';
+  const { w, s, calls } = await setup(t, '/README.md?ro=1&lang=zh', { hook: (url) => {
+    if (url.pathname === '/api/obsidian') return json({ vault: true });
+    if (url.pathname === '/api/obsidian/resolve') return json({ path: 'Note.md', heading: 'Section' });
+    if (url.pathname === '/api/file') {
+      const path = url.searchParams.get('path');
+      if (path === 'README.md') return json({ content, utf8: true });
+      if (path === 'Note.md') return json({ content: '# Note\n\n## Section\n\nBody', utf8: true });
+    }
+  } });
+  await until(() => s.docLoadedPath() === 'README.md');
+  await until(() => !!w.document.querySelector('.markdown-preview .obsidian-wikilink'));
+  w.document.querySelector('.obsidian-wikilink').click();
+  await until(() => s.docLoadedPath() === 'Note.md');
+  await until(() => new URL(w.location.href).hash === '#heading:1');
+  assert.equal(s.currentFile(), 'Note.md');
+  assert.ok(calls.some((call) => call.url.pathname === '/api/file' && call.url.searchParams.get('path') === 'Note.md'));
+});
+
+test('Obsidian 跨文档 block 链接打开目标并保留块锚点', async (t) => {
+  const content = '# Home\n\n[[Note#^block]]';
+  const { w, s } = await setup(t, '/README.md?ro=1&lang=zh', { hook: (url) => {
+    if (url.pathname === '/api/obsidian') return json({ vault: true });
+    if (url.pathname === '/api/obsidian/resolve') return json({ path: 'Note.md', block: 'block' });
+    if (url.pathname === '/api/file') {
+      const path = url.searchParams.get('path');
+      if (path === 'README.md') return json({ content, utf8: true });
+      if (path === 'Note.md') return json({ content: '# Note\n\nBody ^block', utf8: true });
+    }
+  } });
+  await until(() => s.docLoadedPath() === 'README.md');
+  await until(() => !!w.document.querySelector('.markdown-preview .obsidian-wikilink'));
+  w.document.querySelector('.obsidian-wikilink').click();
+  await until(() => s.docLoadedPath() === 'Note.md');
+  await until(() => !!w.document.querySelector('.markdown-preview [id="^block"]'));
+  assert.equal(s.currentFile(), 'Note.md');
+});
+
+test('Obsidian 嵌入内容加载并保留自己的相对链接上下文', async (t) => {
+  const content = '# Host\n\n![[Note]]';
+  const { w, s, calls } = await setup(t, '/README.md?ro=1&lang=zh', { hook: (url) => {
+    if (url.pathname === '/api/obsidian') return json({ vault: true });
+    if (url.pathname === '/api/obsidian/resolve') {
+      const target = url.searchParams.get('target');
+      if (target === 'Note') return json({ path: 'Note.md' });
+      if (target === 'Other') return json({ path: 'Other.md' });
+      return json({ path: null });
+    }
+    if (url.pathname === '/api/file') {
+      const path = url.searchParams.get('path');
+      if (path === 'README.md') return json({ content, utf8: true });
+      if (path === 'Note.md') return json({ content: '# Embedded\n\nBody **bold**\n\n[[Other]]', utf8: true });
+      if (path === 'Other.md') return json({ content: '# Other', utf8: true });
+    }
+  } });
+  await until(() => !!w.document.querySelector('.obsidian-embed-content strong'));
+  const embedded = w.document.querySelector('.obsidian-embed-content')!;
+  assert.match(embedded.textContent ?? '', /Embedded/);
+  assert.match(embedded.textContent ?? '', /Body bold/);
+  assert.equal(w.document.querySelectorAll('.markdown-preview h1[data-md-heading]').length, 1);
+  const link = embedded.querySelector<HTMLElement>('.obsidian-wikilink')!;
+  assert.ok(link);
+  link.click();
+  await until(() => s.docLoadedPath() === 'Other.md');
+  assert.ok(calls.some((call) => call.url.pathname === '/api/obsidian/resolve'
+    && call.url.searchParams.get('target') === 'Other'
+    && call.url.searchParams.get('from') === 'Note.md'));
+});
+
+test('Obsidian heading 嵌入只渲染对应章节', async (t) => {
+  const content = '# Host\n\n![[Note#Section]]';
+  const { w } = await setup(t, '/README.md?ro=1&lang=zh', { hook: (url) => {
+    if (url.pathname === '/api/obsidian') return json({ vault: true });
+    if (url.pathname === '/api/obsidian/resolve') return json({ path: 'Note.md', heading: 'Section' });
+    if (url.pathname === '/api/file') {
+      const path = url.searchParams.get('path');
+      if (path === 'README.md') return json({ content, utf8: true });
+      if (path === 'Note.md') return json({ content: '# Top\n\nTop text\n\n## Section\n\nSection body\n\n# End\n\nEnd text', utf8: true });
+    }
+  } });
+  await until(() => !!w.document.querySelector('.obsidian-embed-content'));
+  const embedded = w.document.querySelector('.obsidian-embed-content')!;
+  assert.match(embedded.textContent ?? '', /Section body/);
+  assert.doesNotMatch(embedded.textContent ?? '', /Top text|End text/);
+  assert.equal(w.document.querySelectorAll('.markdown-preview [data-md-heading]').length, 1);
+});
+
+test('Obsidian block 嵌入只渲染对应块', async (t) => {
+  const content = '# Host\n\n![[Note#^block]]';
+  const { w } = await setup(t, '/README.md?ro=1&lang=zh', { hook: (url) => {
+    if (url.pathname === '/api/obsidian') return json({ vault: true });
+    if (url.pathname === '/api/obsidian/resolve') return json({ path: 'Note.md', block: 'block' });
+    if (url.pathname === '/api/file') {
+      const path = url.searchParams.get('path');
+      if (path === 'README.md') return json({ content, utf8: true });
+      if (path === 'Note.md') return json({ content: 'A paragraph ^block\n\nOther text', utf8: true });
+    }
+  } });
+  await until(() => !!w.document.querySelector('.obsidian-embed-content'));
+  const embedded = w.document.querySelector('.obsidian-embed-content')!;
+  assert.match(embedded.textContent ?? '', /A paragraph/);
+  assert.doesNotMatch(embedded.textContent ?? '', /Other text/);
+});
+
+test('Obsidian tag 点击打开搜索并填入查询', async (t) => {
+  const content = '# Host\n\n#tag';
+  const { w, s } = await setup(t, '/README.md?ro=1&lang=zh', { hook: (url) => {
+    if (url.pathname === '/api/obsidian') return json({ vault: true });
+    if (url.pathname === '/api/file' && url.searchParams.get('path') === 'README.md') return json({ content, utf8: true });
+  } });
+  await until(() => !!w.document.querySelector('.markdown-preview .obsidian-tag'));
+  (w.document.querySelector('.markdown-preview .obsidian-tag') as HTMLElement).click();
+  await until(() => s.searchQuery() === 'tag');
+  assert.equal(s.activePanel(), 'search');
+});
+
+test('Obsidian 数学公式异步渲染为 MathJax SVG', async (t) => {
+  const content = '# Host\n\nInline $x^2$\n\n$$\ny = 1\n$$';
+  const { w } = await setup(t, '/README.md?ro=1&lang=zh', { hook: (url) => {
+    if (url.pathname === '/api/obsidian') return json({ vault: true });
+    if (url.pathname === '/api/file' && url.searchParams.get('path') === 'README.md') return json({ content, utf8: true });
+  } });
+  await until(() => !!w.document.querySelector('.markdown-preview .obsidian-math[data-math-ready="1"] svg'));
+  await until(() => !!w.document.querySelector('.markdown-preview .obsidian-math-block[data-math-ready="1"] svg'));
+  assert.ok(w.document.querySelector('.markdown-preview .obsidian-math svg'));
+  assert.ok(w.document.querySelector('.markdown-preview .obsidian-math-block svg'));
+});
+
+test('Obsidian MathJax 支持 mhchem 化学式和单位', async (t) => {
+  const content = '# Host\n\nChem $\\ce{H2O}$ and $\\pu{123 kJ/mol}$';
+  const { w } = await setup(t, '/README.md?ro=1&lang=zh', { hook: (url) => {
+    if (url.pathname === '/api/obsidian') return json({ vault: true });
+    if (url.pathname === '/api/file' && url.searchParams.get('path') === 'README.md') return json({ content, utf8: true });
+  } });
+  await until(() => w.document.querySelectorAll('.markdown-preview .obsidian-math[data-math-ready="1"]').length === 2);
+  const nodes = [...w.document.querySelectorAll<HTMLElement>('.markdown-preview .obsidian-math')];
+  assert.equal(nodes.length, 2);
+  assert.ok(nodes.every((node) => !!node.querySelector('svg')));
+  assert.ok(nodes.every((node) => node.querySelectorAll('use').length > 0));
+  assert.equal(nodes.filter((node) => node.hasAttribute('data-math-error')).length, 0);
+});
+
+test('Obsidian Mermaid 代码块水合为 SVG', async (t) => {
+  const content = '# Host\n\n```mermaid\ngraph TD\nA --> B\n```';
+  const { w } = await setup(t, '/README.md?ro=1&lang=zh', { hook: (url) => {
+    if (url.pathname === '/api/obsidian') return json({ vault: true });
+    if (url.pathname === '/api/file' && url.searchParams.get('path') === 'README.md') return json({ content, utf8: true });
+  } });
+  await until(() => !!w.document.querySelector('.markdown-preview .obsidian-mermaid[data-mermaid-ready="1"] svg'));
+  const svg = w.document.querySelector('.markdown-preview .obsidian-mermaid svg')!;
+  assert.match(svg.textContent ?? '', /graph TD/);
+  assert.equal(w.document.querySelector('.markdown-preview .obsidian-mermaid-source'), null);
+});
+
+test('Obsidian 未解析链接显示提示', async (t) => {
+  const content = '# Home\n\n[[Missing]]';
+  const { w } = await setup(t, '/README.md?ro=1&lang=zh', { hook: (url) => {
+    if (url.pathname === '/api/obsidian') return json({ vault: true });
+    if (url.pathname === '/api/obsidian/resolve') return json({ path: null });
+    if (url.pathname === '/api/file' && url.searchParams.get('path') === 'README.md') return json({ content, utf8: true });
+  } });
+  await until(() => !!w.document.querySelector('.markdown-preview .obsidian-wikilink'));
+  w.document.querySelector('.obsidian-wikilink').click();
+  await until(() => (w.document.querySelector('.toast')?.textContent ?? '').includes('无法解析 Obsidian 链接'));
+});
+
+test('Obsidian 同文档 heading 链接更新阅读位置', async (t) => {
+  const content = '# Home\n\n## Section\n\n[[#Section]]';
+  const { w, s } = await setup(t, '/README.md?ro=1&lang=zh', { hook: (url) => {
+    if (url.pathname === '/api/obsidian') return json({ vault: true });
+    if (url.pathname === '/api/obsidian/resolve') return json({ path: 'README.md', heading: 'Section' });
+    if (url.pathname === '/api/file' && url.searchParams.get('path') === 'README.md') return json({ content, utf8: true });
+  } });
+  await until(() => !!w.document.querySelector('.markdown-preview .obsidian-wikilink'));
+  w.document.querySelector('.obsidian-wikilink').click();
+  await until(() => new URL(w.location.href).hash === '#heading:1');
+  assert.equal(s.currentFile(), 'README.md');
+});
+
+test('没有 .obsidian 时 Markdown 预览保持现有 GFM 行为', async (t) => {
+  const content = '[[Note]]\n\n==hi==\n\n> [!warning] Careful\n> body';
+  const { w, s } = await setup(t, '/README.md?ro=1&lang=zh', { hook: (url) => {
+    if (url.pathname === '/api/obsidian') return json({ vault: false });
+    if (url.pathname === '/api/file' && url.searchParams.get('path') === 'README.md') return json({ content, utf8: true });
+  } });
+  await until(() => s.docLoadedPath() === 'README.md');
+  await until(() => !!w.document.querySelector('.markdown-preview blockquote'));
+  assert.equal(w.document.querySelector('.obsidian-wikilink'), null);
+  assert.equal(w.document.querySelector('mark'), null);
+  assert.equal(w.document.querySelector('.obsidian-callout'), null);
+  assert.match(w.document.querySelector('.markdown-preview').textContent, /\[\[Note\]\]/);
 });
 
 test('慢文件响应不会覆盖后来选择的文件；切换前保存并在后退时读到最新内容', async (t) => {

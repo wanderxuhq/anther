@@ -20,7 +20,7 @@ A mobile-first, browser-based web IDE. Run one stateless Node process in a proje
 
 **Preview**
 
-- Markdown preview (sanitized, with relative images) and source toggle; image preview with zoom and fit; audio/video with remembered playback position; CSV/TSV table preview.
+- Markdown preview (sanitized, with relative images) and source toggle; when the workspace root contains `.obsidian`, previews also handle Obsidian frontmatter properties, clickable wikilinks and Markdown internal links resolved through a vault index (including aliases and heading/block targets), inline note embeds, callouts, highlights, comments, tag search, footnotes, MathJax math (including mhchem chemistry), and Mermaid diagrams. Image preview with zoom and fit; audio/video with remembered playback position; CSV/TSV table preview.
 - PDF reader with page navigation, zoom, outline, and password support; EPUB reader with chapter navigation and embedded outline.
 - In-browser archive browsing for ZIP/JAR/WAR/APK/XPI/CBZ and 7z/RAR/TAR/GZ/BZ2/XZ, including nested archives, password-protected entries, read-only entries, and per-file downloads.
 - SQLite/SQLite3/DB viewer running in a Web Worker via `sqlite-wasm`: tables and views, schema, indexes and foreign keys, paged rows, sorting, and column filtering.

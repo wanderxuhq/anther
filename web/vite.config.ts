@@ -2,6 +2,7 @@ import { defineConfig, type Plugin } from 'vite';
 import solid from 'vite-plugin-solid';
 import path from 'node:path';
 import os from 'node:os';
+import { readFileSync } from 'node:fs';
 import { pdfAssets } from './pdf-assets.ts';
 
 // 受限环境（容器/沙箱）os.networkInterfaces() 抛 EACCES，vite 在 host 为通配符
@@ -39,8 +40,12 @@ function spaNavigationFallback(): Plugin {
   };
 }
 
+const mathjaxVersion = JSON.parse(readFileSync(new URL('../node_modules/mathjax-full/package.json', import.meta.url), 'utf8')).version as string;
+
 export default defineConfig({
   root: path.resolve(import.meta.dirname),
+  // MathJax's version.js otherwise probes eval('require') at runtime.
+  define: { PACKAGE_VERSION: JSON.stringify(mathjaxVersion) },
   plugins: [spaNavigationFallback(), solid(), pdfAssets()],
   worker: { format: 'es' },
   optimizeDeps: { exclude: ['@sqlite.org/sqlite-wasm'], include: ['@zip.js/zip.js', 'pdfjs-dist', 'pdfjs-dist/web/pdf_viewer.mjs'] },
