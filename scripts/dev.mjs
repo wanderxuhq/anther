@@ -1,16 +1,24 @@
 #!/usr/bin/env node
 // 一键开发模式：后端（node --watch）+ 前端（vite）同终端启动。
 // 零依赖实现（无 concurrently 等）：spawn 两个子进程，共享终端输出。
-// 每个子进程独立进程组（detached），SIGINT/SIGTERM/SIGHUP 或任一子进程崩溃时
-// 按进程组整组清理（kill(-pid) 覆盖组内全部，含 node --watch 派生的后端进程）。
+// SIGINT/SIGTERM/SIGHUP 或任一子进程崩溃时清理整棵进程树：POSIX 用进程组
+// kill(-pid)，Windows 没有进程组，用 taskkill /T（同时覆盖 node --watch
+// 派生的后端进程，否则残留进程会占住 3000/5173，下一次启动就起不来）。
 // 透传参数给后端（如 npm run dev -- --port 8080）。
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const backendArgs = process.argv.slice(2);
 // 开发模式由 Vite 提供前端，不保证挂载 base；显式关闭附加，避免第二个 dev 实例
 // 的后端挂上去了但前端 5173 仍然冲突。生产 CLI 默认开启。
 if (!backendArgs.includes('--no-attach')) backendArgs.push('--no-attach');
-const frontendArgs = ['node_modules/vite/bin/vite.js', '--config', 'web/vite.config.ts'];
+const viteBin = new URL('../node_modules/vite/bin/vite.js', import.meta.url);
+if (!existsSync(viteBin)) {
+  console.error('[dev] 依赖未安装：先运行 npm install');
+  process.exit(1);
+}
+const frontendArgs = [fileURLToPath(viteBin), '--config', 'web/vite.config.ts'];
 
 // 前端默认也只听本机；--lan / --host 与后端保持一致（按参数出现顺序，后者覆盖前者）。
 let viteHost = null;
@@ -27,14 +35,21 @@ if (viteHost) frontendArgs.push('--host', viteHost);
 const children = [];
 let shuttingDown = false;
 
+function killTree(child) {
+  if (process.platform === 'win32') {
+    // Windows 没有 POSIX 进程组；/T 连 node --watch 派生的后端进程一起结束。
+    spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+    return;
+  }
+  try {
+    process.kill(-child.pid, 'SIGTERM'); // 整组清理
+  } catch { /* 已退出 */ }
+}
+
 function shutdown(code) {
   if (shuttingDown) return;
   shuttingDown = true;
-  for (const c of children) {
-    try {
-      process.kill(-c.pid, 'SIGTERM'); // 整组清理
-    } catch { /* 已退出 */ }
-  }
+  for (const c of children) killTree(c);
   setTimeout(() => process.exit(code), 500); // 给子进程收尾时间
 }
 
