@@ -168,15 +168,6 @@ function parseCssColor(value: string): { r: number; g: number; b: number } | nul
   return null;
 }
 
-/** OSC 7 是 file:// URL；预览接口需要普通绝对路径。 */
-function cwdPath(value: string): string {
-  if (!value) return '';
-  if (value.startsWith('file://')) {
-    try { return decodeURIComponent(new URL(value).pathname); } catch { return value; }
-  }
-  return value;
-}
-
 export function TerminalView(props: { id: string }) {
   let paneEl: HTMLDivElement | undefined;
   let scrollEl: HTMLDivElement | undefined;
@@ -1022,7 +1013,9 @@ export function TerminalView(props: { id: string }) {
     const line = Number(target.dataset.termLine) || undefined;
     void (async () => {
       try {
-        const located = await api.terminals.resolve(path, cwdPath(screen?.getCwd() || '') || undefined);
+        // OSC 7 原样交给服务端解析：浏览器不知道服务端平台，Windows 的
+        // file:///C:/... 与 UNC 路径必须按服务端平台转换。
+        const located = await api.terminals.resolve(path, screen?.getCwd() || undefined);
         if (located.kind === 'file') await openPreviewTab(located.path, line ? { start: line, end: line } : null);
         else await revealDirectory(located.path);
       } catch {

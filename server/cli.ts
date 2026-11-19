@@ -14,6 +14,7 @@ import type { AttachInfo, MountWire } from './mount-types.ts';
 import { isLoopbackHost, isValidHost, isWildcardHost } from './host.ts';
 import { FeatureRegistry } from './features.ts';
 import { reportUpdateAvailable, runUpdate } from './update.ts';
+import { isShellKind } from './shell.ts';
 
 export type CliArgs = {
   dir: string;
@@ -23,6 +24,8 @@ export type CliArgs = {
   detach: boolean;
   update: boolean;
   features: string[];
+  /** undefined 表示沿用 ANTHER_SHELL 环境变量（或 auto）。 */
+  shell?: string;
 };
 
 /**
@@ -41,6 +44,7 @@ export function parseArgs(argv: string[]): CliArgs {
   let attach = true;
   let detach = false;
   let update = false;
+  let shell: string | undefined;
   const features = (process.env.ANTHER_FEATURES ?? '').split(',').map((item) => item.trim()).filter(Boolean);
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -68,12 +72,20 @@ export function parseArgs(argv: string[]): CliArgs {
       features.push(raw);
       continue;
     }
+    if (a === '--shell') {
+      const raw = argv[++i];
+      if (!raw || (raw !== 'auto' && !isShellKind(raw))) {
+        throw new Error('invalid --shell (expected auto, bash, pwsh, powershell, or cmd)');
+      }
+      shell = raw;
+      continue;
+    }
     if (a.startsWith('-')) throw new Error(`unknown option: ${a}`);
     positional.push(a);
   }
   if (positional.length > 1) throw new Error('too many arguments');
   if (positional.length === 1) dir = path.resolve(positional[0]);
-  return { dir, port, host, attach, detach, update, features };
+  return { dir, port, host, attach, detach, update, features, shell };
 }
 
 /** 第一个 IPv4 局域网地址；取不到（无网络接口 / 沙箱受限）返回 null。供启动日志打印手机访问地址。 */
@@ -236,6 +248,8 @@ async function detachFromHost(args: CliArgs, dir: string): Promise<number> {
 export async function main(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
   const dir = args.dir;
+  // 终端 shell 选择对所有工作区（宿主 + 挂载）生效；未传 --shell 时沿用环境变量。
+  if (args.shell !== undefined) process.env.ANTHER_SHELL = args.shell;
   if (args.update) {
     process.exitCode = await runUpdate();
     return;

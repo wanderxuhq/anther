@@ -66,6 +66,37 @@ test('splitLinks：括号、引号、等号前缀', () => {
   ]);
 });
 
+test('splitLinks：Windows 盘符、反斜杠、UNC 与行号', () => {
+  assert.deepEqual(compact('C:\\Users\\me\\src\\foo.ts'), [
+    { link: { kind: 'path', path: 'C:\\Users\\me\\src\\foo.ts' }, label: 'C:\\Users\\me\\src\\foo.ts' },
+  ]);
+  assert.deepEqual(compact('C:\\Users\\me\\foo.ts:12:3'), [
+    { link: { kind: 'path', path: 'C:\\Users\\me\\foo.ts', line: 12, column: 3 }, label: 'C:\\Users\\me\\foo.ts:12:3' },
+  ]);
+  assert.deepEqual(compact('C:/Users/me/foo.ts'), [
+    { link: { kind: 'path', path: 'C:/Users/me/foo.ts' }, label: 'C:/Users/me/foo.ts' },
+  ]);
+  assert.deepEqual(compact('\\\\server\\share\\foo.ts'), [
+    { link: { kind: 'path', path: '\\\\server\\share\\foo.ts' }, label: '\\\\server\\share\\foo.ts' },
+  ]);
+  assert.deepEqual(compact('"C:\\Program Files\\app.exe"'), [
+    { text: '"' },
+    { link: { kind: 'path', path: 'C:\\Program Files\\app.exe' }, label: 'C:\\Program Files\\app.exe' },
+    { text: '"' },
+  ]);
+});
+
+test('looksLikePath：Windows 路径与冒号误报', () => {
+  assert.equal(looksLikePath('C:\\Users\\a\\foo.ts'), true);
+  assert.equal(looksLikePath('C:/Users/a/foo.ts'), true);
+  assert.equal(looksLikePath('\\\\server\\share\\foo.ts'), true);
+  assert.equal(looksLikePath('src\\foo.ts'), true);
+  assert.equal(looksLikePath('C:'), false);
+  assert.equal(looksLikePath('C:\\'), false);
+  assert.equal(looksLikePath('a:b'), false);
+  assert.equal(looksLikePath('\\\\server'), false);
+});
+
 test('looksLikePath：已知文件名/扩展名与常见误报', () => {
   assert.equal(looksLikePath('Makefile'), true);
   assert.equal(looksLikePath('.gitignore'), true);

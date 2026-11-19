@@ -59,6 +59,15 @@ test('--update：只执行更新，不启动服务器', () => {
   assert.equal(parseArgs([]).update, false);
 });
 
+test('--shell：只接受枚举值', () => {
+  assert.equal(parseArgs(['--shell', 'pwsh']).shell, 'pwsh');
+  assert.equal(parseArgs(['--shell', 'cmd']).shell, 'cmd');
+  assert.equal(parseArgs(['--shell', 'auto']).shell, 'auto');
+  assert.equal(parseArgs([]).shell, undefined);
+  assert.throws(() => parseArgs(['--shell']), /invalid --shell/);
+  assert.throws(() => parseArgs(['--shell', 'rm -rf']), /invalid --shell/);
+});
+
 test('未知选项报错', () => {
   assert.throws(() => parseArgs(['--unknown']), /unknown option/);
 });

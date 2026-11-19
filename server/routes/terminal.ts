@@ -6,6 +6,7 @@
 import type { Router } from '../http.ts';
 import { HttpError } from '../http-error.ts';
 import type { TerminalManager, TerminalScreenMessage } from '../terminal.ts';
+import { isShellKind } from '../shell.ts';
 import type { FileStore } from '../files.ts';
 import type { RGB, TerminalQueryMeta } from '../../shared/terminal/vt.ts';
 import { parseWsJson } from '../../shared/ws-json.ts';
@@ -42,14 +43,23 @@ export function registerTerminalRoutes(http: Router, terminals: TerminalManager,
     if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');
     const name = (body as { name?: unknown }).name;
     if (typeof name !== 'string') throw new HttpError(400, 'missing name');
+    const shell = (body as { shell?: unknown }).shell;
+    // shell 只接受枚举/auto；绝不让客户端传任意可执行文件路径。
+    if (shell !== undefined && shell !== 'auto' && !isShellKind(shell)) {
+      throw new HttpError(400, 'invalid shell');
+    }
     try {
-      return await terminals.create(userId(req), name);
+      return await terminals.create(userId(req), name, shell === undefined ? undefined : String(shell));
     } catch (e) {
       throw new HttpError(400, (e as Error).message || 'failed to start terminal');
     }
   });
 
-  http.get('/api/terminals', async (req) => ({ terminals: terminals.list(userId(req)) }));
+  http.get('/api/terminals', async (req) => ({
+    terminals: terminals.list(userId(req)),
+    shells: await terminals.shells(),
+    defaultShell: terminals.defaultShell(),
+  }));
 
   http.post('/api/terminals/close', async (req, body) => {
     if (typeof body !== 'object' || body === null) throw new HttpError(400, 'missing body');

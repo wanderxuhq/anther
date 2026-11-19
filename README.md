@@ -33,6 +33,7 @@ A mobile-first, browser-based web IDE. Run one stateless Node process in a proje
 **Terminal**
 
 - Multiple real PTY shells per user. The server owns the VT screen buffer, so terminals survive page reloads and reconnect with scrollback intact.
+- Native Windows terminals through ConPTY: pick PowerShell 7 (`pwsh`), Windows PowerShell, or `cmd` when creating a terminal; Linux/macOS/WSL keeps using `bash`.
 - Touch scrolling and an on-screen modifier/arrow key bar for mobile input; switch between rendered HTML (clickable paths, Markdown, line wrapping) and plain text.
 - Click a file path in terminal output to reveal it in the file tree or open it in the editor.
 
@@ -84,12 +85,13 @@ Open `http://localhost:3000` by default. The server listens only on the local ma
 | `--detach` | Detach the current directory from the running server and exit |
 | `--update` | Update to the latest published version and exit |
 | `--feature <spec>` | Load an optional first-party feature package (repeatable; also `ANTHER_FEATURES`) |
+| `--shell <shell>` | Default terminal shell: `auto`, `bash`, `pwsh`, `powershell`, or `cmd` (also `ANTHER_SHELL`) |
 
 If the port is already served by anther, running `anther` in another directory attaches that directory to the existing server. Each attached workspace gets its own URL prefix (`/-/<name>/`), and `/-` lists all mounted instances with options to open or detach them. Use `--no-attach` to disable attaching, and `anther --detach` to detach from the command line.
 
 On startup anther checks npm for a newer published version in the background. The check never delays startup, prints only when a newer version exists, and is disabled with `ANTHER_NO_UPDATE_CHECK=1`. `anther --update` upgrades a normal installation; npx runs and source checkouts print the matching command instead.
 
-Terminals require POSIX `script`, `stty`, and `bash` (use WSL on Windows). Git features require `git` on the server.
+On Linux, macOS, and WSL, terminals require POSIX `script`, `stty`, and `bash`. On native Windows (10 1809+), anther uses ConPTY through the optional `@wanderxuhq/anther-node-pty` package and starts PowerShell 7, Windows PowerShell, or `cmd`; do not install with `--omit=optional`. `--shell` / `ANTHER_SHELL` sets the default, and the new-terminal menu lets you pick a shell per terminal. Git features require `git` on the server.
 
 After `npm run build`, `npm start` runs the built server. The ⓘ system information dialog can switch the listener between local (`127.0.0.1`) and LAN (`0.0.0.0`) while the server is running; existing terminal and LSP WebSocket connections stay connected.
 

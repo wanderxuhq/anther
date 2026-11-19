@@ -33,6 +33,7 @@
 **终端**
 
 - 每个用户可创建多个真实 PTY 终端；VT 屏幕由服务端维护，刷新页面后重新连接仍保留回滚内容。
+- Windows 原生终端（ConPTY）：新建终端时可选择 PowerShell 7（`pwsh`）、Windows PowerShell 或 `cmd`；Linux/macOS/WSL 仍使用 `bash`。
 - 移动端支持触摸滚动和屏幕按键栏（Ctrl/Alt/Shift、方向键等）；可在 HTML 渲染（可点击路径、Markdown、自动换行）和纯文本模式间切换。
 - 点击终端输出里的文件路径，可直接在文件树中定位或在编辑器中打开。
 
@@ -84,12 +85,13 @@ anther /path/to/project
 | `--detach` | 从运行中的服务器卸载当前目录并退出 |
 | `--update` | 更新到最新发布版本并退出 |
 | `--feature <spec>` | 加载可选的第一方功能包（可重复；也支持 `ANTHER_FEATURES`） |
+| `--shell <shell>` | 默认终端 shell：`auto`、`bash`、`pwsh`、`powershell` 或 `cmd`（也支持 `ANTHER_SHELL`） |
 
 如果端口已经由 anther 提供服务，在另一个目录运行 `anther` 会把该目录附加到现有服务器。每个附加的工作区都有自己的 URL 前缀（`/-/<名称>/`），`/-` 页面会列出所有实例，可直接打开或卸载。用 `--no-attach` 关闭附加，用 `anther --detach` 从命令行卸载。
 
 启动时 anther 会在后台向 npm 检查是否有更新的发布版本。检查不会拖慢启动，仅在存在新版本时输出提示，可用 `ANTHER_NO_UPDATE_CHECK=1` 关闭。`anther --update` 会升级正常安装的版本；通过 npx 运行或源码目录则只打印对应的升级命令。
 
-终端需要 POSIX 的 `script`、`stty` 和 `bash`（Windows 请用 WSL）。Git 功能需要服务器上安装 `git`。
+在 Linux、macOS 和 WSL 上，终端需要 POSIX 的 `script`、`stty` 和 `bash`。在原生 Windows（10 1809+）上，anther 通过可选依赖 `@wanderxuhq/anther-node-pty` 使用 ConPTY，可启动 PowerShell 7、Windows PowerShell 或 `cmd`；不要用 `--omit=optional` 安装。`--shell` / `ANTHER_SHELL` 设置默认 shell，新建终端菜单可以逐个选择。Git 功能需要服务器上安装 `git`。
 
 `npm run build` 后可用 `npm start` 启动构建产物。运行中可以在 ⓘ 服务器信息里把监听地址在本地（`127.0.0.1`）和局域网（`0.0.0.0`）之间切换，已建立的终端/LSP WebSocket 连接不会中断。
 

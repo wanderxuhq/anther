@@ -32,3 +32,9 @@ test('pasteInput：bracketed paste 包裹并清理伪造结束符', () => {
   assert.equal(pasteInput('hello', true), '\x1b[200~hello\x1b[201~');
   assert.equal(pasteInput('a\x1b[201~b', true), '\x1b[200~ab\x1b[201~');
 });
+
+test('pasteInput：换行统一为回车，Windows shell 才会执行', () => {
+  assert.equal(pasteInput('a\nb', false), 'a\rb');
+  assert.equal(pasteInput('a\r\nb\rc', false), 'a\rb\rc');
+  assert.equal(pasteInput('a\r\nb', true), '\x1b[200~a\nb\x1b[201~');
+});

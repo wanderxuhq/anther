@@ -356,6 +356,17 @@ a.icon-btn { color: inherit; text-decoration: none; }
 .drawer-views .view-tab.active { background: var(--accent); }
 /* 信息/实例入口固定在侧边栏最下面 */
 .drawer-view-footer { margin-top: auto; display: flex; flex-direction: column; gap: 4px; }
+/* 新建终端：Windows 上先弹出 shell 选择（位置对齐文件树的行菜单） */
+.new-terminal { position: relative; }
+.drawer-menu-backdrop { position: fixed; inset: 0; z-index: 20; }
+.drawer-menu {
+  position: absolute; left: calc(100% + 8px); top: 0; z-index: 21;
+  background: var(--menu-bg); color: var(--menu-fg);
+  border: 1px solid var(--menu-border); border-radius: 8px; min-width: 180px;
+  padding: 4px; box-shadow: var(--menu-shadow);
+}
+.drawer-menu .menu-item { display: flex; flex-direction: column; gap: 2px; }
+.drawer-menu .menu-item small { color: var(--muted); font-size: 11px; }
 .drawer-content { flex: 1; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; padding: 8px; }
 
 .view-placeholder { color: var(--muted); padding: 12px; font-size: 13px; }

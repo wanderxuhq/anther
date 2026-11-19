@@ -1,0 +1,22 @@
+{
+  "name": "@wanderxuhq/anther-node-pty",
+  "version": "1.0.0",
+  "description": "Windows-only node-pty loader for anther",
+  "license": "MIT",
+  "author": "wanderxuhq",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "README.md"
+  ],
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "dependencies": {
+    "node-pty": "1.1.0"
+  }
+}

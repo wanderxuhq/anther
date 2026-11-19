@@ -39,22 +39,35 @@ function isUrl(value: string): boolean {
   return /^https?:\/\/\S+$/i.test(value);
 }
 
-/** 路径候选（不含 URL）。斜杠路径宽松，单文件名要求已知扩展名/文件名，避免把版本号、域名点成文件。 */
+const DRIVE_PATH = /^[A-Za-z]:[\\/]/;
+const UNC_PATH = /^\\\\[^\\/]+[\\/][^\\/]/;
+
+/** 路径候选（不含 URL）。斜杠/反斜杠路径宽松，单文件名要求已知扩展名/文件名，
+ *  避免把版本号、域名点成文件。支持 Windows 盘符与 UNC 路径。 */
 export function looksLikePath(value: string, allowSpaces = false): boolean {
   const p = value.trim();
   if (!p || p === '.' || p === '..') return false;
-  if (p.includes('://') || p.includes(':')) return false;
-  if (!p.includes('/') && p.includes('@')) return false;
-  if (p.startsWith('-') || p.startsWith('//')) return false;
+  if (p.includes('://')) return false;
+  const drive = DRIVE_PATH.test(p);
+  // 非盘符路径里的冒号通常是 `key:value` 或行列号，不当作路径。
+  if (!drive && p.includes(':')) return false;
+  if (!p.includes('/') && !p.includes('\\') && p.includes('@')) return false;
+  if (p.startsWith('-')) return false;
+  if (!drive && p.startsWith('//')) return false;
+  // \\server 这种只有主机名的 UNC 片段不是可打开路径
+  if (!drive && p.startsWith('\\\\') && !UNC_PATH.test(p)) return false;
   if (/[*?|<>]/.test(p)) return false;
   if (!allowSpaces && /\s/.test(p)) return false;
-  if (p.startsWith('~')) {
-    if (!p.startsWith('~/')) return false;
-  }
-  const body = p.endsWith('/') ? p.slice(0, -1) : p;
+  if (!drive && p.startsWith('~') && !p.startsWith('~/')) return false;
+  const body = p.replace(/[\\/]+$/, '');
   if (!body) return false;
-  if (body.includes('/')) {
-    const segments = body.split('/').filter(Boolean);
+  if (drive || UNC_PATH.test(p) || body.includes('/') || body.includes('\\')) {
+    const rest = drive
+      ? body.slice(2).replace(/^[\\/]+/, '')
+      : UNC_PATH.test(p)
+        ? body.replace(/^\\\\[^\\/]+[\\/]+/, '')
+        : body;
+    const segments = rest.split(/[\\/]+/).filter(Boolean);
     if (segments.length === 0) return false;
     if (segments.every((segment) => /^\d+$/.test(segment))) return false;
     return segments.some((segment) => /[A-Za-z_]/.test(segment));

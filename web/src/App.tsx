@@ -14,7 +14,7 @@ import { FeatureView } from './views/feature.tsx';
 import { featurePanels } from './features.ts';
 import { tabFilePath, type FeatureTab } from './tab-model.ts';
 import type { FeaturePanel, FeatureToolbarAction } from './feature-types.ts';
-import { api, type ObsidianLinkTarget } from './api.ts';
+import { api, type ObsidianLinkTarget, type TerminalShellKind } from './api.ts';
 import {
   activeTab, currentTabId, setCurrentTabId, openTerminal, closeAnyTab, openTab,
   readingLocationFor, readerRestoreRequest, updateReadingLocation,
@@ -27,6 +27,7 @@ import {
   activePanel, selectPanel, drawerOpen, setDrawerOpen, updateFilePosition, updateSearch,
   openGitHistory, openGitBranch, createBranch, currentBranch, setCurrentBranch, setGitRefreshTick,
   theme, setTheme, applyTheme,
+  terminalShells, defaultTerminalShell,
   tabs,
 } from './stores.ts';
 import { createEditor, type EditorHandle } from './editor/index.ts';
@@ -371,9 +372,10 @@ export function App() {
     return currentFile() ?? <span class="toolbar-path-hint">{t('noFileOpen')}</span>;
   };
 
-  async function handleNewTerminal() {
+  async function handleNewTerminal(shell?: TerminalShellKind | 'auto') {
+    setTerminalMenuOpen(false);
     try {
-      await openTerminal();
+      await openTerminal(shell);
     } catch (e) {
       showToast(t('toast.terminalCreateFail', { msg: (e as Error).message }), 'error');
     }
@@ -549,6 +551,8 @@ export function App() {
   const [branchCreating, setBranchCreating] = createSignal(false);
   // 抽屉底部 ⓘ：服务器系统信息（进入抽屉的视图导航区，避免挤占工具栏）
   const [systemOpen, setSystemOpen] = createSignal(false);
+  // Windows 上新建终端前先选 shell；Unix 没有可选列表，点击直接创建。
+  const [terminalMenuOpen, setTerminalMenuOpen] = createSignal(false);
 
   async function handleNewBranch(): Promise<void> {
     const name = newBranchName().trim();
@@ -1011,9 +1015,39 @@ export function App() {
                 </button>
               )}
             </For>
-            <button class="view-tab" onClick={() => void handleNewTerminal()} title={t('newTerminal')} aria-label={t('newTerminal')}>
-              <Icon name="terminal-plus" />
-            </button>
+            <div class="new-terminal">
+              <button
+                class="view-tab"
+                onClick={() => {
+                  if (terminalShells().length === 0) { void handleNewTerminal(); return; }
+                  setTerminalMenuOpen((open) => !open);
+                }}
+                title={t('newTerminal')}
+                aria-label={t('newTerminal')}
+                aria-haspopup={terminalShells().length > 0 ? 'menu' : undefined}
+                aria-expanded={terminalShells().length > 0 ? terminalMenuOpen() : undefined}
+              >
+                <Icon name="terminal-plus" />
+              </button>
+              <Show when={terminalMenuOpen()}>
+                <div class="drawer-menu-backdrop" onClick={() => setTerminalMenuOpen(false)} />
+                <div class="drawer-menu" role="menu" aria-label={t('terminal.shell.menu')}>
+                  <button class="menu-item" role="menuitem" onClick={() => void handleNewTerminal('auto')}>
+                    {t('terminal.shell.auto')}
+                    <Show when={defaultTerminalShell() !== 'auto'}>
+                      <small>{t(`terminal.shell.${defaultTerminalShell()}`)}</small>
+                    </Show>
+                  </button>
+                  <For each={terminalShells()}>
+                    {(shell) => (
+                      <button class="menu-item" role="menuitem" onClick={() => void handleNewTerminal(shell)}>
+                        {t(`terminal.shell.${shell}`)}
+                      </button>
+                    )}
+                  </For>
+                </div>
+              </Show>
+            </div>
             <button class="view-tab" onClick={() => void openGit()} title={t('view.git')} aria-label={t('view.git')}>
               <Icon name="git-branch" />
             </button>

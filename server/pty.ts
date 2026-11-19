@@ -1,11 +1,15 @@
 // server/pty.ts
-// 真 PTY 封装：script -qfc 'echo PTYMARKER $(tty); exec bash' /dev/null。
+// PTY 抽象 + Unix 实现：script -qfc 'echo PTYMARKER $(tty); exec bash' /dev/null。
 // 首行 marker 输出 pty 设备路径（/dev/pts/N），Node 解析后所有 resize 走
 // `stty -F <dev>` 独立子进程（TIOCSWINSZ），绝不向 stdin 注入 stty（TUI raw
 // 模式下注入会被当按键，污染 vim 缓冲区——实测）。
+//
+// Windows 没有 script/stty，原生 Windows 程序也不会使用 MSYS 的 pty；
+// 平台分派到 pty-windows.ts（ConPTY，经可选依赖加载），Linux 不会加载该文件。
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { StringDecoder } from 'node:string_decoder';
+import type { ShellSpec } from './shell.ts';
 
 const MARKER_RE = /^PTYMARKER (\S+)\r?\n/;
 const FIRST_BUF_LIMIT = 64 * 1024; // marker 解析的兜底上限（防异常 shell 无限攒）
@@ -13,7 +17,33 @@ const FIRST_BUF_LIMIT = 64 * 1024; // marker 解析的兜底上限（防异常 s
 // 避免 create() 的 HTTP 请求无限等待。
 const READY_TIMEOUT_MS = 15_000;
 
-export class PtySession extends EventEmitter {
+/** Terminal 只依赖这些事件/方法；Unix 与 Windows 实现共用。 */
+export interface PtySession {
+  readonly pid: number;
+  readonly ready: Promise<void>;
+  on(event: 'data', listener: (data: string) => void): this;
+  on(event: 'exit', listener: (code: number) => void): this;
+  off(event: 'data', listener: (data: string) => void): this;
+  off(event: 'exit', listener: (code: number) => void): this;
+  once(event: 'data', listener: (data: string) => void): this;
+  once(event: 'exit', listener: (code: number) => void): this;
+  emit(event: 'data', data: string): boolean;
+  emit(event: 'exit', code: number): boolean;
+  write(data: string): void;
+  resize(cols: number, rows: number): Promise<void>;
+  kill(): Promise<void>;
+}
+
+/** 按平台创建 PTY；Unix 忽略 spec（固定 bash），Windows 使用 shell 选择结果。 */
+export async function createPtySession(cwd: string, spec: ShellSpec): Promise<PtySession> {
+  if (process.platform === 'win32') {
+    const { WindowsPtySession } = await import('./pty-windows.ts');
+    return new WindowsPtySession(cwd, spec);
+  }
+  return new UnixPtySession(cwd);
+}
+
+export class UnixPtySession extends EventEmitter implements PtySession {
   readonly pid: number;
   readonly ready: Promise<void>;
   private child: ChildProcess;

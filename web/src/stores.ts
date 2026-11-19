@@ -5,7 +5,7 @@ import { fileTargetKey, isArchiveLocation, parseFileTargetKey } from './file-tar
 import type { ReadingLocation } from './readers/location.ts';
 import { batch, createSignal, createMemo } from 'solid-js';
 import { DEFAULT_STATE, DEFAULT_EXCLUDE, parseUrl, serializeUrl, type UrlState, type Panel, type LineRange } from './url-state.ts';
-import { api, loadTabsSnapshot, saveTabsSnapshot, type TerminalInfo } from './api.ts';
+import { api, loadTabsSnapshot, saveTabsSnapshot, type TerminalInfo, type TerminalShellKind } from './api.ts';
 import { basePath } from './base.ts';
 import type { EditorHandle } from './editor/index.ts';
 import { featureRoutes, findFeaturePanel, loadFeatures } from './features.ts';
@@ -93,6 +93,11 @@ export const [editorHandle, setEditorHandle] = createSignal<EditorHandle | null>
 // gitRefreshTick 是 git 相关视图的统一刷新信号（checkout/commit/新建分支/工具栏 🔄 后 bump → 视图重拉）
 export const [currentBranch, setCurrentBranch] = createSignal<string | null>(null);
 export const [gitRefreshTick, setGitRefreshTick] = createSignal(0);
+
+/** 服务端可选的 shell（Windows 才有；Unix 为空 → 不显示选择器）。 */
+export const [terminalShells, setTerminalShells] = createSignal<TerminalShellKind[]>([]);
+/** 未显式选择时服务端使用的 shell；auto 表示自动探测。 */
+export const [defaultTerminalShell, setDefaultTerminalShell] = createSignal<TerminalShellKind | 'auto'>('auto');
 
 let started = false;
 let lastNavigationHref = '';
@@ -375,9 +380,11 @@ export async function startSync(): Promise<void> {
   // 终端标签（每用户私有，后台常驻进程都在）
   let termTabs: TabItem[] = [];
   try {
-    const { terminals } = await api.terminals.list();
+    const { terminals, shells, defaultShell } = await api.terminals.list();
     termTabs = terminals.map((t) => ({ kind: 'terminal', id: t.id, name: t.name }));
     termCount = terminals.length; // 种子：后续新建终端从存活数继续编号
+    setTerminalShells(shells ?? []);
+    setDefaultTerminalShell(defaultShell ?? 'auto');
   } catch { /* 静默 */ }
   terminalsLoaded = true;
   // 合并加载期间已经打开的本地标签，不用迟到的列表覆盖当前导航。
@@ -493,10 +500,11 @@ export async function switchTab(id: string): Promise<void> {
   }
 }
 
-/** 新建终端（活动栏 ➕）：本地生成本地化名 → 创建 → 加标签 → 设为前台。失败抛错（调用方 Toast） */
-export async function openTerminal(): Promise<TerminalInfo> {
+/** 新建终端（活动栏 ➕）：本地生成本地化名 → 创建 → 加标签 → 设为前台。失败抛错（调用方 Toast）。
+ *  shell 只在服务端返回可选列表时由用户选择；auto 表示服务端按 ANTHER_SHELL 或平台自动探测。 */
+export async function openTerminal(shell?: TerminalShellKind | 'auto'): Promise<TerminalInfo> {
   const name = t('terminal.name', { n: ++termCount });
-  const info = await api.terminals.create(name);
+  const info = await api.terminals.create(name, shell);
   setTabs((prev) => [...prev, { kind: 'terminal', id: info.id, name: info.name }]);
   setCurrentTabId(info.id);
   pushState();

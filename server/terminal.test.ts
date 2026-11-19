@@ -3,7 +3,7 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { Terminal, TerminalManager, type TerminalScreenMessage } from './terminal.ts';
-import { PtySession } from './pty.ts';
+import type { PtySession } from './pty.ts';
 
 const cwd = process.cwd();
 

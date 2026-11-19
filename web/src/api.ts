@@ -162,8 +162,9 @@ export const api = {
     heartbeat: () => request('PUT', '/api/heartbeat'),
   },
   terminals: {
-    list: () => request<{ terminals: TerminalInfo[] }>('GET', '/api/terminals'),
-    create: (name: string) => request<TerminalInfo>('POST', '/api/terminals', { name }),
+    list: () => request<TerminalList>('GET', '/api/terminals'),
+    create: (name: string, shell?: string) =>
+      request<TerminalInfo>('POST', '/api/terminals', shell ? { name, shell } : { name }),
     close: (id: string) => request('POST', '/api/terminals/close', { id }),
     resolve: (path: string, cwd?: string) => {
       const query = new URLSearchParams({ path });
@@ -268,7 +269,14 @@ export function searchStream(
   return { cancel: () => ctrl.abort() };
 }
 
-export type TerminalInfo = { id: string; name: string };
+export type TerminalShellKind = 'bash' | 'pwsh' | 'powershell' | 'cmd';
+export type TerminalInfo = { id: string; name: string; shell?: TerminalShellKind };
+/** shells 为空表示当前平台不提供 shell 选择（Unix 仍是固定 bash）。 */
+export type TerminalList = {
+  terminals: TerminalInfo[];
+  shells?: TerminalShellKind[];
+  defaultShell?: TerminalShellKind | 'auto';
+};
 export type LocatedPath = { path: string; kind: 'file' | 'dir' };
 
 export type TerminalHandlers = {

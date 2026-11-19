@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { HttpError } from './http-error.ts';
 import { resolveWithinRoot } from './path-safety.ts';
+import { fileUrlPath } from './file-url.ts';
 import { createHash } from 'node:crypto';
 
 export type DirEntry = {
@@ -104,7 +105,7 @@ export class FileStore {
   async locateTerminalPath(rawPath: string, cwd = ''): Promise<LocatedPath> {
     const raw = rawPath.trim();
     if (!raw) throw new HttpError(400, 'missing path');
-    const cwdPath = this.fileUrlPath(cwd);
+    const cwdPath = fileUrlPath(cwd);
     const candidates: string[] = [];
     if (raw === '~' || raw.startsWith('~/')) {
       // ~ 始终指工作区根，不跟随 shell 当前目录。
@@ -374,12 +375,6 @@ export class FileStore {
     } catch {
       return false;
     }
-  }
-
-  /** OSC 7 的 cwd 可能是 file:// URL；转成普通路径。 */
-  private fileUrlPath(value: string): string {
-    if (!value.startsWith('file://')) return value;
-    try { return decodeURIComponent(new URL(value).pathname); } catch { return value; }
   }
 
   private mapFsError(e: unknown): HttpError {

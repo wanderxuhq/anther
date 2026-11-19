@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { PtySession } from './pty.ts';
+import { UnixPtySession } from './pty.ts';
 
 const cwd = process.cwd();
 const hasScript = spawnSync('which', ['script']).status === 0;
@@ -25,14 +25,14 @@ function pty(name: string, fn: (t: TestContext) => Promise<void>): void {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Create a session owned by the test; cleanup runs even when the test fails or times out. */
-function session(t: TestContext, dir = cwd): PtySession {
-  const p = new PtySession(dir);
+function session(t: TestContext, dir = cwd): UnixPtySession {
+  const p = new UnixPtySession(dir);
   t.after(() => p.kill());
   return p;
 }
 
 /** 收集输出直到匹配 re（按轮询次数限定，避免墙钟跳变误判超时） */
-async function untilMatch(p: PtySession, re: RegExp, nominalMs = 15_000): Promise<string> {
+async function untilMatch(p: UnixPtySession, re: RegExp, nominalMs = 15_000): Promise<string> {
   let buf = '';
   const onData = (d: string) => { buf += d; };
   p.on('data', onData);

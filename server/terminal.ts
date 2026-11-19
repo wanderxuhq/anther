@@ -4,11 +4,18 @@
 // 浏览器通过 WS 收快照/脏行 diff 并负责渲染；查询回应也全部在服务端完成。
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
-import { PtySession } from './pty.ts';
+import { createPtySession, type PtySession } from './pty.ts';
+import {
+  availableShells,
+  configuredShell,
+  resolveShell,
+  type ShellKind,
+  type ShellOptions,
+} from './shell.ts';
 import { DEFAULT_SCROLLBACK, TerminalScreen, type TerminalQueryMeta } from '../shared/terminal/vt.ts';
 import { serializeDiff, serializeScreen, type ScreenDiff, type ScreenSnapshot } from '../shared/terminal/serialize.ts';
 
-export type TerminalInfo = { id: string; name: string };
+export type TerminalInfo = { id: string; name: string; shell?: ShellKind };
 
 export type TerminalScreenMessage =
   | ({ type: 'screen' } & ScreenSnapshot)
@@ -108,12 +115,14 @@ export class Terminal extends EventEmitter {
 
 export class TerminalManager {
   private byUser = new Map<string, Map<string, Terminal>>();
+  private shellCache: ShellKind[] | null = null;
 
-  constructor(private cwd = process.cwd()) {}
+  constructor(private cwd = process.cwd(), private shellOptions: ShellOptions = {}) {}
 
   // name 完全由前端本地生成（含本地化），服务端诚实接收、原样存储与返回，不做任何命名。
-  async create(userId: string, name: string): Promise<TerminalInfo> {
-    const pty = new PtySession(this.cwd);
+  async create(userId: string, name: string, shell?: string): Promise<TerminalInfo> {
+    const spec = await resolveShell(shell, this.shellOptions);
+    const pty = await createPtySession(this.cwd, spec);
     const id = `t_${randomBytes(6).toString('hex')}`;
     const term = new Terminal(id, name, pty);
     this.map(userId).set(id, term);
@@ -128,11 +137,22 @@ export class TerminalManager {
       await pty.kill(); // 启动失败也要回收进程，避免孤儿 script/bash
       throw e;
     }
-    return { id, name: term.name };
+    return { id, name: term.name, shell: spec.kind };
   }
 
   list(userId: string): TerminalInfo[] {
     return [...this.map(userId).values()].map((t) => ({ id: t.id, name: t.name }));
+  }
+
+  /** 当前平台可选的 shell；Unix 为空数组（前端不显示选择器）。 */
+  async shells(): Promise<ShellKind[]> {
+    if (!this.shellCache) this.shellCache = await availableShells(this.shellOptions);
+    return this.shellCache;
+  }
+
+  /** 未显式选择 shell 时使用的配置（auto 表示服务端自动探测）。 */
+  defaultShell(): ShellKind | 'auto' {
+    return configuredShell(this.shellOptions.env ?? process.env);
   }
 
   get(userId: string, id: string): Terminal | null {

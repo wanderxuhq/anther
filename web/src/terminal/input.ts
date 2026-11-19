@@ -96,9 +96,14 @@ export function keyToSequence(e: KeyLike, applicationCursor = false): string | n
   }
 }
 
-/** 粘贴：mode 2004 开启时用 bracketed paste 包裹，防止内容被 shell 提前结束。 */
+/**
+ * 粘贴：mode 2004 开启时用 bracketed paste 包裹，防止内容被 shell 提前结束。
+ * 换行统一为 `\r`（Windows 的 ConPTY / PowerShell 只把回车当提交；
+ * 非 bracketed paste 时若保留 `\n`，多行粘贴不会执行）。bracketed paste 内部
+ * 保留 `\n`，交给应用自己处理。
+ */
 export function pasteInput(text: string, bracketedPaste: boolean): string {
-  if (!bracketedPaste) return text;
-  const clean = text.replace(/\x1b\[200~/g, '').replace(/\x1b\[201~/g, '');
-  return `\x1b[200~${clean}\x1b[201~`;
+  const clean = text.replace(/\x1b\[200~/g, '').replace(/\x1b\[201~/g, '').replace(/\r\n?/g, '\n');
+  if (bracketedPaste) return `\x1b[200~${clean}\x1b[201~`;
+  return clean.replace(/\n/g, '\r');
 }

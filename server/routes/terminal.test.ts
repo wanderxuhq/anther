@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { WebSocket } from 'ws';
 import { HttpServer } from '../http.ts';
 import { TerminalManager } from '../terminal.ts';
@@ -74,6 +75,22 @@ test('POST 缺 name → 400', async () => {
   assert.equal((await call('POST', '/api/terminals', {}, 'u1')).status, 400);
 });
 
+test('POST 非法 shell → 400；GET 返回 shell 元数据', async () => {
+  assert.equal((await call('POST', '/api/terminals', { name: 'T', shell: 'evil' }, 'u1')).status, 400);
+  assert.equal((await call('POST', '/api/terminals', { name: 'T', shell: 1 }, 'u1')).status, 400);
+  const list = await (await call('GET', '/api/terminals', undefined, 'u1')).json();
+  assert.ok(Array.isArray(list.shells));
+  assert.ok(['auto', 'bash', 'pwsh', 'powershell', 'cmd'].includes(list.defaultShell));
+});
+
+test('POST shell=auto → 200（按平台自动探测）', async () => {
+  const res = await call('POST', '/api/terminals', { name: 'T', shell: 'auto' }, 'u1');
+  assert.equal(res.status, 200);
+  const info = await res.json();
+  assert.equal(typeof info.shell, 'string');
+  if (process.platform !== 'win32') assert.equal(info.shell, 'bash');
+});
+
 test('close 他人终端 → 404；缺 id → 400', async () => {
   const info = await createTerminal('u1');
   assert.equal((await call('POST', '/api/terminals/close', { id: info.id }, 'u2')).status, 404);
@@ -126,7 +143,10 @@ test('resolve：工作区相对路径、cwd 相对路径、目录、越界与缺
   assert.equal(home.status, 200);
   assert.deepEqual(await home.json(), { path: 'README.md', kind: 'file' });
 
-  const osc7Cwd = await call('GET', `/api/terminal/resolve?path=foo.ts&cwd=${encodeURIComponent(`file://localhost${path.join(root, 'src')}`)}`);
+  const osc7Cwd = await call(
+    'GET',
+    `/api/terminal/resolve?path=foo.ts&cwd=${encodeURIComponent(pathToFileURL(path.join(root, 'src')).href)}`,
+  );
   assert.equal(osc7Cwd.status, 200);
   assert.deepEqual(await osc7Cwd.json(), { path: 'src/foo.ts', kind: 'file' });
 
