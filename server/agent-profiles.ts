@@ -98,7 +98,10 @@ function executableCandidates(file: string, platform: NodeJS.Platform, env: Node
   if (platform !== 'win32') return [file];
   if (path.extname(file)) return [file];
   const extensions = (env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean);
-  return [file, ...extensions.map((ext) => `${file}${ext.toLowerCase()}`)];
+  // npm installs both a bare POSIX shim (for Git Bash) and a Windows `.cmd`
+  // shim. cmd.exe only runs the PATHEXT variant, so prefer it over the bare
+  // script that would fail to launch.
+  return [...extensions.map((ext) => `${file}${ext.toLowerCase()}`), file];
 }
 
 async function isExecutable(file: string, platform: NodeJS.Platform): Promise<boolean> {

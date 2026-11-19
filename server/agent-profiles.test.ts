@@ -98,3 +98,36 @@ test('returns undefined when no native ACP agent is available', async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('prefers the Windows PATHEXT shim over the bare npm shim', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'anther-agent-'));
+  try {
+    await writeFile(path.join(dir, 'opencode'), '#!/bin/sh\nexit 0\n');
+    await writeFile(path.join(dir, 'opencode.cmd'), '@echo off\r\n');
+    const found = await discoverAgent({
+      env: { PATH: dir },
+      platform: 'win32',
+      home: dir,
+      profiles: [opencode],
+    });
+    assert.equal(found?.executable, path.join(dir, 'opencode.cmd'));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('still finds a bare Windows executable when no PATHEXT variant exists', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'anther-agent-'));
+  try {
+    await writeFile(path.join(dir, 'opencode'), '');
+    const found = await discoverAgent({
+      env: { PATH: dir },
+      platform: 'win32',
+      home: dir,
+      profiles: [opencode],
+    });
+    assert.equal(found?.executable, path.join(dir, 'opencode'));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

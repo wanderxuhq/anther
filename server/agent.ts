@@ -7,6 +7,7 @@ import { Readable, Writable } from 'node:stream';
 import * as acp from '@agentclientprotocol/sdk';
 import { RequestError } from '@agentclientprotocol/sdk';
 import { discoverAgents, type DiscoveredAgent } from './agent-profiles.ts';
+import { agentSpawnCommand } from './agent-spawn.ts';
 import { formFromElicitation, formResponse, type AgentForm } from './agent-forms.ts';
 import { collectSessionPages } from './agent-session-list.ts';
 import { AgentFileSystem } from './agent-fs.ts';
@@ -193,13 +194,14 @@ export class AgentRuntime {
       this.readyReject = reject;
       this.emit({ type: 'state', status: 'starting' });
       let child: ChildProcess;
+      const command = agentSpawnCommand(executable);
       try {
-        child = spawn(executable, args, {
+        child = spawn(command.file, args, {
           cwd: this.dir,
           env: { ...process.env },
           stdio: ['pipe', 'pipe', 'pipe'],
           windowsHide: true,
-          shell: process.platform === 'win32',
+          shell: command.shell,
         });
       } catch (error) {
         this.fail(error);
