@@ -6,6 +6,7 @@ import path from 'node:path';
 import { HttpServer } from './http.ts';
 import { FileStore } from './files.ts';
 import { registerFsRoutes } from './routes/fs.ts';
+import { makeSymlink } from './test-support.ts';
 
 let root: string, base: string, http: HttpServer;
 beforeEach(async () => {
@@ -77,12 +78,17 @@ test('预览接口拒绝任意 HTML、目录和越界路径，损坏链接或缺
   await write('page.html', '<script>alert(1)</script>');
   await fs.mkdir(path.join(root, 'workspace/folder.mp4'));
   await fs.writeFile(path.join(root, 'outside.mp4'), 'outside');
-  await fs.symlink(path.join(root, 'outside.mp4'), path.join(root, 'workspace/link.mp4'));
-  await fs.symlink('missing.mp4', path.join(root, 'workspace/broken.mp4'));
+  const hasSymlink = await makeSymlink(path.join(root, 'outside.mp4'), path.join(root, 'workspace/link.mp4'));
+  const hasBroken = await makeSymlink('missing.mp4', path.join(root, 'workspace/broken.mp4'));
   assert.equal((await fetch(endpoint('preview', 'page.html'))).status, 415);
   assert.equal((await fetch(endpoint('preview', 'manual.pdf'))).status, 404);
+  const cases: Array<[string, number]> = [['folder.mp4', 400], ['../outside.mp4', 400]];
+  // Windows 未开启开发者模式时无法创建普通符号链接，跳过相关场景。
+  if (hasSymlink) cases.push(['link.mp4', 400]);
+  if (hasBroken) cases.push(['broken.mp4', 400]);
+  cases.push(['missing.mp4', 404]);
   for (const api of ['preview', 'file-info']) {
-    for (const [name, status] of [['folder.mp4', 400], ['../outside.mp4', 400], ['link.mp4', 400], ['broken.mp4', 400], ['missing.mp4', 404]] as const) {
+    for (const [name, status] of cases) {
       assert.equal((await fetch(endpoint(api, name))).status, status, `${api} ${name}`);
     }
     assert.equal((await fetch(`${base}/api/${api}`)).status, 400);

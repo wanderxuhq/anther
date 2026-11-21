@@ -11,6 +11,7 @@ import { HttpServer } from './http.ts';
 import { FileStore } from './files.ts';
 import { registerFsRoutes } from './routes/fs.ts';
 import type { ArchiveManager, ArchiveOptions, ArchiveStatus } from './archives.ts';
+import { canCreateFileSymlink, makeSymlink } from './test-support.ts';
 
 async function setup(t: TestContext, options: ArchiveOptions = {}) {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'anther-archive-test-'));
@@ -79,10 +80,11 @@ async function unzip(buffer: Buffer): Promise<Map<string, { data: Buffer; mode: 
   }
 }
 
-test('目录 ZIP 保留 Unicode、二进制、空目录、符号链接，单文件仍用原接口', async (t) => {
+// 归档 ZIP 需要保留真实符号链接的 mode/目标，不能用 junction 代替。
+test('目录 ZIP 保留 Unicode、二进制、空目录、符号链接，单文件仍用原接口', { skip: !canCreateFileSymlink() }, async (t) => {
   const f = await setup(t);
-  await fs.symlink('../目录', path.join(f.root, '目录', '循环'));
-  await fs.symlink('/outside/not-readable', path.join(f.root, '目录', '外部链接'));
+  await makeSymlink('../目录', path.join(f.root, '目录', '循环'));
+  await makeSymlink('/outside/not-readable', path.join(f.root, '目录', '外部链接'));
   const status = await f.ready();
   const res = await fetch(f.base + status.url);
   assert.match(res.headers.get('content-disposition')!, /filename\*=UTF-8''/);
@@ -203,7 +205,7 @@ test('活动连接不被清理，取消后可续传', async (t) => {
 
 test('工作区根目录、目录链接可归档；ZIP64 可正常解压', async (t) => {
   const f = await setup(t, { forceZip64: true });
-  await fs.symlink('目录', path.join(f.root, 'alias'));
+  await makeSymlink('目录', path.join(f.root, 'alias'), 'dir');
   const status = await f.ready('.');
   const zip = await bytes(await fetch(f.base + status.url));
   assert.ok(zip.includes(Buffer.from([0x50, 0x4b, 0x06, 0x06])));

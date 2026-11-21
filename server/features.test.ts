@@ -68,10 +68,10 @@ test('feature flags, workspace hook and dispose are wired through mount()', asyn
     assert.ok(handler);
     assert.deepEqual(await handler({} as IncomingMessage, undefined, new URLSearchParams()), features.snapshot());
 
-    assert.equal((globalThis as any).__featureStateDir, `${dir}/fixture`);
-    assert.equal((globalThis as any).__featureStateFile, `${dir}/fixture/sessions.db`);
+    assert.equal((globalThis as any).__featureStateDir, path.join(dir, 'fixture'));
+    assert.equal((globalThis as any).__featureStateFile, path.join(dir, 'fixture', 'sessions.db'));
     assert.match((globalThis as any).__featureStateError, /invalid state path segment/);
-    assert.equal((await stat(`${dir}/fixture`)).isDirectory(), true);
+    assert.equal((await stat(path.join(dir, 'fixture'))).isDirectory(), true);
 
     await features.dispose();
     assert.equal((globalThis as any).__featureDisposed, true);
@@ -89,14 +89,14 @@ test('feature state paths stay inside the feature directory', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'anther-state-'));
   try {
     const state = createFeatureState(dir);
-    assert.equal(state.dir('opencode'), `${dir}/opencode`);
-    assert.equal(state.file('opencode', 'sessions.db'), `${dir}/opencode/sessions.db`);
-    assert.equal(state.file('opencode', 'cache', 'models.json'), `${dir}/opencode/cache/models.json`);
+    assert.equal(state.dir('opencode'), path.join(dir, 'opencode'));
+    assert.equal(state.file('opencode', 'sessions.db'), path.join(dir, 'opencode', 'sessions.db'));
+    assert.equal(state.file('opencode', 'cache', 'models.json'), path.join(dir, 'opencode', 'cache', 'models.json'));
     assert.throws(() => state.dir('../escape'), /invalid feature id/);
     assert.throws(() => state.file('opencode', '..', 'secret'), /invalid state path segment/);
     assert.throws(() => state.file('opencode', 'nested/../../secret'), /invalid state path segment/);
-    assert.equal(await state.ensure('opencode'), `${dir}/opencode`);
-    const featureDirInfo = await stat(`${dir}/opencode`);
+    assert.equal(await state.ensure('opencode'), path.join(dir, 'opencode'));
+    const featureDirInfo = await stat(path.join(dir, 'opencode'));
     assert.equal(featureDirInfo.isDirectory(), true);
     if (process.platform !== 'win32') assert.equal(featureDirInfo.mode & 0o077, 0);
   } finally {

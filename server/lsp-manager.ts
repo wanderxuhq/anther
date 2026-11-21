@@ -41,6 +41,8 @@ export class LspManager {
   private lastDiagnostics = new Map<string, Diagnostic[]>();
   private idleDisposeMs: number;
   private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** 已从 sessions 移除、但子进程尚未退出的回收任务；dispose() 必须等它们完成。 */
+  private disposing = new Set<Promise<void>>();
 
   constructor(opts: { workspaceRoot: string; engines?: EngineSpec[]; idleDisposeMs?: number }) {
     this.workspaceRoot = opts.workspaceRoot;
@@ -116,12 +118,22 @@ export class LspManager {
     this.sessions.delete(engineId);
     this.openCount.delete(engineId);
     this.restartCount.delete(engineId);
-    if (s) await s.dispose();
+    if (s) {
+      const pending = s.dispose();
+      this.disposing.add(pending);
+      try {
+        await pending;
+      } finally {
+        this.disposing.delete(pending);
+      }
+    }
   }
 
   async dispose(): Promise<void> {
     for (const timer of this.idleTimers.values()) clearTimeout(timer);
     this.idleTimers.clear();
     await Promise.all([...this.sessions.keys()].map((id) => this.disposeEngine(id)));
+    // 空闲回收可能已把 session 移出 map，但子进程还在退出；等它们释放句柄。
+    await Promise.all([...this.disposing]);
   }
 }

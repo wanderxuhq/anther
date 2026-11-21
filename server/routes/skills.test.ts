@@ -1,11 +1,12 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { HttpServer } from '../http.ts';
 import { SkillManager } from '../skills.ts';
 import { registerSkillRoutes } from './skills.ts';
+import { canCreateFileSymlink, makeSymlink } from '../test-support.ts';
 
 let root: string;
 let server: HttpServer;
@@ -108,7 +109,7 @@ test('resolves, installs, lists and removes a local skill over HTTP', async () =
   );
 });
 
-test('strict install failures map to 400 and keep the preview usable', async () => {
+test('strict install failures map to 400 and keep the preview usable', { skip: !canCreateFileSymlink() }, async () => {
   const bad = path.join(root, 'source', 'bad-skill');
   await mkdir(bad, { recursive: true });
   await writeFile(path.join(bad, 'SKILL.md'), [
@@ -117,7 +118,7 @@ test('strict install failures map to 400 and keep the preview usable', async () 
     'description: A skill with a symlink.',
     '---',
   ].join('\n'));
-  await symlink('SKILL.md', path.join(bad, 'link.md'));
+  await makeSymlink('SKILL.md', path.join(bad, 'link.md'));
 
   const preview = await call('POST', '/_/agent/api/skills/resolve', { source: './source' });
   const list = await call('GET', '/_/agent/api/skills');

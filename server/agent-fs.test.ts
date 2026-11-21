@@ -1,11 +1,12 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { RequestError } from '@agentclientprotocol/sdk';
 import { FileStore } from './files.ts';
 import { AgentFileSystem } from './agent-fs.ts';
+import { canCreateFileSymlink, makeSymlink } from './test-support.ts';
 
 let root: string;
 let outside: string;
@@ -85,8 +86,8 @@ test('overwrites an existing file', async () => {
   assert.equal(await readFile(path.join(root, 'a.txt'), 'utf8'), 'changed');
 });
 
-test('rejects symlink escapes on read and write', async () => {
-  await symlink(path.join(outside, 'secret.txt'), path.join(root, 'link.txt'));
+test('rejects symlink escapes on read and write', { skip: !canCreateFileSymlink() }, async () => {
+  await makeSymlink(path.join(outside, 'secret.txt'), path.join(root, 'link.txt'));
   await assert.rejects(
     files.readTextFile({ sessionId: 'sess_1', path: path.join(root, 'link.txt') }),
     isInvalidParams,
@@ -101,7 +102,7 @@ test('accepts paths through a symlinked workspace root', async () => {
   const real = await mkdtemp(path.join(tmpdir(), 'anther-agent-fs-real-'));
   const link = await mkdtemp(path.join(tmpdir(), 'anther-agent-fs-link-'));
   const linked = path.join(link, 'workspace');
-  await symlink(real, linked, 'dir');
+  await makeSymlink(real, linked, 'dir');
   await writeFile(path.join(real, 'a.txt'), 'real');
   const linkedFiles = new AgentFileSystem(linked, new FileStore(linked));
   try {

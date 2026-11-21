@@ -17,7 +17,7 @@
     "README.*.md"
   ],
   "scripts": {
-    "test": "node --test --experimental-transform-types 'server/**/*.test.ts' 'web/src/**/*.test.ts'",
+    "test": "node --test --experimental-transform-types \"server/**/*.test.ts\" \"web/src/**/*.test.ts\"",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json",
     "dev": "node scripts/dev.mjs",
     "dev:server": "node --watch --experimental-transform-types server/cli.ts",

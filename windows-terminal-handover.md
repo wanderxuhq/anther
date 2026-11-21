@@ -2,7 +2,7 @@
 
 - Date: 2026-11-19
 - Branch: `win`
-- Status: 代码完成，待发布包装包 + Windows/Linux 实机验收
+- Status: 代码完成；Windows 实机验收与全量测试通过，待发布包装包 + Linux 验收
 - 原始方案: [`windows-terminal-support.md`](./windows-terminal-support.md)
 - 决策: 采用「Windows-only 包装包 + 官方 `node-pty`」；本轮范围 = 终端核心 + shell 选择（不含 `.bat` / `.ps1` 运行入口）
 
@@ -93,6 +93,18 @@
   - 合并跑 49 项，全部通过。
 - 手工 probe：默认选中 Windows PowerShell；OSC 7 得到 `file:///D:/projects/anther`；resize 到 100×30 生效；中文输出正常。
 
+### 3.1 Windows 全量测试补充（2026-11-21，Node 24.12.0）
+
+- `npm test` 原先在 Windows 上实际跑 0 项：`package.json` 里的单引号 glob 被 `cmd.exe` 当成字面量；已改成双引号。
+- 修复的 Windows 测试兼容问题：
+  - `cli.test.ts`、`features.test.ts`、`files.test.ts` 中的 POSIX 路径与 `/` 拼接断言；
+  - `url-navigation.test.ts` 虚拟入口里的 Windows 反斜杠 import（统一改成 `/`）；
+  - `routes/lsp.test.ts` 的 `file://` URI 断言；该用例失败时原先会跳过 `m2.dispose()`，泄漏 `lsp-stub.js` 子进程并挂住整个 `node --test`（表现为“测试卡死”）；
+  - 符号链接用例：目录链接在 Windows 上改用 junction；普通文件链接在未开启开发者模式时用静态 `skip`（新增 `server/test-support.ts`，不要在测试体内 `t.skip()`——Node 会连 `afterEach` 一起跳过）；
+  - `LspSession.dispose()` 等子进程真正退出后才完成；`LspManager.dispose()` 等待空闲回收的在途任务，避免 Windows 上立刻删除临时目录时 `EBUSY`。
+- 结果：`826` 项，`809` 通过、`0` 失败、`17` 跳过（10 个文件符号链接用例 + 7 个 POSIX PTY 用例），耗时约 70s。
+- `npm run typecheck`、`npm run build` 均通过。
+
 ## 4. 发布前必做
 
 1. 发布包装包：
@@ -102,10 +114,11 @@
    ```
 2. 回到仓库根目录执行 `npm install`，把锁文件里的占位解析为真实依赖。
 3. Windows 实机验收（`npm run dev` 或 `npm start`）：
-   - 新建 PowerShell 7 / Windows PowerShell / cmd 终端；
-   - `echo 中文`、resize、Ctrl+C、`exit`；
-   - 手动运行 `.bat` / `.ps1`（本轮未提供文件树运行入口）；
-   - 关闭终端后确认无残留进程/句柄。
+    - 新建 PowerShell 7 / Windows PowerShell / cmd 终端；
+    - `echo 中文`、resize、Ctrl+C、`exit`；
+    - 手动运行 `.bat` / `.ps1`（本轮未提供文件树运行入口）；
+    - 关闭终端后确认无残留进程/句柄。
+    - 2026-11-21 已完成：全量 `npm test`、`npm run typecheck`、`npm run build` 通过。
 4. Linux 验收：
    ```sh
    npm ci
@@ -123,10 +136,7 @@
    - 或接受噪音。
 2. **私有字段清理**：`releaseAgentHandles()` 依赖 `node-pty` 的 `_agent._inSocket` / `_conoutSocketWorker`。包装包已锁定 `node-pty@1.1.0`，升级时需重新验证；字段不存在时会静默跳过，不会崩。
 3. **cmd 的 cwd**：`PROMPT` 只能 best-effort，路径含空格/`%` 时可能失效；前端会自动回退到工作区根目录。
-4. **Windows 全量 `npm test` 有历史遗留失败**（与本次改动无关）：
-   - `server/cli.test.ts` 断言 POSIX 路径 `/tmp/foo`，Windows 下解析为 `D:\tmp\foo`；
-   - `web/src/url-navigation.test.ts` 的 Vite 临时入口在 Windows 上把反斜杠吃掉（`D:projectsanther...`）。
-   - 完整测试请用 WSL/Linux 跑。
+4. **Windows 未开启开发者模式时的符号链接用例**：10 个依赖普通文件符号链接的测试会被静态跳过（`server/test-support.ts` 探测）；目录链接用 junction，仍保留覆盖。POSIX PTY 测试在 Windows 上照旧跳过。
 5. **未实现**：`.bat` / `.ps1` 的文件树「运行」入口；WSL shell 选项（仍可把 anther 跑在 WSL 里）；cmd 的可靠 OSC 7。
 6. **Store 版 PowerShell 7**：`pwsh.exe` 探测依赖 PATH / Program Files；如果只有 WindowsApps 别名且未真正安装，可能需要实机确认。
 7. 仓库没有 CI 配置，上述验收需要手动执行。
@@ -144,6 +154,7 @@
 | `server/cli.ts` | `--shell` |
 | `server/pty-windows.test.ts` | Windows 集成测试（非 Windows / 缺依赖时 skip） |
 | `server/shell.test.ts` / `server/file-url.test.ts` | 跨平台纯逻辑测试 |
+| `server/test-support.ts` | Windows 测试辅助：symlink 能力探测 / junction 目录链接 |
 | `packages/anther-node-pty/` | 待发布的 Windows-only 包装包 |
 | `web/src/App.tsx` | 新建终端 shell 菜单 |
 | `web/src/stores.ts` / `web/src/api.ts` | shell 列表与创建参数 |

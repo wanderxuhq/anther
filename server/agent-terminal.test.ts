@@ -1,6 +1,6 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { RequestError } from '@agentclientprotocol/sdk';
@@ -8,6 +8,7 @@ import {
   AcpTerminalManager,
   type AcpTerminalEvent,
 } from './agent-terminal.ts';
+import { makeSymlink } from './test-support.ts';
 
 let root: string;
 let outside: string;
@@ -136,8 +137,8 @@ test('rejects a symlinked cwd that escapes the workspace', async () => {
   const link = await mkdtemp(path.join(tmpdir(), 'anther-agent-term-link-'));
   const linked = path.join(link, 'workspace');
   const escape = path.join(linked, 'escape');
-  await symlink(real, linked, 'dir');
-  await symlink(outside, escape, 'dir');
+  await makeSymlink(real, linked, 'dir');
+  await makeSymlink(outside, escape, 'dir');
   const linkedManager = new AcpTerminalManager(linked, () => {});
   try {
     await assert.rejects(
@@ -159,7 +160,7 @@ test('accepts a cwd through a symlinked workspace root', async () => {
   const real = await mkdtemp(path.join(tmpdir(), 'anther-agent-term-real-'));
   const link = await mkdtemp(path.join(tmpdir(), 'anther-agent-term-link-'));
   const linked = path.join(link, 'workspace');
-  await symlink(real, linked, 'dir');
+  await makeSymlink(real, linked, 'dir');
   const linkedManager = new AcpTerminalManager(linked, () => {});
   try {
     const { terminalId } = await linkedManager.create({

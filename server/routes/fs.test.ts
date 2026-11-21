@@ -1,12 +1,13 @@
 // server/routes/fs.test.ts
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, readFile, stat, mkdir, symlink } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile, stat, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { HttpServer } from '../http.ts';
 import { FileStore } from '../files.ts';
 import { registerFsRoutes } from './fs.ts';
+import { makeSymlink } from '../test-support.ts';
 
 let root: string;
 let server: HttpServer;
@@ -127,7 +128,7 @@ test('upload 拒绝缺失路径、根目录和目录穿越', async () => {
 test('upload 拒绝符号链接逃逸', async () => {
   const outside = await mkdtemp(path.join(tmpdir(), 'anther-upload-outside-'));
   try {
-    await symlink(outside, path.join(root, 'link'));
+    await makeSymlink(outside, path.join(root, 'link'), 'dir');
     assert.equal((await upload('link/new.bin')).status, 400);
     await assert.rejects(stat(path.join(outside, 'new.bin')), { code: 'ENOENT' });
   } finally {
@@ -166,8 +167,10 @@ test('download 拒绝缺失路径、目录、穿越和符号链接逃逸；不�
   const outside = await mkdtemp(path.join(tmpdir(), 'anther-download-outside-'));
   try {
     await writeFile(path.join(outside, 'secret'), 'outside');
-    await symlink(path.join(outside, 'secret'), path.join(root, 'link'));
-    assert.equal((await fetch(`${base}/api/download?path=link`)).status, 400);
+    // Windows 未开启开发者模式时无法创建普通符号链接，跳过该场景。
+    if (await makeSymlink(path.join(outside, 'secret'), path.join(root, 'link'))) {
+      assert.equal((await fetch(`${base}/api/download?path=link`)).status, 400);
+    }
   } finally {
     await rm(outside, { recursive: true, force: true });
   }

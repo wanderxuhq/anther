@@ -165,8 +165,25 @@ export class LspSession {
   }
 
   async dispose(): Promise<void> {
-    this.queue = this.queue.then(() => {
-      if (this.proc && this.proc.exitCode === null) this.proc.kill();
+    const proc = this.proc;
+    this.queue = this.queue.then(async () => {
+      if (proc && proc.exitCode === null) {
+        // 等子进程真正退出再释放：Windows 上进程未退出会锁住 cwd，调用方随即
+        // 删除临时目录（测试 / 空闲回收）时会 EBUSY。kill 后最多等 1s。
+        const exited = new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 1000);
+          proc.once('exit', () => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
+        try {
+          proc.kill();
+        } catch {
+          // 已退出：exitCode 会在事件后更新，交给上面的 timeout 兜底
+        }
+        await exited;
+      }
       this.conn?.dispose();
       this.proc = null;
       this.conn = null;

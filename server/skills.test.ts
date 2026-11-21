@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { AgentInfo } from 'skills';
 import { SkillError, SkillManager, skillTargets } from './skills.ts';
+import { canCreateFileSymlink, makeSymlink } from './test-support.ts';
 
 const supported: AgentInfo[] = [
   {
@@ -129,7 +130,7 @@ test('does not consume a preview when the selected skill is unknown', async () =
   }
 });
 
-test('keeps the source preview after a strict install rejection', async () => {
+test('keeps the source preview after a strict install rejection', { skip: !canCreateFileSymlink() }, async () => {
   const root = await workspace();
   const bad = path.join(root, 'source', 'bad-skill');
   await mkdir(bad, { recursive: true });
@@ -139,7 +140,7 @@ test('keeps the source preview after a strict install rejection', async () => {
     'description: A skill with a symlink.',
     '---',
   ].join('\n'));
-  await symlink('SKILL.md', path.join(bad, 'link.md'));
+  await makeSymlink('SKILL.md', path.join(bad, 'link.md'));
   const manager = new SkillManager(root);
   try {
     const target = (await manager.targets())[0];
@@ -191,7 +192,7 @@ test('rejects a local source that escapes through a symlink', async () => {
   ].join('\n'));
   const manager = new SkillManager(root);
   try {
-    await symlink(path.join(outside, 'skill'), path.join(root, 'linked'));
+    await makeSymlink(path.join(outside, 'skill'), path.join(root, 'linked'), 'dir');
     await assert.rejects(
       manager.resolve('./linked'),
       (error: unknown) => error instanceof SkillError

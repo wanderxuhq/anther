@@ -1,11 +1,12 @@
 // server/files.test.ts
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, mkdir, readdir, symlink } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { FileStore } from './files.ts';
 import { HttpError } from './http-error.ts';
+import { canCreateFileSymlink, makeSymlink } from './test-support.ts';
 
 let root: string;
 let store: FileStore;
@@ -88,34 +89,34 @@ test('rename 目标越界拒绝', async () => {
   await assert.rejects(store.rename('a.txt', '../evil.txt'), (e: HttpError) => e.status === 400);
 });
 
-test('符号链接逃逸被拒', async () => {
-  await symlink('/etc', path.join(root, 'evil'));
+test('符号链接逃逸被拒', { skip: !canCreateFileSymlink() }, async () => {
+  await makeSymlink('/etc', path.join(root, 'evil'));
   await assert.rejects(store.read('evil/passwd'), (e: HttpError) => e.status === 400);
 });
 
-test('符号链接逃逸写入被拒', async () => {
-  await symlink('/etc', path.join(root, 'evil'));
+test('符号链接逃逸写入被拒', { skip: !canCreateFileSymlink() }, async () => {
+  await makeSymlink('/etc', path.join(root, 'evil'));
   await assert.rejects(store.write('evil/x', 'x'), (e: HttpError) => e.status === 400);
 });
 
-test('悬空符号链接写入被拒', async () => {
-  await symlink('/nonexistent-xyz-dir', path.join(root, 'evil2'));
+test('悬空符号链接写入被拒', { skip: !canCreateFileSymlink() }, async () => {
+  await makeSymlink('/nonexistent-xyz-dir', path.join(root, 'evil2'));
   await assert.rejects(store.write('evil2/x.txt', 'x'), (e: HttpError) => e.status === 400);
 });
 
-test('指向根内的符号链接可读', async () => {
-  await symlink('../a.txt', path.join(root, 'sub', 'ok'));
+test('指向根内的符号链接可读', { skip: !canCreateFileSymlink() }, async () => {
+  await makeSymlink('../a.txt', path.join(root, 'sub', 'ok'));
   assert.equal((await store.read('sub/ok')).content, 'hello');
 });
 
-test('list 含悬空链接仍可列出其余条目', async () => {
-  await symlink('/nonexistent-xyz', path.join(root, 'dangling'));
+test('list 含悬空链接仍可列出其余条目', { skip: !canCreateFileSymlink() }, async () => {
+  await makeSymlink('/nonexistent-xyz', path.join(root, 'dangling'));
   const entries = await store.list('.');
   assert.deepEqual(entries.map(e => e.name).sort(), ['a.txt', 'dangling', 'sub']);
 });
 
-test('list 中符号链接条目标为 link', async () => {
-  await symlink('../a.txt', path.join(root, 'ok'));
+test('list 中符号链接条目标为 link', { skip: !canCreateFileSymlink() }, async () => {
+  await makeSymlink('../a.txt', path.join(root, 'ok'));
   const entries = await store.list('.');
   const ok = entries.find(e => e.name === 'ok')!;
   assert.equal(ok.type, 'link');
@@ -133,8 +134,8 @@ test('rename 拒绝根路径：抛 400 且目录名未变', async () => {
 
 test("root='/' 时 resolve 正常（修复 '//' 前缀全 400 缺陷）", () => {
   const rootStore = new FileStore('/');
-  assert.equal(rootStore.resolve('etc/hosts'), '/etc/hosts');
-  assert.equal(rootStore.resolve('/'), '/');
+  assert.equal(rootStore.resolve('etc/hosts'), path.resolve('/etc/hosts'));
+  assert.equal(rootStore.resolve('/'), path.resolve('/'));
   assert.doesNotThrow(() => rootStore.resolve('..')); // path.resolve('/', '..') 归一化为根自身
 });
 

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { WebSocket } from 'ws';
 import { HttpServer } from '../http.ts';
 import { LspManager } from '../lsp-manager.ts';
@@ -40,7 +41,8 @@ beforeEach(async () => {
 afterEach(async () => {
   await manager.dispose();
   await server.close();
-  await rm(root, { recursive: true, force: true });
+  // Windows 上刚退出的子进程可能短暂占用 cwd，rm 需要重试。
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -74,8 +76,8 @@ test('pathToLanguageId / canonicalUriFor 纯函数', () => {
   assert.equal(pathToLanguageId('a.css'), null);
   assert.equal(pathToLanguageId('a.md'), null);
   assert.equal(pathToLanguageId('.gitignore'), null);
-  assert.equal(canonicalUriFor('/ws', 'src/a.ts'), 'file:///ws/src/a.ts');
-  assert.equal(canonicalUriFor('/ws', 'a b.ts'), 'file:///ws/a%20b.ts');
+  assert.equal(canonicalUriFor('/ws', 'src/a.ts'), pathToFileURL(path.resolve('/ws', 'src/a.ts')).href);
+  assert.equal(canonicalUriFor('/ws', 'a b.ts'), pathToFileURL(path.resolve('/ws', 'a b.ts')).href);
 });
 
 test('open → 响应 ok；关闭连接后全局 open 计数归零', async () => {
@@ -100,13 +102,16 @@ test('LSP_STUB_DIAGS=1：open 后收到 diagnostics 推送（扇出到打开该�
   const ws = await openWs();
   const frames: Array<Record<string, unknown>> = [];
   ws.on('message', (d) => frames.push(JSON.parse(d.toString())));
-  ws.send(JSON.stringify({ id: 1, method: 'open', params: { path: 'src/a.ts', text: 'x' } }));
-  await waitFor(() => frames.some((f) => f.type === 'diagnostics'));
-  const diag = frames.find((f) => f.type === 'diagnostics') as { uri: string; diagnostics: Array<{ message: string }> };
-  assert.equal(diag.diagnostics[0].message, 'stub diag');
-  assert.equal(diag.uri, 'file://' + path.join(root, 'src/a.ts'));
-  ws.close();
-  await m2.dispose();
+  try {
+    ws.send(JSON.stringify({ id: 1, method: 'open', params: { path: 'src/a.ts', text: 'x' } }));
+    await waitFor(() => frames.some((f) => f.type === 'diagnostics'));
+    const diag = frames.find((f) => f.type === 'diagnostics') as { uri: string; diagnostics: Array<{ message: string }> };
+    assert.equal(diag.diagnostics[0].message, 'stub diag');
+    assert.equal(diag.uri, pathToFileURL(path.join(root, 'src/a.ts')).href);
+  } finally {
+    ws.close();
+    await m2.dispose();
+  }
 });
 
 test('completion → 响应 ok 且带 stub items', async () => {

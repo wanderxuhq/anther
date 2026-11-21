@@ -17,7 +17,7 @@ test('默认：当前目录、端口 3000、仅监听本机', () => {
 
 test('解析目录、端口', () => {
   const a = parseArgs(['/tmp/foo', '--port', '8080']);
-  assert.equal(a.dir, '/tmp/foo');
+  assert.equal(a.dir, path.resolve('/tmp/foo'));
   assert.equal(a.port, 8080);
   assert.equal(a.attach, true);
 });
@@ -49,7 +49,7 @@ test('--no-attach 关闭附加，--attach 恢复默认', () => {
 
 test('--detach：只卸载当前目录，不启动服务器', () => {
   const a = parseArgs(['/tmp/foo', '--detach', '--port', '8080']);
-  assert.equal(a.dir, '/tmp/foo');
+  assert.equal(a.dir, path.resolve('/tmp/foo'));
   assert.equal(a.port, 8080);
   assert.equal(a.detach, true);
 });

@@ -8,6 +8,8 @@ import solid from 'vite-plugin-solid';
 import { JSDOM } from 'jsdom';
 
 let code: string;
+// 虚拟入口里的 import 说明符必须用 /：Windows 的 \ 会被当成转义符吃掉。
+const mod = (relative: string) => path.join(import.meta.dirname, relative).replace(/\\/g, '/');
 before(async () => {
   const root = path.resolve(import.meta.dirname, '../..');
   const entry = path.join(root, 'src/__url_test_entry.tsx');
@@ -70,18 +72,18 @@ before(async () => {
     }, { name: 'url-test-entry', resolveId: (id) => id === entry ? entry : null,
       load: (id) => id === entry ? `
         import { render } from 'solid-js/web';
-        import { App, saveTiming } from '${path.join(import.meta.dirname, 'App.tsx')}';
-        import * as stores from '${path.join(import.meta.dirname, 'stores.ts')}';
+        import { App, saveTiming } from '${mod('App.tsx')}';
+        import * as stores from '${mod('stores.ts')}';
         import { EditorView } from '@codemirror/view';
         import { createSignal, Show } from 'solid-js';
-        import { fileTargetKey } from '${path.join(import.meta.dirname, 'file-target.ts')}';
-        import * as downloads from '${path.join(import.meta.dirname, 'download.ts')}';
-        import { registerReaderNavigation, cancelReaderNavigation } from '${path.join(import.meta.dirname, 'readers/navigation.ts')}';
-        import { InstancesPage } from '${path.join(import.meta.dirname, 'views/instances.tsx')}';
-        import { DocumentReader } from '${path.join(import.meta.dirname, 'components/document-reader.tsx')}';
-        import { ArchiveFeedback } from '${path.join(import.meta.dirname, 'components/archive-feedback.tsx')}';
-        import { setArchiveSession } from '${path.join(import.meta.dirname, 'archive-sessions.ts')}';
-        import { archiveKey } from '${path.join(import.meta.dirname, 'archive.ts')}';
+        import { fileTargetKey } from '${mod('file-target.ts')}';
+        import * as downloads from '${mod('download.ts')}';
+        import { registerReaderNavigation, cancelReaderNavigation } from '${mod('readers/navigation.ts')}';
+        import { InstancesPage } from '${mod('views/instances.tsx')}';
+        import { DocumentReader } from '${mod('components/document-reader.tsx')}';
+        import { ArchiveFeedback } from '${mod('components/archive-feedback.tsx')}';
+        import { setArchiveSession } from '${mod('archive-sessions.ts')}';
+        import { archiveKey } from '${mod('archive.ts')}';
         window.harness = { setArchiveSession: (key, ...args) => args.length === 1 ? setArchiveSession(key, { ...args[0] }) : setArchiveSession(key, ...args), archiveKey,
           mountArchiveFeedback: (retry) => {
             const [reader, setReader] = createSignal(true);

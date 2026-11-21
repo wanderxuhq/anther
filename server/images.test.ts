@@ -6,6 +6,7 @@ import os from 'node:os';
 import { FileStore } from './files.ts';
 import { HttpServer } from './http.ts';
 import { registerFsRoutes } from './routes/fs.ts';
+import { makeSymlink } from './test-support.ts';
 
 let root: string, base: string, http: HttpServer;
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5ioAAAAASUVORK5CYII=', 'base64');
@@ -54,9 +55,12 @@ test('支持常见图片 MIME；SVG 直接打开也限制脚本和外部资源',
 test('缺失文件、目录、非图片、路径越界及符号链接逃逸均不能作为图片打开', async () => {
   await fs.mkdir(path.join(root, 'workspace/folder.png'));
   await fs.writeFile(path.join(root, 'outside.png'), png);
-  await fs.symlink(path.join(root, 'outside.png'), path.join(root, 'workspace/link.png'));
+  const hasSymlink = await makeSymlink(path.join(root, 'outside.png'), path.join(root, 'workspace/link.png'));
   await fs.writeFile(path.join(root, 'workspace/a.html'), '<script>alert(1)</script>');
-  for (const [name, status] of [['missing.png', 404], ['folder.png', 400], ['a.html', 415], ['../outside.png', 400], ['link.png', 400]] as const) {
+  const cases: Array<[string, number]> = [['missing.png', 404], ['folder.png', 400], ['a.html', 415], ['../outside.png', 400]];
+  // Windows 未开启开发者模式时无法创建普通符号链接，跳过该场景。
+  if (hasSymlink) cases.push(['link.png', 400]);
+  for (const [name, status] of cases) {
     assert.equal((await fetch(imageUrl(name))).status, status, name);
   }
   assert.equal((await fetch(`${base}/api/image`)).status, 400);
