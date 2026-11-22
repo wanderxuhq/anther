@@ -76,6 +76,7 @@ import {
 } from './attachment.ts';
 import { loadMcpServers, mcpStorageKey, parseKeyValueLines, parseLines, storeMcpServers } from './mcp.ts';
 import { skillCommands, skillMention, skillSlashInput, type SkillCommand } from './skill-command.ts';
+import { commandNeedsInput } from './command.ts';
 import { MAX_SYSTEM_PROMPT, loadSystemPrompt, storeSystemPrompt, systemPromptStorageKey } from './system-prompt.ts';
 import { type StatusItem } from './status.ts';
 import {
@@ -898,6 +899,10 @@ function Composer(props: {
     }
     props.onCommand(command);
     closeCommands();
+    if (!commandNeedsInput(command)) {
+      submit();
+      return;
+    }
     textarea?.focus();
     resize();
   }

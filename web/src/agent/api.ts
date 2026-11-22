@@ -43,7 +43,8 @@ export type AgentModeState = {
   currentModeId: string;
   availableModes: AgentMode[];
 };
-export type Command = { name: string; description?: string };
+export type CommandInput = { hint?: string };
+export type Command = { name: string; description?: string; input?: CommandInput | null };
 
 export type Session = {
   id: string;
