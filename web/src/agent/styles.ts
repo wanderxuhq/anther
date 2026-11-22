@@ -1452,7 +1452,7 @@ export const css = `
 .op-model-option:hover { background: var(--op-menu-hover); }
 .op-model-option.active { background: var(--op-hover); color: var(--op-accent); }
 .op-model-option-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.op-command-menu { left: 24px; bottom: calc(100% + 6px); }
+.op-popover.op-command-menu { left: max(24px, calc(50% - 460px)); bottom: calc(100% + 6px); }
 .op-command-head { justify-content: space-between; }
 .op-command-title { display: flex; align-items: center; gap: 6px; }
 .op-command-slash {
@@ -1589,7 +1589,7 @@ export const css = `
 @media (max-width: 900px) {
   .op-messages { padding: 16px 12px 8px; }
   .op-composer { padding: 8px 10px 10px; }
-  .op-command-menu { left: 10px; }
+  .op-popover.op-command-menu { left: 10px; }
   .op-error-banner { margin: 8px 12px 0; }
   .op-pending { padding: 8px 12px 0; }
   .op-resume-backdrop { padding: 16px 12px; }
